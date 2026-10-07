@@ -1,0 +1,133 @@
+{
+  "engine": "Oasis LMF",
+  "oasislmfVersion": "2.5.8",
+  "generatedAt": "2026-10-07T21:47:05+00:00",
+  "dataset": "team_a_nairobi",
+  "tivBasis": "file",
+  "params": {
+    "depthScaleM": 4.0,
+    "fragility": {
+      "informal_iron_sheet": 1.5,
+      "semi_permanent": 1.2,
+      "permanent_masonry": 1.0,
+      "concrete_rcc": 0.7
+    },
+    "cap": {
+      "informal_iron_sheet": 0.95,
+      "semi_permanent": 0.9,
+      "permanent_masonry": 0.85,
+      "concrete_rcc": 0.8
+    },
+    "returnPeriods": {
+      "extreme": 10,
+      "severe": 25,
+      "moderate": 50,
+      "occasional": 100,
+      "common": 250
+    }
+  },
+  "slopes": {
+    "extreme": 0.625833,
+    "severe": 0.719517,
+    "moderate": 0.82712,
+    "occasional": 0.913771,
+    "common": 1.0
+  },
+  "samples": 10,
+  "periods": 1000,
+  "events": [
+    {
+      "tier": "extreme",
+      "returnPeriod": 10,
+      "oasisLossKes": 380371008,
+      "ourLossKes": 380527457
+    },
+    {
+      "tier": "severe",
+      "returnPeriod": 25,
+      "oasisLossKes": 739143040,
+      "ourLossKes": 739364955
+    },
+    {
+      "tier": "moderate",
+      "returnPeriod": 50,
+      "oasisLossKes": 1952820864,
+      "ourLossKes": 1952414104
+    },
+    {
+      "tier": "occasional",
+      "returnPeriod": 100,
+      "oasisLossKes": 3581434368,
+      "ourLossKes": 3581174278
+    },
+    {
+      "tier": "common",
+      "returnPeriod": 250,
+      "oasisLossKes": 5944936960,
+      "ourLossKes": 5945505626
+    }
+  ],
+  "ep": {
+    "oep": [
+      {
+        "returnPeriod": 10,
+        "lossKes": 380371008
+      },
+      {
+        "returnPeriod": 25,
+        "lossKes": 739143040
+      },
+      {
+        "returnPeriod": 50,
+        "lossKes": 1952820864
+      },
+      {
+        "returnPeriod": 100,
+        "lossKes": 3581434368
+      },
+      {
+        "returnPeriod": 250,
+        "lossKes": 5944936960
+      }
+    ],
+    "aep": [
+      {
+        "returnPeriod": 10,
+        "lossKes": 380371008
+      },
+      {
+        "returnPeriod": 25,
+        "lossKes": 739143040
+      },
+      {
+        "returnPeriod": 50,
+        "lossKes": 1952820864
+      },
+      {
+        "returnPeriod": 100,
+        "lossKes": 3581434368
+      },
+      {
+        "returnPeriod": 250,
+        "lossKes": 5944936960
+      }
+    ]
+  },
+  "aal": {
+    "oasisKes": 102401680,
+    "ourTrapezoidKes": 140544567,
+    "ourDiscreteKes": 102412156
+  },
+  "maxEventDiffPct": 0.0411,
+  "notes": [
+    "Oasis LMF 2.5.8 ran the five tier events on 600 buildings (total TIV KES 63,635.1m, file TIV basis) with 10 samples per event over 1,000 periods, ground-up loss only.",
+    "Our figures come from a Python copy of the app's engine (web/src/lib/model) run on the same file and parameters.",
+    "Every event loss matches our engine to within 0.041%. The small gap comes from the Oasis model files being discrete: depth is stored in 1 mm bins and damage ratios in 0.1% steps. Our engine with the same rounding matches Oasis to 0.00001%.",
+    "Each event occurs in a share of periods equal to its exceedance band (for example 60 of 1,000 periods for the 1-in-10 event, 4 for the 1-in-250), and no period holds more than one event. So Oasis OEP and AEP at each tier's return period equal that tier's event loss (largest gap 0.0000%), which confirms the loss to return period mapping the app uses.",
+    "Oasis AAL (KES 102.4m) is the average loss per period, which is each event's loss times its band probability, a step curve. The same banded sum from our losses is KES 102.4m (-0.010%).",
+    "The app's AAL (KES 140.5m) joins the five points with straight lines over annual exceedance probability (trapezoid), so it is 37.2% higher than the step value. Both treat events more frequent than 1-in-10 as no loss and hold the 1-in-250 loss for anything rarer; the difference is only the shape assumed between the five points.",
+    "The vulnerability functions are deterministic (each depth bin maps to one damage value), so every sample equals the mean: analytical and sample-mean event losses agree to 0.00000%, and the mean-damage, full-uncertainty, per-sample and sample-mean EP curves agree to 0.00001%.",
+    "Tier slopes were fitted on the five hazard rasters; the building columns give the same slopes to within 4.2e-08.",
+    "This checks the loss arithmetic, the event to period mapping and the OEP, AEP and AAL maths. It does not test the hazard scores, the depth scale, the JRC damage curve or the class parameters, because both engines take those from the same inputs."
+  ]
+}

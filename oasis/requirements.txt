@@ -1,0 +1,6 @@
+# Oasis LMF loss engine (brings numpy, pandas, numba, pyarrow and ods-tools with it).
+oasislmf==2.5.8
+# Optional: read the LZW-compressed hazard GeoTIFFs so the tier slopes are fitted on the rasters.
+# Without these two the slopes are fitted on the building columns instead.
+tifffile==2025.5.10
+imagecodecs==2025.3.30

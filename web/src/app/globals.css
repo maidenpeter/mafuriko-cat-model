@@ -1,18 +1,26 @@
 @import "tailwindcss";
 
 /* Colour roles. Charts and UI are written against these, never raw hex. */
+/* Kenya Re palette: navy #041D3B, crimson #D11242, pale blue-grey #ECF0F4 (from kenyare.co.ke).
+   Charts and UI are written against these roles, never raw hex. */
 :root {
   color-scheme: light;
-  --plane: #f9f9f7;
-  --surface: #fcfcfb;
-  --surface-2: #f3f2ee;
-  --ink: #0b0b0b;
-  --ink-2: #52514e;
-  --muted: #898781;
-  --line: #e1e0d9;
-  --axis: #c3c2b7;
-  --accent: #2a78d6;
-  --accent-wash: rgba(42, 120, 214, 0.1);
+  --plane: #ecf0f4;
+  --surface: #ffffff;
+  --surface-2: #f2f5f8;
+  --ink: #0b1a2e;
+  --ink-2: #4a5768;
+  --muted: #7b8696;
+  --line: #d9e0e8;
+  --axis: #b5c0cc;
+  --accent: #1d4f91;
+  --accent-wash: rgba(29, 79, 145, 0.1);
+
+  /* brand marks: header, key loss figures, the flood map's loss rings */
+  --brand: #d11242;
+  --brand-wash: rgba(209, 18, 66, 0.08);
+  --navy: #041d3b;
+  --navy-line: #041d3b;
 
   /* categorical: fixed order, one per housing class */
   --series-1: #2a78d6;
@@ -28,27 +36,30 @@
   --warning-ink: #7a5200;
   --critical-ink: #a32222;
 
-  /* sequential blue for hazard magnitude */
-  --seq-1: #cde2fb;
-  --seq-2: #86b6ef;
-  --seq-3: #3987e5;
-  --seq-4: #1c5cab;
-  --seq-5: #0d366b;
+  /* sequential, navy-anchored, for flood depth */
+  --seq-1: #d4e4f6;
+  --seq-2: #94bde9;
+  --seq-3: #4f8fd6;
+  --seq-4: #1f5ea8;
+  --seq-5: #0b3268;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --plane: #0d0d0d;
-    --surface: #1a1a19;
-    --surface-2: #242422;
-    --ink: #ffffff;
-    --ink-2: #c3c2b7;
-    --muted: #898781;
-    --line: #2c2c2a;
-    --axis: #383835;
-    --accent: #3987e5;
-    --accent-wash: rgba(57, 135, 229, 0.16);
+    --plane: #06111f;
+    --surface: #0c1a2c;
+    --surface-2: #12243a;
+    --ink: #f1f5fa;
+    --ink-2: #b8c3d1;
+    --muted: #7e8b9d;
+    --line: #1d3049;
+    --axis: #2b4263;
+    --accent: #6ea6ec;
+    --accent-wash: rgba(110, 166, 236, 0.16);
+    --brand: #f0486f;
+    --brand-wash: rgba(240, 72, 111, 0.14);
+    --navy-line: #9fb4cf;
     --series-1: #3987e5;
     --series-2: #d95926;
     --series-3: #199e70;
@@ -56,12 +67,41 @@
     --good-ink: #0ca30c;
     --warning-ink: #fab219;
     --critical-ink: #e66767;
-    --seq-1: #0d366b;
-    --seq-2: #184f95;
-    --seq-3: #2a78d6;
-    --seq-4: #6da7ec;
-    --seq-5: #cde2fb;
+    --seq-1: #0b3268;
+    --seq-2: #1a5299;
+    --seq-3: #2f78cf;
+    --seq-4: #74aaee;
+    --seq-5: #cfe2fb;
   }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --plane: #06111f;
+  --surface: #0c1a2c;
+  --surface-2: #12243a;
+  --ink: #f1f5fa;
+  --ink-2: #b8c3d1;
+  --muted: #7e8b9d;
+  --line: #1d3049;
+  --axis: #2b4263;
+  --accent: #6ea6ec;
+  --accent-wash: rgba(110, 166, 236, 0.16);
+  --brand: #f0486f;
+  --brand-wash: rgba(240, 72, 111, 0.14);
+  --navy-line: #9fb4cf;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --good-ink: #0ca30c;
+  --warning-ink: #fab219;
+  --critical-ink: #e66767;
+  --seq-1: #0b3268;
+  --seq-2: #1a5299;
+  --seq-3: #2f78cf;
+  --seq-4: #74aaee;
+  --seq-5: #cfe2fb;
 }
 
 @theme inline {
@@ -75,13 +115,17 @@
   --color-axis: var(--axis);
   --color-accent: var(--accent);
   --color-accent-wash: var(--accent-wash);
+  --color-brand: var(--brand);
+  --color-brand-wash: var(--brand-wash);
+  --color-navy: var(--navy);
   --color-good: var(--good);
   --color-warning: var(--warning);
   --color-critical: var(--critical);
   --color-good-ink: var(--good-ink);
   --color-warning-ink: var(--warning-ink);
   --color-critical-ink: var(--critical-ink);
-  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-sans: "Roboto Variable", Roboto, "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-display: "Archivo Variable", Archivo, "Segoe UI", system-ui, sans-serif;
   --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, ui-monospace, monospace;
 }
 
@@ -89,6 +133,21 @@ body {
   background: var(--plane);
   color: var(--ink);
   font-family: var(--font-sans);
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  text-wrap: balance;
+}
+
+/* Map controls and attribution follow the theme. */
+.maplibregl-ctrl-group {
+  background: var(--surface);
+}
+.maplibregl-ctrl-attrib {
+  font-size: 10px;
 }
 
 .tabular {

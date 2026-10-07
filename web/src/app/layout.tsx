@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
+import "@fontsource-variable/archivo";
+import "@fontsource-variable/roboto";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Mafuriko — flood loss walkthrough",
+  title: "Mafuriko | Nairobi flood risk",
   description: "An explainable flood catastrophe model for Nairobi: hazard, vulnerability, exposure and loss, with every assumption shown.",
 };
 

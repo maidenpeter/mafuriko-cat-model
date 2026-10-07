@@ -14,7 +14,7 @@ npm run dev                  # http://localhost:3000
 Restart `npm run dev` after changing `.env.local`.
 
 - Upload a zip shaped like `data/data/`, or press **Use the starter kit**.
-- `http://localhost:3000/?sample=1&step=6` loads the starter kit and opens a given step (rehearsal shortcut).
+- `http://localhost:3000/?sample=1&step=7` loads the starter kit and opens a given step (rehearsal shortcut).
 - Without keys the walkthrough still runs, on reference assumptions, and says so.
 
 ## Check it

@@ -32,7 +32,7 @@ export function AuditStep({ session, active, deliberation, checks, log }: Props)
 
   return (
     <div>
-      <StepHeader kicker="Step 7" title="Audit">
+      <StepHeader kicker="Step 8" title="Audit">
         Everything needed to challenge or reproduce this result: every check, every assumption and where it came from, the limits of the model, and a log of what ran.
       </StepHeader>
 

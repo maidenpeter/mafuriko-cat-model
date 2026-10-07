@@ -18,12 +18,13 @@ import { AuditStep } from "./steps/AuditStep";
 import { DataStep } from "./steps/DataStep";
 import { HazardStep } from "./steps/HazardStep";
 import { LossStep } from "./steps/LossStep";
+import { MapStep } from "./steps/MapStep";
 import { ResultsStep } from "./steps/ResultsStep";
 import { UploadStep } from "./steps/UploadStep";
 import { VulnerabilityStep } from "./steps/VulnerabilityStep";
 import { Button, Segmented, StatusIcon, Tag } from "./ui";
 
-const STEPS = ["Upload", "Read the data", "Hazard", "Agents", "Vulnerability", "Loss engine", "Results", "Audit"];
+const STEPS = ["Upload", "Read the data", "Hazard", "Agents", "Vulnerability", "Loss engine", "Risk map", "Results", "Audit"];
 
 type AgentStatus = { model: string; configured: Record<Role, boolean> };
 
@@ -140,7 +141,7 @@ export function Walkthrough() {
     }
   }, [handleFiles]);
 
-  // Rehearsal shortcut: /?sample=1 loads the starter kit, and &step=6 opens a given step once it has loaded.
+  // Rehearsal shortcut: /?sample=1 loads the starter kit, and &step=7 opens a given step once it has loaded.
   const deepLinked = useRef(false);
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
@@ -216,25 +217,38 @@ export function Walkthrough() {
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-[1320px] flex-col px-4 sm:px-6">
-      <header className="sticky top-0 z-20 -mx-4 flex flex-wrap items-center justify-between gap-3 border-b border-line bg-plane/90 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
-        <div className="flex items-baseline gap-3">
-          <span className="text-lg font-semibold tracking-tight text-ink">Mafuriko</span>
-          <span className="hidden text-sm text-ink-2 sm:inline">Flood loss model, shown step by step</span>
-        </div>
-        {session && (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm text-ink-2">{session.dataset.name}</span>
-            <Tag kind="synthetic">Synthetic portfolio</Tag>
-            <Tag kind={isScore ? "proxy" : "real"}>{isScore ? "Proxy hazard, not measured" : "Published depth maps"}</Tag>
-            {deliberation?.final && (
-              <Segmented label="Assumptions" value={useAi ? "ai" : "reference"} onChange={(v) => setUseAi(v === "ai")} options={[{ value: "ai", label: "Agreed by agents" }, { value: "reference", label: "Without AI" }]} />
-            )}
+      <header className="z-20 -mx-4 sm:-mx-6 lg:sticky lg:top-0">
+        <div className="flex flex-wrap items-center justify-between gap-3 bg-navy px-4 py-3 text-white sm:px-6">
+          <div className="flex items-center gap-3">
+            <span aria-hidden className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
+                <path d="M2 9c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2 2-2 4-2" />
+                <path d="M2 14c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2 2-2 4-2" opacity="0.75" />
+                <path d="M2 19c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2 2-2 4-2" opacity="0.5" />
+              </svg>
+            </span>
+            <div className="leading-tight">
+              <div className="font-display text-lg font-semibold tracking-tight">Mafuriko</div>
+              <div className="hidden text-xs text-white/70 sm:block">Nairobi flood catastrophe model, built for the Kenya Re hackathon</div>
+            </div>
           </div>
-        )}
+          {session && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm text-white/80">{session.dataset.name}</span>
+              <Tag kind="synthetic">Synthetic portfolio</Tag>
+              <Tag kind={isScore ? "proxy" : "real"}>{isScore ? "Proxy hazard, not measured" : "Published depth maps"}</Tag>
+              {deliberation?.final && (
+                <Segmented label="Assumptions" value={useAi ? "ai" : "reference"} onChange={(v) => setUseAi(v === "ai")} options={[{ value: "ai", label: "Agreed by agents" }, { value: "reference", label: "Without AI" }]} />
+              )}
+            </div>
+          )}
+        </div>
+        <div className="h-[3px] bg-brand" />
+        {session && active && <KeyFigures active={active} />}
       </header>
 
       <div className="flex flex-1 flex-col gap-6 py-6 lg:flex-row lg:gap-10">
-        <nav aria-label="Steps" className="lg:sticky lg:top-20 lg:h-fit lg:w-52 lg:shrink-0">
+        <nav aria-label="Steps" className="lg:sticky lg:top-36 lg:h-fit lg:w-52 lg:shrink-0">
           <ol className="flex gap-1 overflow-x-auto lg:flex-col">
             {STEPS.map((name, i) => {
               const locked = i > reached;
@@ -247,7 +261,7 @@ export function Walkthrough() {
                     aria-current={current ? "step" : undefined}
                     className={`flex w-full items-center gap-2.5 whitespace-nowrap rounded-xl px-3 py-2 text-left text-sm transition ${current ? "bg-surface font-semibold text-ink shadow-sm ring-1 ring-line" : locked ? "text-muted" : "text-ink-2 hover:bg-surface"}`}
                   >
-                    <span className={`tabular flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] ${current ? "bg-ink text-surface" : i < reached ? "bg-surface-2 text-ink-2" : "border border-line text-muted"}`}>{i}</span>
+                    <span className={`tabular flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] ${current ? "bg-brand text-white" : i < reached ? "bg-surface-2 text-ink-2" : "border border-line text-muted"}`}>{i}</span>
                     {name}
                   </button>
                 </li>
@@ -296,8 +310,9 @@ export function Walkthrough() {
                   )}
                   {step === 4 && <VulnerabilityStep session={session} active={active} checks={checks.vulnerability} />}
                   {step === 5 && <LossStep session={session} active={active} checks={checks.financial} />}
-                  {step === 6 && <ResultsStep session={session} active={active} deliberation={deliberation} />}
-                  {step === 7 && <AuditStep session={session} active={active} deliberation={deliberation} checks={checks.all} log={log} />}
+                  {step === 6 && <MapStep session={session} active={active} />}
+                  {step === 7 && <ResultsStep session={session} active={active} deliberation={deliberation} />}
+                  {step === 8 && <AuditStep session={session} active={active} deliberation={deliberation} checks={checks.all} log={log} />}
                 </>
               )}
             </motion.div>
@@ -323,6 +338,33 @@ export function Walkthrough() {
           </div>
         </footer>
       )}
+    </div>
+  );
+}
+
+/** The figures an underwriter looks for first, kept in view on every step. */
+function KeyFigures({ active }: { active: Active }) {
+  const r = active.result;
+  const at = (rp: number) => r.standardLosses.find((l) => l.returnPeriod === rp)?.lossKes ?? null;
+  const loss100 = at(100);
+  const loss250 = at(250);
+  const items: { label: string; value: string; strong?: boolean }[] = [
+    { label: "Insured value", value: fmtKes(r.totalTivKes) },
+    { label: "1 in 100 loss", value: loss100 != null ? fmtKes(loss100, 2) : "not modelled", strong: true },
+    { label: "1 in 250 loss", value: loss250 != null ? fmtKes(loss250, 2) : "not modelled" },
+    { label: "Average annual loss", value: fmtKes(r.aalKes, 2) },
+    { label: "Assumptions", value: active.source === "ai" ? "Agreed by agents" : "Reference, no AI" },
+  ];
+  return (
+    <div className="border-b border-line bg-plane/95 backdrop-blur">
+      <dl className="flex gap-6 overflow-x-auto px-4 py-2 sm:px-6">
+        {items.map((x) => (
+          <div key={x.label} className="shrink-0">
+            <dt className="text-[11px] uppercase tracking-wide text-muted">{x.label}</dt>
+            <dd className={`tabular text-sm font-semibold ${x.strong ? "text-brand" : "text-ink"}`}>{x.value}</dd>
+          </div>
+        ))}
+      </dl>
     </div>
   );
 }

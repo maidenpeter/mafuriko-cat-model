@@ -1,4 +1,4 @@
-# Mafuriko — Team A build plan
+# Mafuriko: Team A build plan
 
 Nairobi Urban Flood Challenge · Kenya Re catastrophe modelling hackathon
 
@@ -53,7 +53,7 @@ Four stages, as in the brief. Everything in this section is code.
   building's coordinates. If the exposure file already carries
   `hazard_score_*` columns, the app compares them with its own raster lookup
   and reports how many match.
-- The Nairobi value is a **0–1 susceptibility score, not a depth**. We convert
+- The Nairobi value is a **0 to 1 susceptibility score, not a depth**. We convert
   it with one stated assumption:
   `depth (m) = score × tier slope × depth scale`. Each tier map is rescaled
   to run 0 to 1, so read on its own every tier would peak at the same depth.
@@ -76,7 +76,7 @@ Four stages, as in the brief. Everything in this section is code.
   - **fragility** multiplies the depth before the curve is read (above 1 for
     weaker construction, below 1 for stronger);
   - **cap** is the highest damage ratio that class can reach (the brief
-    suggests 80–95%).
+    suggests 80 to 95%).
 - `damage ratio = min( JRC curve( depth × fragility ), cap )`
 
 ### 3.3 Exposure
@@ -103,10 +103,10 @@ Four stages, as in the brief. Everything in this section is code.
 
 | Parameter | Reference value (no AI) | Allowed range |
 |---|---|---|
-| Depth scale (m at score 1.0, widest tier) | 4.0 | 1.0 – 6.0 |
-| Fragility: informal / semi-permanent / masonry / concrete | 1.5 / 1.2 / 1.0 / 0.7 | 0.4 – 2.5 |
-| Cap: informal / semi-permanent / masonry / concrete | 0.95 / 0.90 / 0.85 / 0.80 | 0.60 – 1.00 |
-| Return period: extreme / severe / moderate / occasional / common | 10 / 25 / 50 / 100 / 250 years | 2 – 1000, strictly rising |
+| Depth scale (m at score 1.0, widest tier) | 4.0 | 1.0 to 6.0 |
+| Fragility: informal / semi-permanent / masonry / concrete | 1.5 / 1.2 / 1.0 / 0.7 | 0.4 to 2.5 |
+| Cap: informal / semi-permanent / masonry / concrete | 0.95 / 0.90 / 0.85 / 0.80 | 0.60 to 1.00 |
+| Return period: extreme / severe / moderate / occasional / common | 10 / 25 / 50 / 100 / 250 years | 2 to 1000, strictly rising |
 
 Code enforces the ranges. A value outside its range is clamped and flagged on
 screen. The reference column is what the app uses if the AI is unavailable,
@@ -217,8 +217,9 @@ Each check shows pass, warning or fail, with the numbers behind it.
 | 3. Agents | Three columns working in parallel, then the Chair's decision and the assumption ledger. |
 | 4. Vulnerability | Damage curves per construction class under the agreed parameters. |
 | 5. Loss engine | Loss building up tier by tier; click a building for its trace. |
-| 6. Results | Total exposure, loss at key return periods, average annual loss; the loss curve with its band; breakdown by class; largest contributors; with and without AI. |
-| 7. Audit | All checks, the ledger, the run log, and the export buttons. |
+| 6. Risk map | Interactive map of Nairobi: flood depth for each event on a slider that can play, insured buildings with a click-through loss trace, wards shaded by loss or value, rivers and drains, informal settlements, schools and health facilities in the water, the county hotspots, and a 3D view with loss columns. Works without internet on a plain background. |
+| 7. Results | Total exposure, loss at key return periods, average annual loss; the loss curve with its band; breakdown by class; largest contributors; with and without AI; the Oasis check. |
+| 8. Audit | All checks, the ledger, the run log, and the export buttons. |
 
 ## 8. Technical design
 
@@ -257,6 +258,17 @@ If the zip holds more than one dataset, the viewer picks one. Rasters named by
 return period are treated as depths in metres with their own return periods,
 so a Nzoia-style dataset runs through the same engine. This is insurance
 against being handed something unexpected on the day.
+
+### Independent check with Oasis LMF
+
+`oasis/build_and_run.py` writes the portfolio as an Oasis exposure file and the
+hazard and damage assumptions as Oasis model files, runs them through the
+open-source Oasis engine (oasislmf 2.5.8), and saves a summary to
+`web/public/oasis/reference.json`. The Results step compares it with the live
+engine. On reference assumptions every event loss agrees within 0.05%, and the
+step-method average annual loss agrees within 0.01%. The app's own average
+annual loss draws a straight line between events, so it sits above the Oasis
+step value; both readings are shown.
 
 ## 9. Build order
 
@@ -304,9 +316,15 @@ Each phase ends with something that works, so there is always a demo.
 ## 12. Sources
 
 - Huizinga, de Moel and Szewczyk (2017), *Global flood depth-damage
-  functions*, JRC105688 — https://publications.jrc.ec.europa.eu/repository/handle/JRC105688
+  functions*, JRC105688: https://publications.jrc.ec.europa.eu/repository/handle/JRC105688
 - Copernicus GLO-30 elevation model and OpenStreetMap rivers and streams
   (inputs to the supplied hazard proxy; credit OpenStreetMap contributors).
 - Nairobi County flood-hotspot mapping, March 2026 (hotspot names).
 - Hackathon starter kit: problem statement, build guide and data dictionary in `data/`.
 - Gemini API Additional Terms of Service (free and paid tiers): https://ai.google.dev/terms
+- Map layers in `web/public/geo/` (wards: Omare and Omare 2017, CC BY 4.0;
+  rivers, drains, settlements and facilities: OpenStreetMap contributors, ODbL).
+  Details in `web/public/geo/SOURCES.md`.
+- Basemap: OpenFreeMap styles on OpenStreetMap data. Terrain: Mapzen Terrain
+  Tiles on AWS Open Data.
+- Oasis LMF: https://github.com/OasisLMF/OasisLMF

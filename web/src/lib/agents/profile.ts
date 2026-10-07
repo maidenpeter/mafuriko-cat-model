@@ -1,5 +1,6 @@
 import type { Check } from "../checks";
 import type { IngestReport } from "../ingest";
+import { tierSlopes } from "../model/hazard";
 import { hotspotHits } from "../model/hotspots";
 import { BOUNDS, REFERENCE_PARAMS } from "../model/params";
 import { HOUSING_CLASSES, type Dataset, type ModelResult } from "../model/types";
@@ -16,6 +17,7 @@ export function buildProfile(dataset: Dataset, report: IngestReport, reference: 
   const total = reference.totalTivKes;
   const widest = reference.scenarios[reference.scenarios.length - 1];
   const hits = hotspotHits(dataset);
+  const slopes = tierSlopes(dataset);
 
   return {
     dataset: dataset.name,
@@ -31,6 +33,7 @@ export function buildProfile(dataset: Dataset, report: IngestReport, reference: 
         return {
           id: s.id,
           fixedReturnPeriodYears: s.fixedReturnPeriod ?? null,
+          tierSlope: round(slopes[k]),
           buildingsAffected: wet.length,
           shareOfInsuredValueAffected: round(tivExposed / total),
           medianValueWhereAffected: round(quantile(wet, 0.5)),
@@ -61,7 +64,7 @@ export function buildProfile(dataset: Dataset, report: IngestReport, reference: 
     dataWarnings: checks.filter((c) => c.status !== "pass").map((c) => ({ check: c.title, status: c.status, detail: c.detail })),
     model: {
       formulas: [
-        "depth_m = score × depthScaleM (score datasets only)",
+        "depth_m = score × tier_slope × depthScaleM (score datasets only; tier_slope puts each tier's 0 to 1 score back on the widest tier's scale and is 1 for the widest)",
         "damage_ratio = min( jrc_curve( depth_m × fragility[class] ), cap[class] )",
         "building_loss = damage_ratio × insured_value",
         "portfolio loss per scenario = sum of building losses; each scenario is placed at its return period to form the loss curve",

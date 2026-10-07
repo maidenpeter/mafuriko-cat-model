@@ -16,7 +16,7 @@ The ${PARAMETER_NAMES.length} parameters, by name:
 ${PARAMETER_NAMES.map((n) => `- ${n}`).join("\n")}
 
 What they mean:
-- depthScaleM: assumed flood depth in metres where the susceptibility score is 1.0. Higher means deeper water everywhere.
+- depthScaleM: assumed flood depth in metres at the highest-scoring spot in the widest tier (the rarest event). Narrower tiers are scaled down by their tier slope, given in the data profile, so depth grows as the event gets rarer. Higher means deeper water everywhere.
 - fragility.<class>: multiplies depth before the JRC curve is read. Above 1 means the class is damaged as if the water were deeper.
 - cap.<class>: the highest share of a building's value that can be lost.
 - returnPeriods.<tier>: years assigned to each tier. They must rise strictly from "extreme" (narrowest footprint, most frequent) to "common" (widest footprint, rarest). Shorter return periods mean the same losses happen more often.`;

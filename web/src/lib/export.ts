@@ -8,7 +8,7 @@ import { JRC_AFRICA_RESIDENTIAL } from "./model/vulnerability";
 import { slim, type Active, type LogEntry, type Session } from "./session";
 
 export const PARAM_LABELS: Record<string, string> = {
-  depthScaleM: "Depth at score 1.0 (m)",
+  depthScaleM: "Depth at score 1.0, widest tier (m)",
   ...Object.fromEntries(HOUSING_CLASSES.map((c) => [`fragility.${c}`, `Fragility — ${HOUSING_LABELS[c]}`])),
   ...Object.fromEntries(HOUSING_CLASSES.map((c) => [`cap.${c}`, `Damage cap — ${HOUSING_LABELS[c]}`])),
   ...Object.fromEntries(SCORE_TIERS.map((t) => [`returnPeriods.${t}`, `Return period — "${t}" tier (years)`])),
@@ -73,7 +73,7 @@ export function buildNote(session: Session, active: Active, deliberation: Delibe
 
   lines.push(`## 2. Assumptions`, ``);
   lines.push(`Assumptions in force: **${active.source === "ai" ? "agreed by the agent panel" : "reference values (no AI)"}**.`, ``);
-  if (isScore) lines.push(`- Depth (m) = score × ${fmtNum(p.depthScaleM)}. The score is a 0–1 susceptibility proxy; this conversion is assumed.`);
+  if (isScore) lines.push(`- Depth (m) = score × tier slope × ${fmtNum(p.depthScaleM)}. Each tier map is rescaled to run 0 to 1, so the tier slope (${r.scenarios.map((s) => `${s.id} ${fmtNum(s.tierSlope, 3)}`).join(", ")}) puts every tier back on the widest tier's scale and depth grows as the event gets rarer. The slopes are fitted from the maps. The score is a susceptibility proxy, so this conversion is assumed.`);
   lines.push(`- Damage ratio = min( JRC curve( depth × fragility ), cap ), per construction class:`);
   for (const c of HOUSING_CLASSES) lines.push(`  - ${HOUSING_LABELS[c]}: fragility ${fmtNum(p.fragility[c])}, cap ${fmtNum(p.cap[c])}`);
   lines.push(`- Return periods: ${r.scenarios.map((s) => `${s.id} = ${s.returnPeriod} years`).join(", ")}${isScore ? " (assumed)" : " (from the data)"}.`);

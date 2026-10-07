@@ -1,4 +1,4 @@
-import type { StandardLoss } from "./types";
+import type { ModelResult, StandardLoss } from "./types";
 
 export interface CurvePoint {
   returnPeriod: number;
@@ -45,4 +45,14 @@ export function averageAnnualLoss(points: CurvePoint[]): number {
   const last = points[points.length - 1];
   aal += (1 / last.returnPeriod) * last.lossKes;
   return aal;
+}
+
+/**
+ * Average annual loss as Oasis builds it from a period table: each scenario counts only for the
+ * band of annual probability between its own return period and the next rarer one. This is the
+ * step (lower) reading of the same curve the trapezoid above interpolates.
+ */
+export function bandedAal(result: Pick<ModelResult, "scenarios">): number {
+  const s = result.scenarios;
+  return s.reduce((t, x, i) => t + (1 / x.returnPeriod - (i + 1 < s.length ? 1 / s[i + 1].returnPeriod : 0)) * x.lossKes, 0);
 }

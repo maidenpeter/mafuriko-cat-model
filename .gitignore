@@ -1,0 +1,18 @@
+# Hackathon data stays on our machines
+data/
+*.csv
+*.tif
+*.tiff
+*.zip
+*.docx
+*.xlsx
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+~$*

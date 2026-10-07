@@ -7,6 +7,7 @@ import { lossAtReturnPeriod, STANDARD_RETURN_PERIODS } from "@/lib/model/financi
 import { HOUSING_CLASSES, HOUSING_LABELS, type ModelResult } from "@/lib/model/types";
 import type { Active, Session } from "@/lib/session";
 import { LineChart, valueAt, type Point } from "../charts/LineChart";
+import { OasisCheck } from "../OasisCheck";
 import { Card, Note, Segmented, Stat, StepHeader, Tag } from "../ui";
 import { CLASS_COLORS } from "./DataStep";
 
@@ -58,7 +59,7 @@ export function ResultsStep({ session, active, deliberation }: { session: Sessio
 
   return (
     <div>
-      <StepHeader kicker="Step 6" title="Results">
+      <StepHeader kicker="Step 7" title="Results">
         What an underwriter needs: how large the loss could be at each level of rarity, what an average year costs, and where the loss comes from.
       </StepHeader>
 
@@ -195,6 +196,8 @@ export function ResultsStep({ session, active, deliberation }: { session: Sessio
           )}
         </Card>
       </div>
+
+      <OasisCheck session={session} />
     </div>
   );
 }

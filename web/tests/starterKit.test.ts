@@ -3,6 +3,7 @@ import { join, relative } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { dataChecks, financialChecks, hazardChecks, vulnerabilityChecks } from "../src/lib/checks";
 import { detectDatasets, loadDataset, type FileSource, type IngestReport } from "../src/lib/ingest";
+import { tierSlopes } from "../src/lib/model/hazard";
 import { hotspotHits } from "../src/lib/model/hotspots";
 import { REFERENCE_PARAMS } from "../src/lib/model/params";
 import { runModel } from "../src/lib/model/pipeline";
@@ -69,6 +70,18 @@ describe.skipIf(!existsSync(KIT))("starter kit", () => {
     it("matches the documented counts of affected buildings", () => {
       const { result } = loaded.team_a_nairobi;
       expect(result.scenarios.map((s) => s.affected)).toEqual([32, 51, 110, 174, 259]);
+    });
+
+    it("puts every tier back on one scale, so depth grows with rarity", () => {
+      const { dataset, result } = loaded.team_a_nairobi;
+      // Fitted from the five maps. The narrowest tier peaks at about 63% of the widest tier's depth.
+      const slopes = tierSlopes(dataset);
+      [0.626, 0.72, 0.827, 0.914, 1].forEach((v, k) => expect(slopes[k]).toBeCloseTo(v, 2));
+      expect(result.scenarios.map((s) => s.tierSlope)).toEqual(slopes);
+      for (const b of result.buildings) {
+        const depths = b.perScenario.map((p) => p.depthM);
+        depths.slice(1).forEach((d, i) => expect(d).toBeGreaterThanOrEqual(depths[i]));
+      }
     });
 
     it("flags 12 of the 24 named flood areas, as the starter kit says", () => {

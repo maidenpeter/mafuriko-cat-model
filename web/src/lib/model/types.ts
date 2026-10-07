@@ -75,7 +75,7 @@ export interface Dataset {
 }
 
 export interface ModelParams {
-  /** Assumed flood depth in metres at a susceptibility score of 1.0. Unused for depth datasets. */
+  /** Assumed flood depth in metres at a susceptibility score of 1.0 in the widest tier. Unused for depth datasets. */
   depthScaleM: number;
   /** Multiplier on depth before the base curve is read. */
   fragility: Record<HousingClass, number>;
@@ -113,6 +113,8 @@ export interface ScenarioResult {
   id: string;
   label: string;
   returnPeriod: number;
+  /** Puts this tier's 0 to 1 score on the widest tier's scale before depth is worked out. 1 for depth maps. */
+  tierSlope: number;
   lossKes: number;
   affected: number;
   tivExposedKes: number;

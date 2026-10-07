@@ -10,12 +10,16 @@ import {
   type ScenarioResult,
   type ScoreTier,
 } from "./types";
+import { tierSlopes } from "./hazard";
 import { damageDetail } from "./vulnerability";
 
-/** Hazard value to flood depth in metres. Scores use the assumed depth scale; depths pass through. */
-export function hazardToDepth(hazard: number, dataset: Pick<Dataset, "hazardKind">, params: ModelParams): number {
+/**
+ * Hazard value to flood depth in metres. Depths pass through. Scores are first put back on the
+ * widest tier's scale with the tier slope (see hazard.ts), then multiplied by the assumed depth scale.
+ */
+export function hazardToDepth(hazard: number, dataset: Pick<Dataset, "hazardKind">, params: ModelParams, tierSlope = 1): number {
   if (!(hazard > 0)) return 0;
-  return dataset.hazardKind === "score" ? hazard * params.depthScaleM : hazard;
+  return dataset.hazardKind === "score" ? hazard * tierSlope * params.depthScaleM : hazard;
 }
 
 /** Return period for each dataset scenario: taken from the data when it has one, otherwise from the assumptions. */
@@ -27,6 +31,7 @@ const emptyBreakdown = (): ClassBreakdown => ({ count: 0, tivKes: 0, affected: 0
 
 export function runModel(dataset: Dataset, params: ModelParams): ModelResult {
   const rps = scenarioReturnPeriods(dataset, params);
+  const slopes = tierSlopes(dataset);
   // Scenario order in the result: most frequent first.
   const order = dataset.scenarios.map((_, i) => i).sort((a, b) => rps[a] - rps[b]);
 
@@ -34,6 +39,7 @@ export function runModel(dataset: Dataset, params: ModelParams): ModelResult {
     id: dataset.scenarios[i].id,
     label: dataset.scenarios[i].label,
     returnPeriod: rps[i],
+    tierSlope: slopes[i],
     lossKes: 0,
     affected: 0,
     tivExposedKes: 0,
@@ -45,7 +51,7 @@ export function runModel(dataset: Dataset, params: ModelParams): ModelResult {
     totalTivKes += b.tivKes;
     const perScenario = order.map((srcIndex, k) => {
       const hazard = b.hazard[srcIndex] ?? 0;
-      const depthM = hazardToDepth(hazard, dataset, params);
+      const depthM = hazardToDepth(hazard, dataset, params, slopes[srcIndex]);
       const d = damageDetail(depthM, b.housingClass, params);
       const lossKes = d.damageRatio * b.tivKes;
 

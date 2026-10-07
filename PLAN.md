@@ -55,9 +55,13 @@ Four stages, as in the brief. Everything in this section is code.
   and reports how many match.
 - The Nairobi value is a **0–1 susceptibility score, not a depth**. We convert
   it with one stated assumption:
-  `depth (m) = score × depth scale`, where the depth scale is the assumed
-  depth at a score of 1.0. The brief's example is 4 m. The agents choose this
-  value.
+  `depth (m) = score × tier slope × depth scale`. Each tier map is rescaled
+  to run 0 to 1, so read on its own every tier would peak at the same depth.
+  The tier slope, fitted from the maps (about 0.63 for `extreme` up to 1.0
+  for `common`), puts every tier back on one scale, so depth grows as the
+  event gets rarer. The depth scale is the assumed depth at the
+  highest-scoring spot in the widest tier. The brief's example is 4 m. The
+  agents choose this value.
 - The five tiers are nested cuts of one score. `common` covers the most cells
   and so stands for the **rarest** event; `extreme` covers the fewest and
   stands for the most frequent.
@@ -99,7 +103,7 @@ Four stages, as in the brief. Everything in this section is code.
 
 | Parameter | Reference value (no AI) | Allowed range |
 |---|---|---|
-| Depth scale (m at score 1.0) | 4.0 | 1.0 – 6.0 |
+| Depth scale (m at score 1.0, widest tier) | 4.0 | 1.0 – 6.0 |
 | Fragility: informal / semi-permanent / masonry / concrete | 1.5 / 1.2 / 1.0 / 0.7 | 0.4 – 2.5 |
 | Cap: informal / semi-permanent / masonry / concrete | 0.95 / 0.90 / 0.85 / 0.80 | 0.60 – 1.00 |
 | Return period: extreme / severe / moderate / occasional / common | 10 / 25 / 50 / 100 / 250 years | 2 – 1000, strictly rising |
@@ -280,13 +284,20 @@ Each phase ends with something that works, so there is always a demo.
 - The return periods attached to the tiers are assumed.
 - The portfolio is synthetic and randomly placed.
 - The five scenarios are nested cuts of one map, not independent events.
+- The agents run on free Gemini keys. Google's terms let it use free-tier
+  inputs to improve its products, and human reviewers may read them. The
+  agents only see summary figures built from synthetic data. A deployment with
+  real cedant data would use a paid tier or a locally hosted model; the
+  provider sits behind one function.
 
 ## 11. Open items
 
 - [ ] Ask the organisers which insured values are intended (file or dictionary).
 - [ ] Check the Africa residential curve against the original JRC spreadsheet
       (currently confirmed against a secondary source only).
-- [ ] Confirm the Gemini model name and the free-tier request limits.
+- [x] Confirm the Gemini model name: `gemini-3.8-flash` is listed as stable
+      on Google's model page (checked 7 October 2026).
+- [ ] Confirm the free-tier request limits.
 - [ ] Get the marking rubric and check this plan against it.
 - [ ] Choose the second AI feature.
 
@@ -298,3 +309,4 @@ Each phase ends with something that works, so there is always a demo.
   (inputs to the supplied hazard proxy; credit OpenStreetMap contributors).
 - Nairobi County flood-hotspot mapping, March 2026 (hotspot names).
 - Hackathon starter kit: problem statement, build guide and data dictionary in `data/`.
+- Gemini API Additional Terms of Service (free and paid tiers): https://ai.google.dev/terms

@@ -50,7 +50,7 @@ describe.skipIf(!existsSync(KIT))("starter kit", () => {
     expect(Object.keys(loaded).sort()).toEqual(["team_a_nairobi", "team_b_nzoia"]);
   });
 
-  describe("Team A — Nairobi", () => {
+  describe("Team A, Nairobi", () => {
     it("reads every building and every hazard map", () => {
       const { dataset, report } = loaded.team_a_nairobi;
       expect(dataset.hazardKind).toBe("score");
@@ -108,11 +108,11 @@ describe.skipIf(!existsSync(KIT))("starter kit", () => {
           result.scenarios.map((s) => `  ${String(s.returnPeriod).padStart(4)}y  ${s.id.padEnd(10)} affected ${String(s.affected).padStart(3)}  loss KES ${(s.lossKes / 1e9).toFixed(3)}bn`).join("\n") +
           `\n  AAL KES ${(result.aalKes / 1e6).toFixed(1)}m of TIV KES ${(result.totalTivKes / 1e9).toFixed(1)}bn`,
       );
-      console.log(checks.map((c) => `  [${c.status}] ${c.title} — ${c.detail}`).join("\n"));
+      console.log(checks.map((c) => `  [${c.status}] ${c.title}: ${c.detail}`).join("\n"));
     });
   });
 
-  describe("Team B — Nzoia (depth maps with their own return periods)", () => {
+  describe("Team B, Nzoia (depth maps with their own return periods)", () => {
     it("runs through the same engine", () => {
       const { dataset, report, result } = loaded.team_b_nzoia;
       expect(dataset.hazardKind).toBe("depth_m");

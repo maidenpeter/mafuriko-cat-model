@@ -9,9 +9,9 @@ import { slim, type Active, type LogEntry, type Session } from "./session";
 
 export const PARAM_LABELS: Record<string, string> = {
   depthScaleM: "Depth at score 1.0, widest tier (m)",
-  ...Object.fromEntries(HOUSING_CLASSES.map((c) => [`fragility.${c}`, `Fragility — ${HOUSING_LABELS[c]}`])),
-  ...Object.fromEntries(HOUSING_CLASSES.map((c) => [`cap.${c}`, `Damage cap — ${HOUSING_LABELS[c]}`])),
-  ...Object.fromEntries(SCORE_TIERS.map((t) => [`returnPeriods.${t}`, `Return period — "${t}" tier (years)`])),
+  ...Object.fromEntries(HOUSING_CLASSES.map((c) => [`fragility.${c}`, `Fragility: ${HOUSING_LABELS[c]}`])),
+  ...Object.fromEntries(HOUSING_CLASSES.map((c) => [`cap.${c}`, `Damage cap: ${HOUSING_LABELS[c]}`])),
+  ...Object.fromEntries(SCORE_TIERS.map((t) => [`returnPeriods.${t}`, `Return period: "${t}" tier (years)`])),
 };
 
 /** Parameters that have no effect on a depth dataset, where the data carries depths and return periods itself. */
@@ -62,12 +62,12 @@ export function buildNote(session: Session, active: Active, deliberation: Delibe
   const refRarest = reference.scenarios[reference.scenarios.length - 1];
 
   const lines: string[] = [];
-  lines.push(`# Mafuriko — model note`, ``, `Dataset: **${dataset.name}** · generated ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC`, ``);
+  lines.push(`# Mafuriko model note`, ``, `Dataset: **${dataset.name}** · generated ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC`, ``);
   lines.push(`> The portfolio is synthetic. ${isScore ? "The hazard layer is a constructed proxy, not measured flood depth." : "The hazard layer is a published set of flood depth maps."} Nothing here describes a real client's holdings.`, ``);
 
   lines.push(`## 1. Data sources`, ``, `| File | Role | Real or synthetic |`, `|---|---|---|`);
   for (const f of report.files.filter((f) => f.used)) {
-    lines.push(`| ${f.name} | ${f.note} | ${{ real: "Real data", proxy: "Derived proxy", synthetic: "Synthetic", none: "–" }[f.provenance]} |`);
+    lines.push(`| ${f.name} | ${f.note} | ${{ real: "Real data", proxy: "Derived proxy", synthetic: "Synthetic", none: "-" }[f.provenance]} |`);
   }
   lines.push(``, `Vulnerability reference: ${JRC_AFRICA_RESIDENTIAL.source}.`, ``);
 
@@ -98,14 +98,14 @@ export function buildNote(session: Session, active: Active, deliberation: Delibe
     const chair = deliberation.runs.chair.output;
     if (chair) lines.push(`Chair's summary: ${chair.summary}`, ``);
     lines.push(`| Parameter | Reference | Optimist | Cautious | Agreed | Reason |`, `|---|---|---|---|---|---|`);
-    for (const row of ledger) lines.push(`| ${PARAM_LABELS[row.path]} | ${fmtNum(row.reference)} | ${row.optimist === null ? "–" : fmtNum(row.optimist)} | ${row.cautious === null ? "–" : fmtNum(row.cautious)} | ${fmtNum(row.final)} | ${row.reason.replaceAll("|", "/")} |`);
+    for (const row of ledger) lines.push(`| ${PARAM_LABELS[row.path]} | ${fmtNum(row.reference)} | ${row.optimist === null ? "-" : fmtNum(row.optimist)} | ${row.cautious === null ? "-" : fmtNum(row.cautious)} | ${fmtNum(row.final)} | ${row.reason.replaceAll("|", "/")} |`);
     lines.push(``);
     const critic = deliberation.runs.critic.output;
     if (critic && chair) {
       lines.push(`Critic's challenges and the Chair's answers:`, ``);
       for (const c of critic.challenges) {
         const a = chair.responses.find((x) => x.challengeId === c.id);
-        lines.push(`- **${c.id} ${c.title}** (${c.severity}). ${c.detail} — *${a ? `${a.verdict}: ${a.response}` : "not answered"}*`);
+        lines.push(`- **${c.id} ${c.title}** (${c.severity}). ${c.detail} Answer: *${a ? `${a.verdict}: ${a.response}` : "not answered"}*`);
       }
       lines.push(``);
     }

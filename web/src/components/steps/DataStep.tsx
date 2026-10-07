@@ -29,7 +29,7 @@ export function DataStep({ session }: { session: Session }) {
       <div className="grid gap-4 md:grid-cols-3">
         <Stat label="Buildings" value={fmtInt(dataset.buildings.length)} note={<Tag kind="synthetic" />} />
         <Stat label="Total insured value" value={fmtKes(reference.totalTivKes)} note="As written in the file" />
-        <Stat label="Hazard maps" value={dataset.rasters.length || "None"} note={<Tag kind={dataset.hazardKind === "score" ? "proxy" : "real"}>{dataset.hazardKind === "score" ? "Susceptibility score, 0–1" : "Flood depth, metres"}</Tag>} />
+        <Stat label="Hazard maps" value={dataset.rasters.length || "None"} note={<Tag kind={dataset.hazardKind === "score" ? "proxy" : "real"}>{dataset.hazardKind === "score" ? "Susceptibility score, 0 to 1" : "Flood depth, metres"}</Tag>} />
       </div>
 
       {discrepancy && (
@@ -85,7 +85,7 @@ export function DataStep({ session }: { session: Session }) {
                 <tr key={f.path} className={f.used ? "text-ink" : "text-muted"}>
                   <td className="py-2 pr-4 font-mono text-[12.5px]">{f.name}</td>
                   <td className="py-2 pr-4">{f.used ? KIND_LABEL[f.kind] : "Not used"}</td>
-                  <td className="py-2 pr-4">{f.used && f.provenance !== "none" ? <Tag kind={f.provenance} /> : "–"}</td>
+                  <td className="py-2 pr-4">{f.used && f.provenance !== "none" ? <Tag kind={f.provenance} /> : "-"}</td>
                   <td className="py-2 pr-4 text-ink-2">{f.note}</td>
                   <td className="tabular py-2 text-right text-ink-2">{fmtBytes(f.size)}</td>
                 </tr>

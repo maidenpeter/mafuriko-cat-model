@@ -1,4 +1,4 @@
-# Mafuriko — web app
+# Mafuriko web app
 
 An explainable flood loss walkthrough for the Kenya Re hackathon (Team A, Nairobi).
 The plan and the modelling decisions are in [`../PLAN.md`](../PLAN.md).

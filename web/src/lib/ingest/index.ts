@@ -116,7 +116,7 @@ export async function detectDatasets(files: FileSource[], uploadName = "upload")
         group(dirName(file.path)).rasters.push({ file, ...found });
         info.kind = "hazard-raster";
         info.provenance = found.kind === "score" ? "proxy" : "real";
-        info.note = found.kind === "score" ? `Susceptibility score 0–1, tier "${found.scenario.id}"` : `Flood depth in metres, ${found.scenario.label}`;
+        info.note = found.kind === "score" ? `Susceptibility score 0 to 1, tier "${found.scenario.id}"` : `Flood depth in metres, ${found.scenario.label}`;
       } else {
         info.note = "Raster with no tier or return period in its name";
       }

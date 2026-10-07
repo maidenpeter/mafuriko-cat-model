@@ -62,8 +62,8 @@ export function dataChecks(dataset: Dataset, report: IngestReport): Check[] {
     out.push(
       check(g, "tiv-consistent", "Insured value equals floor area × cost per m²", passIf(consistent, "warn"),
         consistent
-          ? `Ratio across ${fmtInt(r.n)} rows: ${fmtNum(r.min)}–${fmtNum(r.max)}.`
-          : `Insured values are ${fmtNum(r.median, 1)}× floor area × cost per m² (range ${fmtNum(r.min)}–${fmtNum(r.max)}). The portfolio totals ${fmtKes(total)}; the documented formula would give ${fmtKes(total / r.median)}. Values are used as they are in the file.`),
+          ? `Ratio across ${fmtInt(r.n)} rows: ${fmtNum(r.min)} to ${fmtNum(r.max)}.`
+          : `Insured values are ${fmtNum(r.median, 1)}× floor area × cost per m² (range ${fmtNum(r.min)} to ${fmtNum(r.max)}). The portfolio totals ${fmtKes(total)}; the documented formula would give ${fmtKes(total / r.median)}. Values are used as they are in the file.`),
     );
   }
 
@@ -93,7 +93,7 @@ export function hazardChecks(dataset: Dataset, report: IngestReport): Check[] {
 
   if (isScore) {
     const bad = all.filter((v) => v < 0 || v > 1).length;
-    out.push(check(g, "range", "Scores lie between 0 and 1", passIf(bad === 0), bad === 0 ? `Highest score on any building is ${fmtNum(max, 3)}.` : `${bad} values are outside 0–1.`));
+    out.push(check(g, "range", "Scores lie between 0 and 1", passIf(bad === 0), bad === 0 ? `Highest score on any building is ${fmtNum(max, 3)}.` : `${bad} values are outside 0 to 1.`));
   } else {
     const bad = all.filter((v) => v < 0 || v > 50).length;
     out.push(check(g, "range", "Depths are plausible", passIf(bad === 0, "warn"), bad === 0 ? `Deepest water at any building is ${fmtNum(max)} m.` : `${bad} values are negative or above 50 m.`));

@@ -151,7 +151,7 @@ export async function generateJson(apiKey: string, system: string, user: string,
       clearTimeout(timer);
       controller.abort();
       console.log(
-        `[${label}] ${modelName()} · first text ${usage.firstTextS ?? "–"} s · done ${seconds()} s · ${usage.outputTokens ?? "?"} tokens written, ${usage.thinkingTokens ?? 0} thinking · finish ${usage.finishReason ?? "cut off"}${usage.padded ? " · kept sending after the reply was complete" : ""}`,
+        `[${label}] ${modelName()} · first text ${usage.firstTextS ?? "?"} s · done ${seconds()} s · ${usage.outputTokens ?? "?"} tokens written, ${usage.thinkingTokens ?? 0} thinking · finish ${usage.finishReason ?? "cut off"}${usage.padded ? " · kept sending after the reply was complete" : ""}`,
       );
       if (text) return { text, usage };
       throw new Error(`empty reply (finish reason: ${usage.finishReason ?? "unknown"})`);

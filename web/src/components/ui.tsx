@@ -55,7 +55,7 @@ const TAGS: Record<TagKind, { label: string; glyph: string }> = {
   synthetic: { label: "Synthetic", glyph: "○" },
   assumption: { label: "Assumption", glyph: "△" },
   ai: { label: "AI-proposed", glyph: "✦" },
-  none: { label: "Not used", glyph: "–" },
+  none: { label: "Not used", glyph: "-" },
 };
 
 /** Says where a number or file comes from. Shape and word carry the meaning, not colour. */

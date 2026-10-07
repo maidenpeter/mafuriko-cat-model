@@ -36,7 +36,7 @@ function RunMeta({ run }: { run: AgentRun }) {
   return (
     <details className="mt-3 text-xs text-muted">
       <summary className="cursor-pointer select-none hover:text-ink-2">
-        {run.model ?? "model"} · {run.ms ? `${(run.ms / 1000).toFixed(1)} s` : "–"}{run.usage?.outputTokens ? ` · ${run.usage.outputTokens.toLocaleString("en-KE")} tokens written${run.usage.thinkingTokens ? `, ${run.usage.thinkingTokens.toLocaleString("en-KE")} thinking` : ""}` : ""}{run.usage?.firstTextS !== undefined ? ` · first text after ${run.usage.firstTextS} s` : ""}{run.usage?.padded ? " · cut off after the reply was complete" : ""}{(run.attempts ?? 1) > 1 ? " · needed a retry" : ""} · show the exact prompt and reply
+        {run.model ?? "model"} · {run.ms ? `${(run.ms / 1000).toFixed(1)} s` : "-"}{run.usage?.outputTokens ? ` · ${run.usage.outputTokens.toLocaleString("en-KE")} tokens written${run.usage.thinkingTokens ? `, ${run.usage.thinkingTokens.toLocaleString("en-KE")} thinking` : ""}` : ""}{run.usage?.firstTextS !== undefined ? ` · first text after ${run.usage.firstTextS} s` : ""}{run.usage?.padded ? " · cut off after the reply was complete" : ""}{(run.attempts ?? 1) > 1 ? " · needed a retry" : ""} · show the exact prompt and reply
       </summary>
       {run.prompt && (
         <>
@@ -242,8 +242,8 @@ export function AgentsStep({ session, deliberation: d, busy, checks, status, has
                       <tr key={row.path}>
                         <td className="py-2 pr-3 text-ink">{PARAM_LABELS[row.path]}</td>
                         <td className="tabular py-2 text-right text-ink-2">{fmtNum(row.reference)}</td>
-                        <td className="tabular py-2 text-right text-ink-2">{row.optimist === null ? "–" : fmtNum(row.optimist)}</td>
-                        <td className="tabular py-2 text-right text-ink-2">{row.cautious === null ? "–" : fmtNum(row.cautious)}</td>
+                        <td className="tabular py-2 text-right text-ink-2">{row.optimist === null ? "-" : fmtNum(row.optimist)}</td>
+                        <td className="tabular py-2 text-right text-ink-2">{row.cautious === null ? "-" : fmtNum(row.cautious)}</td>
                         <td className="tabular py-2 text-right font-semibold text-ink">{fmtNum(row.final)}{row.adjusted ? "*" : ""}</td>
                         <td className="py-2 pl-5 leading-relaxed text-ink-2">{row.reason} <span className="text-muted">· leans {row.leans} · {BASIS_LABELS[row.basis as Basis] ?? row.basis}</span></td>
                       </tr>

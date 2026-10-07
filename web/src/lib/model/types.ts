@@ -17,7 +17,7 @@ export const HOUSING_LABELS: Record<HousingClass, string> = {
 /** Class used for the damage curve when a row's housing class is not recognised. */
 export const FALLBACK_CLASS: HousingClass = "permanent_masonry";
 
-/** "score" = 0–1 susceptibility proxy (Nairobi). "depth_m" = flood depth in metres (Nzoia-style). */
+/** "score" = 0 to 1 susceptibility proxy (Nairobi). "depth_m" = flood depth in metres (Nzoia-style). */
 export type HazardKind = "score" | "depth_m";
 
 /** Score tiers from narrowest footprint (most frequent event) to widest (rarest). */

@@ -184,7 +184,7 @@ export function aiChecks(dataset: Dataset, d: Deliberation): Check[] {
     group: g, id: "ranges", title: "Every parameter is inside its allowed range",
     status: adjustments.length === 0 ? "pass" : "warn",
     detail: adjustments.length === 0
-      ? `Depth scale ${BOUNDS.depthScaleM.min}–${BOUNDS.depthScaleM.max} m, fragility ${BOUNDS.fragility.min}–${BOUNDS.fragility.max}, cap ${BOUNDS.cap.min}–${BOUNDS.cap.max}, return periods ${BOUNDS.returnPeriod.min}–${BOUNDS.returnPeriod.max} years and rising.`
+      ? `Depth scale ${BOUNDS.depthScaleM.min} to ${BOUNDS.depthScaleM.max} m, fragility ${BOUNDS.fragility.min} to ${BOUNDS.fragility.max}, cap ${BOUNDS.cap.min} to ${BOUNDS.cap.max}, return periods ${BOUNDS.returnPeriod.min} to ${BOUNDS.returnPeriod.max} years and rising.`
       : `${adjustments.length} value(s) were corrected by code: ${adjustments.slice(0, 3).map((a) => `${a.path} ${a.from} → ${a.to} (${a.reason})`).join("; ")}`,
   });
 

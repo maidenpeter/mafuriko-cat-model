@@ -48,7 +48,7 @@ export function enforceBounds(input: ModelParams): { params: ModelParams; adjust
         path,
         from: v,
         to: out,
-        reason: Number.isFinite(v) ? `outside allowed range ${min}–${max}` : "not a number, reference value used",
+        reason: Number.isFinite(v) ? `outside allowed range ${min} to ${max}` : "not a number, reference value used",
       });
     }
     return out;

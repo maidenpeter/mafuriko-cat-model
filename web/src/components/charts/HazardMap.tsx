@@ -38,7 +38,7 @@ export function HazardMap({ dataset, scenarioIndex, hits }: { dataset: Dataset; 
   }, [raster, dataset.buildings]);
 
   const height = Math.round(width * ((bbox[3] - bbox[1]) / (bbox[2] - bbox[0])));
-  // Colour scale top: scores run 0–1; depths are scaled to the deepest cell, capped so one extreme cell does not wash out the map.
+  // Colour scale top: scores run 0 to 1; depths are scaled to the deepest cell, capped so one extreme cell does not wash out the map.
   const scaleMax = useMemo(() => {
     if (isScore || !raster) return 1;
     let max = 0;

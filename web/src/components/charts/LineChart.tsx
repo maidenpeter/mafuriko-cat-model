@@ -164,7 +164,7 @@ export function LineChart({ series, band, xScale, xTicks, xFormat, yFormat, xLab
           ))}
           {bandAt && bandAt.lo !== null && bandAt.hi !== null && (
             <div className="mt-1 border-t border-line pt-1 text-ink-2">
-              {band!.label}: <span className="tabular text-ink">{yFormat(bandAt.lo)} – {yFormat(bandAt.hi)}</span>
+              {band!.label}: <span className="tabular text-ink">{yFormat(bandAt.lo)} to {yFormat(bandAt.hi)}</span>
             </div>
           )}
         </div>

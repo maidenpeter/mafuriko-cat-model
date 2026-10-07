@@ -25,7 +25,7 @@ export function buildProfile(dataset: Dataset, report: IngestReport, reference: 
       kind: dataset.hazardKind,
       meaning:
         dataset.hazardKind === "score"
-          ? "0–1 relative flood susceptibility built from terrain and river proximity. Not a measured depth. The five tiers are nested cuts of one score: 'common' keeps the top 40% of cells, 'extreme' the top 5%, each rescaled to 0–1. The widest footprint ('common') stands for the rarest event."
+          ? "0 to 1 relative flood susceptibility built from terrain and river proximity. Not a measured depth. The five tiers are nested cuts of one score: 'common' keeps the top 40% of cells, 'extreme' the top 5%, each rescaled to 0 to 1. The widest footprint ('common') stands for the rarest event."
           : "Flood depth in metres from published return-period maps. Depth scale and tier return periods are not used for this dataset.",
       scenarios: dataset.scenarios.map((s, k) => {
         const wet = dataset.buildings.map((b) => b.hazard[k]).filter((v) => v > 0).sort((a, b) => a - b);

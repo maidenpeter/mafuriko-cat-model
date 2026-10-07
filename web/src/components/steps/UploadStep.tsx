@@ -71,7 +71,7 @@ export function UploadStep({ busy, error, candidates, onFiles, onSample, onPick 
               <button key={c.dir} onClick={() => onPick(c)} className="rounded-xl border border-line bg-surface p-4 text-left transition hover:border-axis hover:bg-surface-2">
                 <div className="font-semibold text-ink">{c.name}</div>
                 <div className="mt-1 text-sm text-ink-2">
-                  {c.rasters.length} hazard maps · {c.hazardKind === "score" ? "susceptibility scores (0–1)" : "flood depths in metres"}
+                  {c.rasters.length} hazard maps · {c.hazardKind === "score" ? "susceptibility scores (0 to 1)" : "flood depths in metres"}
                   {c.hotspots ? " · hotspots" : ""}
                 </div>
               </button>

@@ -2,7 +2,8 @@ import { BASES, PARAMETER_NAMES, type Role } from "./schema";
 
 /**
  * The reply shapes in the form the Gemini API enforces while it generates, so
- * a reply ends when its object closes.
+ * a reply ends when its object closes. openai.ts turns the same shapes into the
+ * form OpenAI enforces.
  *
  * They are deliberately shallow: a list of flat entries, one per parameter.
  * A nested shape (an object per parameter, grouped by class and tier) was

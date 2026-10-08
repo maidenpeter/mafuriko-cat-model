@@ -66,8 +66,8 @@ function completionScanner() {
 }
 
 /**
- * One text-in, JSON-text-out call. This is the only place that knows which
- * provider is used; swap it to change provider.
+ * One text-in, JSON-text-out call to the Gemini API. provider.ts picks between
+ * this and the OpenAI call.
  *
  * The reply is streamed so that it can be cut off the moment the JSON object
  * is complete, and so that a slow call can say where the time went.

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { generateJson, keyFor, modelName } from "@/lib/agents/gemini";
 import { buildPrompt, type AgentRequest } from "@/lib/agents/prompts";
+import { generateJson, keyFor, keySettings, modelName } from "@/lib/agents/provider";
 import { RESPONSE_SCHEMAS } from "@/lib/agents/responseSchema";
 import { nestReply, ROLES, SCHEMAS, type Role } from "@/lib/agents/schema";
 
@@ -19,7 +19,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ role: s
   const role = roleParam as Role;
 
   const apiKey = keyFor(role);
-  if (!apiKey) return NextResponse.json({ ok: false, error: `No API key configured for the ${role} agent. Set GEMINI_API_KEY_${role.toUpperCase()} or GEMINI_API_KEY in web/.env.local.` }, { status: 503 });
+  if (!apiKey) return NextResponse.json({ ok: false, error: `No API key configured for the ${role} agent. Set ${keySettings(role)} in web/.env.local.` }, { status: 503 });
 
   const request = (await req.json()) as AgentRequest;
   const prompt = buildPrompt(role, request);
@@ -40,7 +40,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ role: s
         }
         problem = parsed.error.issues.slice(0, 6).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
       } catch (e) {
-        problem = usage.finishReason === "MAX_TOKENS" ? "the reply hit the output limit before it was complete" : `not valid JSON (${(e as Error).message})`;
+        // "MAX_TOKENS" is Gemini's name for running out of room, "length" is OpenAI's.
+        problem = usage.finishReason === "MAX_TOKENS" || usage.finishReason === "length" ? "the reply hit the output limit before it was complete" : `not valid JSON (${(e as Error).message})`;
       }
       attempts.push({ raw, problem });
       user = `${prompt.user}\n\nYour previous reply was rejected: ${problem}. Reply again with the complete JSON object in exactly the requested shape.`;

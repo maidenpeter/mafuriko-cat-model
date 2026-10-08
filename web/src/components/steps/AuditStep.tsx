@@ -59,11 +59,11 @@ export function AuditStep({ session, active, deliberation, checks, log }: Props)
 
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <Card title="Assumptions in force" aside={<Tag kind={active.source === "ai" ? "ai" : "assumption"}>{active.source === "ai" ? "Agreed by the agents" : "Reference values"}</Tag>}>
-          <table className="w-full text-[13px]">
-            <thead className="text-xs text-muted"><tr><th className="pb-2 text-left font-medium">Assumption</th><th className="pb-2 text-right font-medium">In force</th><th className="pb-2 text-right font-medium">Reference</th></tr></thead>
+          <table className="w-full text-sm">
+            <thead className="text-xs text-muted"><tr><th className="pb-2 text-left font-medium">Assumption</th><th className="pb-2 pl-3 text-right font-medium">In force</th><th className="pb-2 pl-3 text-right font-medium">Reference</th></tr></thead>
             <tbody className="divide-y divide-line">
               {flattenParams(active.params).filter((p) => isScore || !unusedForDepth(p.path)).map((p) => (
-                <tr key={p.path}><td className="py-1.5 text-ink-2">{PARAM_LABELS[p.path]}</td><td className="tabular py-1.5 text-right font-semibold text-ink">{fmtNum(p.value)}</td><td className="tabular py-1.5 text-right text-muted">{fmtNum(ref.get(p.path)!)}</td></tr>
+                <tr key={p.path}><td className="py-1.5 text-ink-2">{PARAM_LABELS[p.path]}</td><td className="tabular py-1.5 pl-3 text-right font-semibold text-ink">{fmtNum(p.value)}</td><td className="tabular py-1.5 pl-3 text-right text-muted">{fmtNum(ref.get(p.path)!)}</td></tr>
               ))}
             </tbody>
           </table>
@@ -80,12 +80,13 @@ export function AuditStep({ session, active, deliberation, checks, log }: Props)
       </div>
 
       <Card title="Run log" className="mt-4">
-        <ol className="max-h-72 space-y-1 overflow-auto font-mono text-[12px] leading-relaxed text-ink-2">
+        {/* On a narrow screen the message takes its own line under the time and step, so it is not squeezed into a sliver. */}
+        <ol className="max-h-72 space-y-1 overflow-auto font-mono text-xs leading-relaxed text-ink-2">
           {log.map((entry, i) => (
-            <li key={i} className="grid grid-cols-[5.5rem_7rem_1fr] gap-2">
+            <li key={i} className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-2 sm:grid-cols-[5.5rem_7rem_minmax(0,1fr)]">
               <span className="tabular text-muted">{entry.at.slice(11, 23)}</span>
               <span className="text-ink">{entry.step}</span>
-              <span>{entry.message}</span>
+              <span className="col-span-2 wrap-break-word sm:col-span-1">{entry.message}</span>
             </li>
           ))}
         </ol>

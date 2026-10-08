@@ -109,7 +109,7 @@ export function ResultsStep({
           ]}
         />
         <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[520px] text-sm">
+          <table className="w-full min-w-130 text-sm">
             <thead className="text-xs text-muted">
               <tr>
                 <th className="pb-2 text-left font-medium">Return period</th>
@@ -159,7 +159,7 @@ export function ResultsStep({
       {terrainResult && dataset.drainage && (
         <Card title="What drainage-driven flooding adds" className="mt-4" aside={<Tag kind="assumption">Drainage ponding assumed</Tag>}>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[520px] text-sm">
+            <table className="w-full min-w-130 text-sm">
               <thead className="text-xs text-muted">
                 <tr>
                   <th className="pb-2 text-left font-medium">Event</th>
@@ -202,33 +202,35 @@ export function ResultsStep({
       )}
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-        <h3 className="text-[15px] font-semibold text-ink">Where the loss comes from</h3>
+        <h3 className="text-base font-semibold text-ink">Where the loss comes from</h3>
         <Segmented label="Scenario" value={String(k)} onChange={(v) => setScenario(Number(v))} options={r.scenarios.map((sc, i) => ({ value: String(i), label: `1 in ${sc.returnPeriod}` }))} />
       </div>
 
       <div className="mt-3 grid gap-4 lg:grid-cols-2">
         <Card title="By construction class" aside={<span className="text-xs text-muted">Buildings beside money</span>}>
-          <table className="w-full text-[13px]">
-            <thead className="text-xs text-muted">
-              <tr><th className="pb-2 text-left font-medium">Class</th><th className="pb-2 text-right font-medium">Affected</th><th className="pb-2 text-right font-medium">Insured value</th><th className="pb-2 text-right font-medium">Loss</th></tr>
-            </thead>
-            <tbody>
-              {HOUSING_CLASSES.map((c) => {
-                const cls = s.byClass[c];
-                return (
-                  <tr key={c} className="border-t border-line align-top">
-                    <td className="py-2 pr-2">
-                      <span className="inline-flex items-center gap-2 text-ink"><span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: CLASS_COLORS[c] }} />{HOUSING_LABELS[c]}</span>
-                      <div className="mt-1.5 h-1.5 rounded-r-full bg-surface-2"><div className="h-1.5 rounded-r-full" style={{ width: `${(cls.lossKes / maxClassLoss) * 100}%`, background: CLASS_COLORS[c] }} /></div>
-                    </td>
-                    <td className="tabular py-2 text-right text-ink-2">{fmtInt(cls.affected)} of {fmtInt(cls.count)}</td>
-                    <td className="tabular py-2 text-right text-ink-2">{fmtKes(cls.tivKes)}</td>
-                    <td className="tabular py-2 text-right font-semibold text-ink">{fmtKes(cls.lossKes, 2)}<div className="text-xs font-normal text-muted">{fmtPct(cls.lossKes / (s.lossKes || 1), 1)} of loss</div></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-xs text-muted">
+                <tr><th className="pb-2 text-left font-medium">Class</th><th className="pb-2 pl-2 text-right font-medium">Affected</th><th className="pb-2 pl-2 text-right font-medium">Insured value</th><th className="pb-2 pl-2 text-right font-medium">Loss</th></tr>
+              </thead>
+              <tbody>
+                {HOUSING_CLASSES.map((c) => {
+                  const cls = s.byClass[c];
+                  return (
+                    <tr key={c} className="border-t border-line align-top">
+                      <td className="py-2 pr-2">
+                        <span className="inline-flex items-center gap-2 text-ink"><span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: CLASS_COLORS[c] }} />{HOUSING_LABELS[c]}</span>
+                        <div className="mt-1.5 h-1.5 rounded-r-full bg-surface-2"><div className="h-1.5 rounded-r-full" style={{ width: `${(cls.lossKes / maxClassLoss) * 100}%`, background: CLASS_COLORS[c] }} /></div>
+                      </td>
+                      <td className="tabular py-2 pl-2 text-right text-ink-2">{fmtInt(cls.affected)} of {fmtInt(cls.count)}</td>
+                      <td className="tabular whitespace-nowrap py-2 pl-2 text-right text-ink-2">{fmtKes(cls.tivKes)}</td>
+                      <td className="tabular whitespace-nowrap py-2 pl-2 text-right font-semibold text-ink">{fmtKes(cls.lossKes, 2)}<div className="text-xs font-normal text-muted">{fmtPct(cls.lossKes / (s.lossKes || 1), 1)} of loss</div></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
           <p className="mt-3 text-xs leading-relaxed text-muted">Loss follows insured value, so a few large concrete buildings dominate. The informal and semi-permanent buildings are many, but carry little insured value.</p>
         </Card>
 
@@ -236,22 +238,24 @@ export function ResultsStep({
           {top.length === 0 ? (
             <p className="text-sm text-ink-2">No losses in this scenario.</p>
           ) : (
-            <table className="w-full text-[13px]">
-              <thead className="text-xs text-muted">
-                <tr><th className="pb-2 text-left font-medium">Building</th><th className="pb-2 text-left font-medium">Class</th><th className="pb-2 text-right font-medium">{isScore ? "Score" : "Depth"}</th><th className="pb-2 text-right font-medium">Damage</th><th className="pb-2 text-right font-medium">Loss</th></tr>
-              </thead>
-              <tbody className="divide-y divide-line">
-                {top.map(({ i, p }) => (
-                  <tr key={dataset.buildings[i].locId}>
-                    <td className="py-1.5 font-mono text-xs text-ink">{dataset.buildings[i].locId}</td>
-                    <td className="py-1.5 text-ink-2">{HOUSING_LABELS[dataset.buildings[i].housingClass]}</td>
-                    <td className="tabular py-1.5 text-right text-ink-2">{fmtNum(p.hazard, isScore ? 3 : 2)}</td>
-                    <td className="tabular py-1.5 text-right text-ink-2">{fmtPct(p.damageRatio, 0)}</td>
-                    <td className="tabular py-1.5 text-right font-semibold text-ink">{fmtKes(p.lossKes, 2)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-xs text-muted">
+                  <tr><th className="pb-2 text-left font-medium">Building</th><th className="pb-2 pl-3 text-left font-medium">Class</th><th className="pb-2 pl-3 text-right font-medium">{isScore ? "Score" : "Depth"}</th><th className="pb-2 pl-3 text-right font-medium">Damage</th><th className="pb-2 pl-3 text-right font-medium">Loss</th></tr>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {top.map(({ i, p }) => (
+                    <tr key={dataset.buildings[i].locId}>
+                      <td className="whitespace-nowrap py-1.5 font-mono text-xs text-ink">{dataset.buildings[i].locId}</td>
+                      <td className="py-1.5 pl-3 text-ink-2">{HOUSING_LABELS[dataset.buildings[i].housingClass]}</td>
+                      <td className="tabular py-1.5 pl-3 text-right text-ink-2">{fmtNum(p.hazard, isScore ? 3 : 2)}</td>
+                      <td className="tabular py-1.5 pl-3 text-right text-ink-2">{fmtPct(p.damageRatio, 0)}</td>
+                      <td className="tabular whitespace-nowrap py-1.5 pl-3 text-right font-semibold text-ink">{fmtKes(p.lossKes, 2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </Card>
       </div>

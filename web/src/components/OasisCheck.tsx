@@ -51,7 +51,7 @@ export function OasisCheck({ session }: { session: Session }) {
     return (
       <Card title={title} className="mt-4" aside={<Tag kind="none">Not run for this data</Tag>}>
         <p className="text-sm leading-relaxed text-ink-2">
-          No Oasis run matches this dataset and the reference assumptions. Run <code className="font-mono text-[12.5px]">python oasis/build_and_run.py</code> from the project folder (see <code className="font-mono text-[12.5px]">oasis/README.md</code>) to produce one.
+          No Oasis run matches this dataset and the reference assumptions. Run <code className="font-mono text-sm">python oasis/build_and_run.py</code> from the project folder (see <code className="font-mono text-sm">oasis/README.md</code>) to produce one.
         </p>
       </Card>
     );
@@ -69,7 +69,7 @@ export function OasisCheck({ session }: { session: Session }) {
     return (
       <Card title={title} className="mt-4" aside={<Tag kind="none">Out of date</Tag>}>
         <p className="text-sm leading-relaxed text-ink-2">
-          The saved Oasis run ({run.generatedAt.slice(0, 10)}) was made for different data or an earlier version of the engine, so it is not compared here. Run <code className="font-mono text-[12.5px]">python oasis/build_and_run.py</code> again to refresh it.
+          The saved Oasis run ({run.generatedAt.slice(0, 10)}) was made for different data or an earlier version of the engine, so it is not compared here. Run <code className="font-mono text-sm">python oasis/build_and_run.py</code> again to refresh it.
         </p>
       </Card>
     );
@@ -93,7 +93,7 @@ export function OasisCheck({ session }: { session: Session }) {
         Oasis is the open-source loss modelling framework used across the insurance industry. We wrote this portfolio as an Oasis exposure file and our hazard and damage assumptions as Oasis model files, then let the Oasis engine compute the losses and the loss curve on its own. {agrees ? "It agrees with this app to within half a percent at every event." : "The two engines disagree by more than half a percent; see the notes below."}
       </p>
       <div className="mt-4 overflow-x-auto">
-        <table className="w-full min-w-[560px] text-sm">
+        <table className="w-full min-w-140 text-sm">
           <thead className="text-xs text-muted">
             <tr>
               <th className="pb-2 text-left font-medium">Event</th>

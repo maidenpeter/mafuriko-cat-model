@@ -42,13 +42,13 @@ export function UploadStep({ busy, error, candidates, onFiles, onSample, onPick 
             {busy.map((message, i) => (
               <motion.div key={i} initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }} className="flex items-center gap-2.5 py-1 text-sm text-ink-2">
                 <StatusIcon status={i === busy.length - 1 ? "running" : "pass"} size={16} />
-                {message}
+                <span className="min-w-0 wrap-anywhere">{message}</span>
               </motion.div>
             ))}
           </div>
         ) : (
           <>
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--ink-2)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <svg className="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="var(--ink-2)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               <path d="M12 16V4M7 9l5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" />
             </svg>
             <div className="mt-4 text-lg font-semibold text-ink">Drop a zip here</div>
@@ -68,7 +68,7 @@ export function UploadStep({ busy, error, candidates, onFiles, onSample, onPick 
         <Card title="This upload holds more than one dataset. Which one should run?" className="mt-6">
           <div className="grid gap-3 sm:grid-cols-2">
             {candidates.map((c) => (
-              <button key={c.dir} onClick={() => onPick(c)} className="rounded-xl border border-line bg-surface p-4 text-left transition hover:border-axis hover:bg-surface-2">
+              <button key={c.dir} onClick={() => onPick(c)} className="min-w-0 rounded-xl border border-line bg-surface p-4 text-left wrap-anywhere transition hover:border-axis hover:bg-surface-2">
                 <div className="font-semibold text-ink">{c.name}</div>
                 <div className="mt-1 text-sm text-ink-2">
                   {c.rasters.length} hazard maps · {c.hazardKind === "score" ? "susceptibility scores (0 to 1)" : "flood depths in metres"}

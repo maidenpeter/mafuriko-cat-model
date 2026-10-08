@@ -36,7 +36,7 @@ export function LossStep({ session, active, checks }: { session: Session; active
 
       <Card title="Loss by scenario" aside={<Tag kind="synthetic">Synthetic portfolio</Tag>}>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[640px] text-sm">
+          <table className="w-full min-w-160 text-sm">
             <thead className="text-xs text-muted">
               <tr>
                 <th className="pb-2 text-left font-medium">Return period</th>
@@ -97,12 +97,13 @@ export function LossStep({ session, active, checks }: { session: Session; active
                   { label: "Damage ratio", value: fmtPct(t.damageRatio, 1), how: t.capped ? `JRC curve gives ${fmtPct(t.curveDamage, 1)}, limited by the ${fmtPct(active.params.cap[b.housingClass], 0)} cap` : `JRC curve at ${fmtNum(t.effectiveDepthM)} m; under the ${fmtPct(active.params.cap[b.housingClass], 0)} cap`, tag: "real" as const },
                   { label: "Loss", value: fmtKes(t.lossKes, 2), how: `${fmtPct(t.damageRatio, 1)} × ${fmtKes(b.tivKes, 2)}`, tag: null },
                 ].map((row, i, all) => (
-                  <motion.li key={row.label} variants={{ hidden: { opacity: 0, x: -8 }, show: { opacity: 1, x: 0 } }} className={`flex items-center justify-between gap-4 rounded-xl px-3.5 py-2.5 ${i === all.length - 1 ? "bg-ink text-surface" : "bg-surface-2"}`}>
+                  // The figure sits beside its explanation where both fit, and drops to its own line where they do not.
+                  <motion.li key={row.label} variants={{ hidden: { opacity: 0, x: -8 }, show: { opacity: 1, x: 0 } }} className={`flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 rounded-xl px-3.5 py-2.5 ${i === all.length - 1 ? "bg-ink text-surface" : "bg-surface-2"}`}>
                     <div className="min-w-0">
                       <div className={`text-xs ${i === all.length - 1 ? "opacity-70" : "text-muted"}`}>{row.label}</div>
-                      <div className={`text-[13px] ${i === all.length - 1 ? "opacity-80" : "text-ink-2"}`}>{row.how}</div>
+                      <div className={`text-sm ${i === all.length - 1 ? "opacity-80" : "text-ink-2"}`}>{row.how}</div>
                     </div>
-                    <div className="flex shrink-0 items-center gap-2.5">
+                    <div className="ml-auto flex flex-wrap items-center justify-end gap-x-2.5 gap-y-1 text-right">
                       {row.tag && <Tag kind={row.tag}>{row.label === "Damage ratio" ? "JRC curve" : undefined}</Tag>}
                       <span className="tabular text-base font-semibold">{row.value}</span>
                     </div>

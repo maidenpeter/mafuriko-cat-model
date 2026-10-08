@@ -4,8 +4,10 @@ import { motion } from "motion/react";
 import { useEffect, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { summarise, type Check, type CheckStatus } from "@/lib/checks";
 
+/** `size` is the icon's size in pixels at the Standard text size. It is drawn in rem, so it grows with the text beside it. */
 export function StatusIcon({ status, size = 18 }: { status: CheckStatus | "running" | "idle"; size?: number }) {
-  const common = { width: size, height: size, viewBox: "0 0 20 20", "aria-hidden": true } as const;
+  const rem = `${size / 16}rem`;
+  const common = { viewBox: "0 0 20 20", "aria-hidden": true, style: { width: rem, height: rem } } as const;
   if (status === "running") {
     return (
       <svg {...common} className="spinner shrink-0">
@@ -58,11 +60,14 @@ const TAGS: Record<TagKind, { label: string; glyph: string }> = {
   none: { label: "Not used", glyph: "-" },
 };
 
-/** Says where a number or file comes from. Shape and word carry the meaning, not colour. */
+/**
+ * Says where a number or file comes from. Shape and word carry the meaning, not colour.
+ * It stays on one line where there is room; a label wider than its box wraps inside the pill.
+ */
 export function Tag({ kind, children }: { kind: TagKind; children?: ReactNode }) {
   return (
-    <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-line bg-surface-2 px-2.5 py-0.5 text-xs font-medium text-ink-2">
-      <span aria-hidden>{TAGS[kind].glyph}</span>
+    <span className="inline-flex max-w-full shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface-2 px-2.5 py-0.5 text-xs font-medium text-ink-2">
+      <span aria-hidden className="shrink-0">{TAGS[kind].glyph}</span>
       {children ?? TAGS[kind].label}
     </span>
   );
@@ -70,10 +75,10 @@ export function Tag({ kind, children }: { kind: TagKind; children?: ReactNode })
 
 export function Card({ title, aside, children, className = "" }: { title?: ReactNode; aside?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <section className={`rounded-2xl border border-line bg-surface p-5 ${className}`}>
+    <section className={`min-w-0 rounded-2xl border border-line bg-surface p-5 ${className}`}>
       {(title || aside) && (
         <header className="mb-4 flex flex-wrap items-center justify-between gap-2">
-          {title && <h3 className="text-[15px] font-semibold text-ink">{title}</h3>}
+          {title && <h3 className="min-w-0 text-base font-semibold text-ink">{title}</h3>}
           {aside}
         </header>
       )}
@@ -159,13 +164,13 @@ export function CheckList({ checks, stagger = 160 }: { checks: Check[]; stagger?
             <span className="mt-0.5">
               <StatusIcon status={done ? c.status : i === shown ? "running" : "idle"} />
             </span>
-            <div className="min-w-0">
+            <div className="min-w-0 wrap-anywhere">
               <div className={`text-sm ${done ? "text-ink" : "text-muted"}`}>
                 {c.title}
                 {done && c.status !== "pass" && <span className="ml-2 text-xs font-semibold uppercase tracking-wide text-ink-2">{STATUS_WORD[c.status]}</span>}
               </div>
               {done && (
-                <motion.div initial={{ opacity: 0, y: -2 }} animate={{ opacity: 1, y: 0 }} className="mt-0.5 text-[13px] leading-relaxed text-ink-2">
+                <motion.div initial={{ opacity: 0, y: -2 }} animate={{ opacity: 1, y: 0 }} className="mt-0.5 text-sm leading-relaxed text-ink-2">
                   {c.detail}
                 </motion.div>
               )}
@@ -181,17 +186,23 @@ export function Note({ tone = "info", children }: { tone?: "info" | "warn"; chil
   return (
     <div className="flex gap-3 rounded-xl border border-line bg-surface-2 p-3.5 text-sm leading-relaxed text-ink-2">
       {tone === "warn" && <span className="mt-0.5"><StatusIcon status="warn" /></span>}
-      <div>{children}</div>
+      <div className="min-w-0 wrap-anywhere">{children}</div>
     </div>
   );
 }
 
 export function StepHeader({ kicker, title, children }: { kicker: string; title: string; children?: ReactNode }) {
   return (
-    <header className="mb-6">
-      <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted">{kicker}</div>
-      <h2 className="mt-1 text-3xl font-semibold tracking-tight text-ink">{title}</h2>
-      {children && <p className="mt-2 max-w-3xl text-[15px] leading-relaxed text-ink-2">{children}</p>}
+    <header className="@container mb-6">
+      {/* Where the step has the room, the introduction sits beside the title and not under it, so the first
+          screen shows more of the step. The paragraph keeps its reading width either way. */}
+      <div className="@6xl:flex @6xl:items-end @6xl:justify-between @6xl:gap-12">
+        <div className="@6xl:shrink-0">
+          <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted">{kicker}</div>
+          <h2 className="mt-1 text-3xl font-semibold tracking-tight text-ink">{title}</h2>
+        </div>
+        {children && <p className="mt-2 max-w-3xl wrap-break-word text-base leading-relaxed text-ink-2 @6xl:mt-0 @6xl:min-w-0">{children}</p>}
+      </div>
     </header>
   );
 }

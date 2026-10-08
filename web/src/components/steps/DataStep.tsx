@@ -45,7 +45,7 @@ export function DataStep({ session }: { session: Session }) {
           <CheckList checks={session.dataChecks} />
         </Card>
 
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <Card title="Who holds the value" aside={<span className="text-xs text-muted">Buildings beside money</span>}>
             <div className="space-y-3">
               {HOUSING_CLASSES.map((c) => {
@@ -54,9 +54,9 @@ export function DataStep({ session }: { session: Session }) {
                 const valueShare = cls.tivKes / reference.totalTivKes;
                 return (
                   <div key={c}>
-                    <div className="flex items-baseline justify-between gap-3 text-sm">
-                      <span className="inline-flex items-center gap-2 text-ink"><span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: CLASS_COLORS[c] }} />{HOUSING_LABELS[c]}</span>
-                      <span className="tabular text-ink-2">{fmtInt(cls.count)} buildings · {fmtKes(cls.tivKes)}</span>
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-sm">
+                      <span className="inline-flex items-center gap-2 text-ink"><span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: CLASS_COLORS[c] }} />{HOUSING_LABELS[c]}</span>
+                      <span className="tabular ml-auto text-ink-2">{fmtInt(cls.count)} buildings · {fmtKes(cls.tivKes)}</span>
                     </div>
                     <div className="mt-1.5 grid grid-cols-[4.5rem_1fr_3rem] items-center gap-2 text-xs text-muted">
                       <span>Buildings</span>
@@ -76,16 +76,16 @@ export function DataStep({ session }: { session: Session }) {
 
       <Card title="Files in the upload" className="mt-4">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
+          <table className="w-full min-w-160 text-left text-sm">
             <thead className="text-xs text-muted">
               <tr><th className="pb-2 font-medium">File</th><th className="pb-2 font-medium">Role</th><th className="pb-2 font-medium">Source</th><th className="pb-2 font-medium">What it holds</th><th className="pb-2 text-right font-medium">Size</th></tr>
             </thead>
             <tbody className="divide-y divide-line">
               {report.files.map((f) => (
                 <tr key={f.path} className={f.used ? "text-ink" : "text-muted"}>
-                  <td className="py-2 pr-4 font-mono text-[12.5px]">{f.name}</td>
+                  <td className="py-2 pr-4 font-mono text-sm wrap-anywhere">{f.name}</td>
                   <td className="py-2 pr-4">{f.used ? KIND_LABEL[f.kind] : "Not used"}</td>
-                  <td className="py-2 pr-4">{f.used && f.provenance !== "none" ? <Tag kind={f.provenance} /> : "-"}</td>
+                  <td className="whitespace-nowrap py-2 pr-4">{f.used && f.provenance !== "none" ? <Tag kind={f.provenance} /> : "-"}</td>
                   <td className="py-2 pr-4 text-ink-2">{f.note}</td>
                   <td className="tabular py-2 text-right text-ink-2">{fmtBytes(f.size)}</td>
                 </tr>

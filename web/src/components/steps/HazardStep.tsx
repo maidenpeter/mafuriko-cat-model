@@ -50,7 +50,7 @@ export function HazardStep({ session, drainage }: { session: Session; drainage?:
           <CheckList checks={session.hazardChecks} />
         </Card>
 
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           {isScore && (
             <Note>
               <strong className="font-semibold text-ink">How to read the tiers.</strong> The five maps are cuts through one score: &ldquo;common&rdquo; keeps the top 40% of cells and &ldquo;extreme&rdquo; the top 5%. A rarer flood reaches more places, so the widest map stands for the rarest event. The return period given to each tier is an assumption, set in the next step.
@@ -126,7 +126,7 @@ function DrainageCard({ control, total }: { control: DrainageControl; total: num
             </p>
           )}
           <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[420px] text-[13px]">
+            <table className="w-full min-w-80 text-sm">
               <thead>
                 <tr className="border-b border-line text-left text-xs text-muted">
                   <th className="py-1.5 pr-3 font-medium">Reach from drains</th>
@@ -138,11 +138,11 @@ function DrainageCard({ control, total }: { control: DrainageControl; total: num
               <tbody>
                 {state.sensitivity.rows.map((x) => (
                   <tr key={x.reachM} className={`border-b border-line/60 ${x.reachM === reach ? "bg-surface-2 font-medium text-ink" : "text-ink-2"}`}>
-                    <td className="tabular py-1.5 pr-3">
+                    <td className="tabular whitespace-nowrap py-1.5 pr-3">
                       {fmtInt(x.reachM)} m{x.reachM === reach ? " (used)" : ""}
                     </td>
                     <td className="tabular py-1.5 pr-3 text-right">{x.hits}</td>
-                    <td className="tabular py-1.5 pr-3 text-right">+{fmtNum(x.addedAreaKm2, 0)} km²</td>
+                    <td className="tabular whitespace-nowrap py-1.5 pr-3 text-right">+{fmtNum(x.addedAreaKm2, 0)} km²</td>
                     <td className="py-1.5 text-xs">{x.newlyFlagged.join(", ") || "none"}</td>
                   </tr>
                 ))}

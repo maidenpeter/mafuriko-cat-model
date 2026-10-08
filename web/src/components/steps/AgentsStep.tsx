@@ -41,15 +41,15 @@ function RunMeta({ run }: { run: AgentRun }) {
       {run.prompt && (
         <>
           <div className="mt-2 font-semibold text-ink-2">Instructions</div>
-          <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap rounded-lg bg-surface-2 p-2.5 font-mono text-[11.5px] leading-relaxed text-ink-2">{run.prompt.system}</pre>
+          <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap wrap-break-word rounded-lg bg-surface-2 p-2.5 font-mono text-xs leading-relaxed text-ink-2">{run.prompt.system}</pre>
           <div className="mt-2 font-semibold text-ink-2">Input</div>
-          <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap rounded-lg bg-surface-2 p-2.5 font-mono text-[11.5px] leading-relaxed text-ink-2">{run.prompt.user}</pre>
+          <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap wrap-break-word rounded-lg bg-surface-2 p-2.5 font-mono text-xs leading-relaxed text-ink-2">{run.prompt.user}</pre>
         </>
       )}
       {run.raw && (
         <>
           <div className="mt-2 font-semibold text-ink-2">Reply, unedited</div>
-          <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap rounded-lg bg-surface-2 p-2.5 font-mono text-[11.5px] leading-relaxed text-ink-2">{run.raw}</pre>
+          <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap wrap-break-word rounded-lg bg-surface-2 p-2.5 font-mono text-xs leading-relaxed text-ink-2">{run.raw}</pre>
         </>
       )}
     </details>
@@ -58,11 +58,11 @@ function RunMeta({ run }: { run: AgentRun }) {
 
 function AgentCard({ run, children }: { run: AgentRun; children?: ReactNode }) {
   return (
-    <motion.section layout className="flex flex-col rounded-2xl border border-line bg-surface p-5">
+    <motion.section layout className="flex min-w-0 flex-col rounded-2xl border border-line bg-surface p-5">
       <header className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-[15px] font-semibold text-ink">{ROLE_LABELS[run.role]}</h3>
-          <p className="mt-0.5 text-[13px] leading-relaxed text-ink-2">{ROLE_BLURB[run.role]}</p>
+        <div className="min-w-0">
+          <h3 className="text-base font-semibold text-ink">{ROLE_LABELS[run.role]}</h3>
+          <p className="mt-0.5 text-sm leading-relaxed text-ink-2">{ROLE_BLURB[run.role]}</p>
         </div>
         <StatusIcon status={run.status === "done" ? "pass" : run.status === "error" ? "fail" : run.status === "running" ? "running" : "idle"} />
       </header>
@@ -102,18 +102,18 @@ function ProposalBody({ proposal, scored, session }: { proposal: Proposal; score
             const delta = value - ref.get(path)!;
             return (
               <li key={path} className="py-2">
-                <div className="flex items-baseline justify-between gap-3 text-[13px]">
+                <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-sm">
                   <span className="text-ink">{PARAM_LABELS[path]}</span>
-                  <span className="tabular whitespace-nowrap text-ink"><strong className="font-semibold">{fmtNum(value)}</strong> <span className="text-muted">({delta === 0 ? "same as reference" : `reference ${fmtNum(ref.get(path)!)}`})</span></span>
+                  <span className="tabular ml-auto whitespace-nowrap text-ink"><strong className="font-semibold">{fmtNum(value)}</strong> <span className="text-muted">({delta === 0 ? "same as reference" : `reference ${fmtNum(ref.get(path)!)}`})</span></span>
                 </div>
-                <div className="mt-0.5 text-[13px] leading-relaxed text-ink-2">{r?.reason} <span className="text-muted">· {BASIS_LABELS[(r?.basis ?? "judgement") as Basis]}</span></div>
+                <div className="mt-0.5 text-sm leading-relaxed text-ink-2">{r?.reason} <span className="text-muted">· {BASIS_LABELS[(r?.basis ?? "judgement") as Basis]}</span></div>
               </li>
             );
           })}
         </ul>
       </details>
       {scored && scored.adjustments.length > 0 && (
-        <p className="mt-2 text-[13px] text-ink-2"><strong className="font-semibold text-ink">Corrected by code:</strong> {scored.adjustments.map((a) => `${PARAM_LABELS[a.path] ?? a.path} ${fmtNum(a.from)} → ${fmtNum(a.to)}`).join("; ")}</p>
+        <p className="mt-2 text-sm text-ink-2"><strong className="font-semibold text-ink">Corrected by code:</strong> {scored.adjustments.map((a) => `${PARAM_LABELS[a.path] ?? a.path} ${fmtNum(a.from)} → ${fmtNum(a.to)}`).join("; ")}</p>
       )}
     </div>
   );
@@ -161,7 +161,7 @@ export function AgentsStep({ session, deliberation: d, busy, checks, status, has
       {missingKeys.length > 0 && !d && (
         <div className="mb-5">
           <Note tone="warn">
-            {missingKeys.length === 4 ? "No API keys are configured, so the agents cannot run." : `No API key for: ${missingKeys.map((r) => ROLE_LABELS[r]).join(", ")}.`} Add them to <code className="font-mono text-[12.5px]">web/.env.local</code> and restart the server. You can continue without the agents; the model then uses its reference assumptions and says so.
+            {missingKeys.length === 4 ? "No API keys are configured, so the agents cannot run." : `No API key for: ${missingKeys.map((r) => ROLE_LABELS[r]).join(", ")}.`} Add them to <code className="font-mono text-sm">web/.env.local</code> and restart the server. You can continue without the agents; the model then uses its reference assumptions and says so.
           </Note>
         </div>
       )}
@@ -179,12 +179,12 @@ export function AgentsStep({ session, deliberation: d, busy, checks, status, has
                   <ul className="mt-3 space-y-3">
                     {critic.challenges.map((c) => (
                       <li key={c.id} className="rounded-xl bg-surface-2 p-3">
-                        <div className="flex items-baseline justify-between gap-2 text-[13px]">
+                        <div className="flex flex-wrap items-baseline justify-between gap-x-2 text-sm">
                           <span className="font-semibold text-ink">{c.id} · {c.title}</span>
-                          <span className="whitespace-nowrap text-xs text-muted">{SEVERITY[c.severity]} severity</span>
+                          <span className="ml-auto whitespace-nowrap text-xs text-muted">{SEVERITY[c.severity]} severity</span>
                         </div>
-                        <p className="mt-1 text-[13px] leading-relaxed text-ink-2">{c.detail}</p>
-                        <p className="mt-1 text-[13px] leading-relaxed text-ink-2"><span className="text-muted">Recommends:</span> {c.recommendation}</p>
+                        <p className="mt-1 text-sm leading-relaxed text-ink-2">{c.detail}</p>
+                        <p className="mt-1 text-sm leading-relaxed text-ink-2"><span className="text-muted">Recommends:</span> {c.recommendation}</p>
                       </li>
                     ))}
                   </ul>
@@ -197,7 +197,7 @@ export function AgentsStep({ session, deliberation: d, busy, checks, status, has
           <AgentCard run={d.runs.chair}>
             {chair && (
               <div>
-                <p className="text-[15px] leading-relaxed text-ink">{chair.summary}</p>
+                <p className="text-base leading-relaxed text-ink">{chair.summary}</p>
                 {finalRarest && (
                   <div className="mt-4 grid gap-3 sm:grid-cols-3">
                     <div className="rounded-xl bg-surface-2 p-3"><div className="text-xs text-muted">1 in {refRarest.returnPeriod}, reference values</div><div className="tabular mt-0.5 text-lg font-semibold text-ink">{fmtKes(refRarest.lossKes, 2)}</div></div>
@@ -210,7 +210,7 @@ export function AgentsStep({ session, deliberation: d, busy, checks, status, has
                     {critic.challenges.map((c) => {
                       const a = chair.responses.find((r) => r.challengeId === c.id);
                       return (
-                        <li key={c.id} className="py-2.5 text-[13px] leading-relaxed">
+                        <li key={c.id} className="py-2.5 text-sm leading-relaxed">
                           <span className="font-semibold text-ink">{c.id} · {c.title}</span>
                           <span className="ml-2 text-xs font-semibold uppercase tracking-wide text-muted">{a ? VERDICT[a.verdict] : "Not answered"}</span>
                           {a && <div className="text-ink-2">{a.response}</div>}
@@ -226,7 +226,7 @@ export function AgentsStep({ session, deliberation: d, busy, checks, status, has
           {ledger.length > 0 && (
             <Card title="Assumption ledger" aside={<Tag kind="ai" />} className="mt-4">
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[720px] text-left text-[13px]">
+                <table className="w-full min-w-176 text-left text-sm">
                   <thead className="text-xs text-muted">
                     <tr>
                       <th className="pb-2 font-medium">Assumption</th>
@@ -266,7 +266,7 @@ export function AgentsStep({ session, deliberation: d, busy, checks, status, has
       {!d && (
         <Card title="Reference assumptions" aside={<Tag kind="assumption" />}>
           <p className="mb-3 text-sm leading-relaxed text-ink-2">These are in force until the agents have run. They are also the &ldquo;without AI&rdquo; side of the comparison in the results.</p>
-          <div className="grid gap-x-8 gap-y-1.5 text-[13px] sm:grid-cols-2">
+          <div className="grid gap-x-8 gap-y-1.5 text-sm sm:grid-cols-2">
             {flattenParams(REFERENCE_PARAMS).filter((p) => isScore || !unusedForDepth(p.path)).map((p) => (
               <div key={p.path} className="flex justify-between gap-3 border-b border-line py-1"><span className="text-ink-2">{PARAM_LABELS[p.path]}</span><span className="tabular font-medium text-ink">{fmtNum(p.value)}</span></div>
             ))}

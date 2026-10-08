@@ -35,7 +35,7 @@ side-by-side of the loss curve **without AI** (reference assumptions) and
 
 | Topic | Decision |
 |---|---|
-| Hazard layer | Used as given. No drainage improvement for now. |
+| Hazard layer | Used as given, plus an optional drainage layer from open map data (on by default, one switch turns it off). |
 | Insured values | Used as they are in the file. The file's values are 10× floor area × cost per m² (portfolio total KES 63.6bn; the data dictionary says 6.36bn). The app detects this and shows it on screen. |
 | Agents | Optimist, Cautious, Critic, running in parallel, plus a Chair that combines them. |
 | AI provider | Gemini, free keys, one key per agent. The model call sits behind one function so the provider can be swapped. |
@@ -65,6 +65,17 @@ Four stages, as in the brief. Everything in this section is code.
 - The five tiers are nested cuts of one score. `common` covers the most cells
   and so stands for the **rarest** event; `extreme` covers the fewest and
   stands for the most frequent.
+- **Drainage-driven flooding (optional, on by default).** The terrain map
+  cannot see water that ponds where drains are missing or blocked. A second,
+  simple layer comes from open map data: distance to mapped drains, ditches
+  and canals, and to informal settlement outlines. Stress is 1 on a drain or
+  inside a settlement and fades to 0 at 300 m. Ponding depth = stress × a
+  shallow depth per tier (0.15 m for `extreme` up to 0.6 m for `common`).
+  Each building takes the deeper of the terrain and ponding depths. This
+  lifts the hotspot match from 12 to 16 of 24 (Kibera, Kangemi, Lang'ata,
+  Parklands) while the flooded share of the grid grows by under one
+  percentage point. Reach and depths are assumptions; the hazard step shows
+  how the match moves for reaches from 100 m to 500 m.
 
 ### 3.2 Vulnerability
 
@@ -289,7 +300,9 @@ Each phase ends with something that works, so there is always a demo.
 ## 10. Honest limits to state in the demo
 
 - The hazard layer is a terrain-and-river proxy, not measured flooding. It
-  flags 12 of 24 known hotspots and cannot see drainage-driven flooding.
+  flags 12 of 24 known hotspots on its own and 16 with the drainage layer.
+- The drainage layer is a distance rule on mapped drains and settlements,
+  not a drainage model. Unmapped or blocked drains are invisible to it.
 - The score-to-depth conversion is an assumption, not a measurement.
 - The damage curve is a continental average adapted by judgement. No verified
   Kenya-specific curve exists.

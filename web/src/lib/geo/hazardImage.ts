@@ -30,7 +30,7 @@ export const rgbCss = ([r, g, b]: RGB, a = 1) => (a === 1 ? `rgb(${r}, ${g}, ${b
  * Paints one hazard map as a transparent PNG: dry cells clear, wet cells coloured by the
  * depth class the model would use there. Returns an object URL for a map image source.
  */
-export async function hazardImageUrl(raster: Raster, kind: HazardKind, toDepth: (value: number) => number, ramp: RGB[], alpha = 210): Promise<string> {
+export async function hazardImageUrl(raster: Raster, kind: HazardKind, toDepth: (value: number, cell: number) => number, ramp: RGB[], alpha = 210): Promise<string> {
   const { width, height, data } = raster;
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -40,9 +40,9 @@ export async function hazardImageUrl(raster: Raster, kind: HazardKind, toDepth: 
   const image = ctx.createImageData(width, height);
   const px = image.data;
   for (let i = 0; i < data.length; i++) {
-    const value = cleanValue(data[i], raster, kind);
-    if (!(value > 0)) continue;
-    const c = ramp[Math.min(ramp.length - 1, depthClass(toDepth(value)))];
+    const depth = toDepth(cleanValue(data[i], raster, kind), i);
+    if (!(depth > 0)) continue;
+    const c = ramp[Math.min(ramp.length - 1, depthClass(depth))];
     const o = i * 4;
     px[o] = c[0];
     px[o + 1] = c[1];
@@ -63,4 +63,28 @@ export function rasterCorners([minLon, minLat, maxLon, maxLat]: [number, number,
     [maxLon, minLat],
     [minLon, minLat],
   ];
+}
+
+/** The drainage zone as a transparent PNG: colour strength follows drainage stress. */
+export async function stressImageUrl(grid: { width: number; height: number; stress: Float32Array }, rgb: RGB, maxAlpha = 150): Promise<string> {
+  const canvas = document.createElement("canvas");
+  canvas.width = grid.width;
+  canvas.height = grid.height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas is not available");
+  const image = ctx.createImageData(grid.width, grid.height);
+  const px = image.data;
+  for (let i = 0; i < grid.stress.length; i++) {
+    const s = grid.stress[i];
+    if (!(s > 0)) continue;
+    const o = i * 4;
+    px[o] = rgb[0];
+    px[o + 1] = rgb[1];
+    px[o + 2] = rgb[2];
+    px[o + 3] = Math.round(40 + s * (maxAlpha - 40));
+  }
+  ctx.putImageData(image, 0, 0);
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!blob) throw new Error("Could not draw the drainage zone");
+  return URL.createObjectURL(blob);
 }

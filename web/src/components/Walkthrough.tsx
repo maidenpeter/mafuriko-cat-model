@@ -7,11 +7,13 @@ import { buildProfile } from "@/lib/agents/profile";
 import { ROLE_LABELS, ROLES, type Role } from "@/lib/agents/schema";
 import { dataChecks, financialChecks, hazardChecks, summarise, vulnerabilityChecks } from "@/lib/checks";
 import { fmtInt, fmtKes } from "@/lib/format";
+import { prepareDrainage, withDrainage, type DrainageState } from "@/lib/geo/drainageView";
 import { detectDatasets, loadDataset, type DatasetCandidate, type FileInfo } from "@/lib/ingest";
 import { filesFromUpload } from "@/lib/ingest/zip";
 import { hotspotHits } from "@/lib/model/hotspots";
 import { REFERENCE_PARAMS } from "@/lib/model/params";
 import { runModel } from "@/lib/model/pipeline";
+import type { Dataset } from "@/lib/model/types";
 import { loadRun, saveRun, type Active, type LogEntry, type Session } from "@/lib/session";
 import { AgentsStep } from "./steps/AgentsStep";
 import { AuditStep } from "./steps/AuditStep";
@@ -39,6 +41,9 @@ export function Walkthrough() {
   const [agentsBusy, setAgentsBusy] = useState(false);
   const [replayed, setReplayed] = useState(false);
   const [useAi, setUseAi] = useState(true);
+  // Drainage-driven flooding: worked out once per dataset in the background, on by default once ready.
+  const [drainage, setDrainage] = useState<{ dataset: Dataset; state: DrainageState } | null>(null);
+  const [useDrainage, setUseDrainage] = useState(true);
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [hasSaved, setHasSaved] = useState(false);
   const [log, setLog] = useState<LogEntry[]>([]);
@@ -88,6 +93,15 @@ export function Walkthrough() {
         };
         note("Read the data", `${fmtInt(dataset.buildings.length)} buildings, ${dataset.rasters.length} hazard maps, total insured value ${fmtKes(reference.totalTivKes)}; ${Math.round(performance.now() - started)} ms`);
         setSession(next);
+        setDrainage(null);
+        prepareDrainage(dataset)
+          .then((state) => {
+            if (!state) return;
+            setDrainage({ dataset, state });
+            const row = state.sensitivity.rows.find((x) => x.reachM === 300);
+            if (row) note("Hazard", `Drainage zone ready: ${row.hits} of ${dataset.hotspots.length} named flood areas flagged (terrain alone ${state.sensitivity.baseHits}), +${row.addedAreaKm2.toFixed(0)} km² flooded`);
+          })
+          .catch(() => setDrainage(null));
         setDeliberation(null);
         setReplayed(false);
         setHasSaved(loadRun(next) !== null);
@@ -188,19 +202,37 @@ export function Walkthrough() {
     note("Agents", `${origin}: agent replies from ${saved.startedAt}; engine re-run now`);
   };
 
-  const active = useMemo<Active | null>(() => {
+  // What every step shows: the loaded dataset, with drainage-driven flooding added when it is switched on.
+  const view = useMemo<Session | null>(() => {
     if (!session) return null;
-    if (useAi && deliberation?.final) return { source: "ai", params: deliberation.final.params, result: deliberation.final.result };
-    return { source: "reference", params: REFERENCE_PARAMS, result: session.reference };
-  }, [session, deliberation, useAi]);
+    if (!useDrainage || !drainage || drainage.dataset !== session.dataset) return session;
+    const dataset = withDrainage(session.dataset, drainage.state);
+    return { ...session, dataset, reference: runModel(dataset, REFERENCE_PARAMS), hits: hotspotHits(dataset), hazardChecks: hazardChecks(dataset, session.report) };
+  }, [session, drainage, useDrainage]);
+  const drainageOn = !!view && view !== session;
+
+  // The agents decide on the terrain-only data; their assumptions are re-run on whichever view is shown.
+  const viewDeliberation = useMemo<Deliberation | null>(() => (deliberation && view && drainageOn ? replay(view.dataset, deliberation) : deliberation), [deliberation, view, drainageOn]);
+
+  const active = useMemo<Active | null>(() => {
+    if (!view) return null;
+    if (useAi && viewDeliberation?.final) return { source: "ai", params: viewDeliberation.final.params, result: viewDeliberation.final.result };
+    return { source: "reference", params: REFERENCE_PARAMS, result: view.reference };
+  }, [view, viewDeliberation, useAi]);
+
+  // The same assumptions on terrain flooding alone, for the "what drainage adds" comparison.
+  const terrainResult = useMemo(() => {
+    if (!session || !active || !drainageOn) return null;
+    return active.source === "ai" && deliberation?.final ? deliberation.final.result : session.reference;
+  }, [session, active, drainageOn, deliberation]);
 
   const checks = useMemo(() => {
-    if (!session || !active) return { ai: [], vulnerability: [], financial: [], all: [] };
-    const ai = deliberation && !agentsBusy ? aiChecks(session.dataset, deliberation) : [];
+    if (!view || !active) return { ai: [], vulnerability: [], financial: [], all: [] };
+    const ai = viewDeliberation && !agentsBusy ? aiChecks(view.dataset, viewDeliberation) : [];
     const vulnerability = vulnerabilityChecks(active.params);
-    const financial = financialChecks(session.dataset, active.result);
-    return { ai, vulnerability, financial, all: [...session.dataChecks, ...session.hazardChecks, ...ai, ...vulnerability, ...financial] };
-  }, [session, active, deliberation, agentsBusy]);
+    const financial = financialChecks(view.dataset, active.result);
+    return { ai, vulnerability, financial, all: [...view.dataChecks, ...view.hazardChecks, ...ai, ...vulnerability, ...financial] };
+  }, [view, active, viewDeliberation, agentsBusy]);
 
   const reset = () => {
     setStep(0);
@@ -208,6 +240,7 @@ export function Walkthrough() {
     setSession(null);
     setUpload(null);
     setDeliberation(null);
+    setDrainage(null);
     setError(null);
     setLog([]);
   };
@@ -237,6 +270,9 @@ export function Walkthrough() {
               <span className="text-sm text-white/80">{session.dataset.name}</span>
               <Tag kind="synthetic">Synthetic portfolio</Tag>
               <Tag kind={isScore ? "proxy" : "real"}>{isScore ? "Proxy hazard, not measured" : "Published depth maps"}</Tag>
+              {drainage && drainage.dataset === session.dataset && (
+                <Segmented label="Hazard" value={useDrainage ? "on" : "off"} onChange={(v) => setUseDrainage(v === "on")} options={[{ value: "off", label: "Terrain only" }, { value: "on", label: "+ Drainage" }]} />
+              )}
               {deliberation?.final && (
                 <Segmented label="Assumptions" value={useAi ? "ai" : "reference"} onChange={(v) => setUseAi(v === "ai")} options={[{ value: "ai", label: "Agreed by agents" }, { value: "reference", label: "Without AI" }]} />
               )}
@@ -244,7 +280,7 @@ export function Walkthrough() {
           )}
         </div>
         <div className="h-[3px] bg-brand" />
-        {session && active && <KeyFigures active={active} />}
+        {view && active && <KeyFigures active={active} hazard={drainageOn ? "Terrain + drainage" : "Terrain only"} />}
       </header>
 
       <div className="flex flex-1 flex-col gap-6 py-6 lg:flex-row lg:gap-10">
@@ -284,14 +320,19 @@ export function Walkthrough() {
               {step === 0 && (
                 <UploadStep busy={busy} error={error} candidates={upload?.candidates ?? null} onFiles={handleFiles} onSample={handleSample} onPick={(c) => upload && load(c, upload.name, upload.files)} />
               )}
-              {session && active && (
+              {session && view && active && (
                 <>
-                  {step === 1 && <DataStep session={session} />}
-                  {step === 2 && <HazardStep session={session} />}
+                  {step === 1 && <DataStep session={view} />}
+                  {step === 2 && (
+                    <HazardStep
+                      session={view}
+                      drainage={session.dataset.hazardKind === "score" ? { state: drainage && drainage.dataset === session.dataset ? drainage.state : null, enabled: useDrainage, onToggle: setUseDrainage } : undefined}
+                    />
+                  )}
                   {step === 3 && (
                     <AgentsStep
-                      session={session}
-                      deliberation={deliberation}
+                      session={view}
+                      deliberation={viewDeliberation}
                       busy={agentsBusy}
                       checks={checks.ai}
                       status={status}
@@ -308,11 +349,11 @@ export function Walkthrough() {
                       }}
                     />
                   )}
-                  {step === 4 && <VulnerabilityStep session={session} active={active} checks={checks.vulnerability} />}
-                  {step === 5 && <LossStep session={session} active={active} checks={checks.financial} />}
-                  {step === 6 && <MapStep session={session} active={active} />}
-                  {step === 7 && <ResultsStep session={session} active={active} deliberation={deliberation} />}
-                  {step === 8 && <AuditStep session={session} active={active} deliberation={deliberation} checks={checks.all} log={log} />}
+                  {step === 4 && <VulnerabilityStep session={view} active={active} checks={checks.vulnerability} />}
+                  {step === 5 && <LossStep session={view} active={active} checks={checks.financial} />}
+                  {step === 6 && <MapStep session={view} active={active} />}
+                  {step === 7 && <ResultsStep session={view} active={active} deliberation={viewDeliberation} engineSession={session} terrainResult={terrainResult} />}
+                  {step === 8 && <AuditStep session={view} active={active} deliberation={viewDeliberation} checks={checks.all} log={log} />}
                 </>
               )}
             </motion.div>
@@ -343,7 +384,7 @@ export function Walkthrough() {
 }
 
 /** The figures an underwriter looks for first, kept in view on every step. */
-function KeyFigures({ active }: { active: Active }) {
+function KeyFigures({ active, hazard }: { active: Active; hazard: string }) {
   const r = active.result;
   const at = (rp: number) => r.standardLosses.find((l) => l.returnPeriod === rp)?.lossKes ?? null;
   const loss100 = at(100);
@@ -353,6 +394,7 @@ function KeyFigures({ active }: { active: Active }) {
     { label: "1 in 100 loss", value: loss100 != null ? fmtKes(loss100, 2) : "not modelled", strong: true },
     { label: "1 in 250 loss", value: loss250 != null ? fmtKes(loss250, 2) : "not modelled" },
     { label: "Average annual loss", value: fmtKes(r.aalKes, 2) },
+    { label: "Hazard", value: hazard },
     { label: "Assumptions", value: active.source === "ai" ? "Agreed by agents" : "Reference, no AI" },
   ];
   return (

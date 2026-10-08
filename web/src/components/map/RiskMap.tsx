@@ -5,13 +5,13 @@ import type { ExpressionSpecification, FilterSpecification, GeoJSONSource, MapMo
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
 import { fmtInt, fmtKes, fmtNum, fmtPct } from "@/lib/format";
-import { cssColor, hazardImageUrl, rasterCorners, rgbCss, type RGB } from "@/lib/geo/hazardImage";
+import { cssColor, hazardImageUrl, rasterCorners, rgbCss, stressImageUrl, type RGB } from "@/lib/geo/hazardImage";
 import { GEO_ATTRIBUTION, type GeoLayers } from "@/lib/geo/layers";
 import { geometryBBox, type AreaRow, type BBox } from "@/lib/geo/spatial";
 import { hazardToDepth } from "@/lib/model/pipeline";
 import { HOUSING_LABELS, type HousingClass } from "@/lib/model/types";
 import type { Active, Session } from "@/lib/session";
-import { FACILITY_COLORS, SETTLEMENT_COLOR, WARD_COLOR, WATER_COLORS, type BasemapStatus, type LayerKey, type LayerState, type Selection, type WardMetric } from "./mapTheme";
+import { DRAINAGE_RGB, FACILITY_COLORS, SETTLEMENT_COLOR, WARD_COLOR, WATER_COLORS, type BasemapStatus, type LayerKey, type LayerState, type Selection, type WardMetric } from "./mapTheme";
 
 setWorkerUrl(new URL("maplibre-gl/dist/maplibre-gl-worker.mjs", import.meta.url).toString());
 
@@ -156,7 +156,11 @@ export function RiskMap(props: Props) {
         if (map.getLayer(id)) map.removeLayer(id);
         if (map.getSource(id)) map.removeSource(id);
         if (!raster) continue;
-        const url = await hazardImageUrl(raster, dataset.hazardKind, (v) => hazardToDepth(v, dataset, r.params, s.tierSlope), ramp);
+        // With drainage on, a cell shows whichever is deeper: terrain flooding or drainage ponding.
+        const d = dataset.drainage;
+        const src = dataset.scenarios.findIndex((x) => x.id === s.id);
+        const ponding = d && d.grid.width === raster.width && d.grid.height === raster.height ? (d.depthM[src] ?? 0) : 0;
+        const url = await hazardImageUrl(raster, dataset.hazardKind, (v, cell) => Math.max(hazardToDepth(v, dataset, r.params, s.tierSlope), ponding > 0 ? d!.grid.stress[cell] * ponding : 0), ramp);
         if (cancelled) {
           URL.revokeObjectURL(url);
           return;
@@ -185,6 +189,32 @@ export function RiskMap(props: Props) {
       if (map.getLayer(id)) map.setPaintProperty(id, "raster-opacity", layers.hazard && i === k ? 0.85 : 0);
     });
   }, [ready, hazardReady, k, layers.hazard, r.scenarios]);
+
+  // ---- drainage zone: where ponding can occur, shaded by drainage stress ---------------------
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return;
+    const id = "drainage-zone";
+    if (map.getLayer(id)) map.removeLayer(id);
+    if (map.getSource(id)) map.removeSource(id);
+    const d = dataset.drainage;
+    if (!d) return;
+    let cancelled = false;
+    let url: string | null = null;
+    (async () => {
+      url = await stressImageUrl(d.grid, DRAINAGE_RGB);
+      if (cancelled) return;
+      map.addSource(id, { type: "image", url, coordinates: rasterCorners(d.grid.bbox) });
+      map.addLayer(
+        { id, type: "raster", source: id, layout: { visibility: latest.current.layers.drainage ? "visible" : "none" }, paint: { "raster-opacity": 0.8, "raster-fade-duration": 0, "raster-resampling": "nearest" } },
+        map.getLayer("wards-line") ? "wards-line" : firstSymbolId(map),
+      );
+    })();
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [ready, dataset]);
 
   // ---- portfolio points and 3D loss columns ----------------------------------------------
   useEffect(() => {
@@ -234,6 +264,14 @@ export function RiskMap(props: Props) {
     (map.getSource("wards") as GeoJSONSource | undefined)?.setData(fc(features) as unknown as SetDataArg);
   }, [ready, geo.wards, wardRows, wardMetric]);
 
+  // ---- hotspots: hit or missed under the hazard view in force --------------------------------
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return;
+    const features = session.hits.map((h) => ({ type: "Feature" as const, properties: { name: h.name, hit: h.hit ? 1 : 0 }, geometry: { type: "Point", coordinates: [h.lon, h.lat] } }));
+    (map.getSource("hotspots") as GeoJSONSource | undefined)?.setData(fc(features) as unknown as SetDataArg);
+  }, [ready, session.hits]);
+
   // ---- facilities: flagged when the flood reaches them -------------------------------------
   useEffect(() => {
     const map = mapRef.current;
@@ -276,6 +314,7 @@ export function RiskMap(props: Props) {
     const map = mapRef.current;
     if (!ready || !map) return;
     const groups: Record<Exclude<LayerKey, "hazard">, string[]> = {
+      drainage: ["drainage-zone"],
       buildings: ["buildings-selected"],
       wards: ["wards-fill", "wards-line", "wards-hover", "wards-selected", "wards-label", "subcounties-line"],
       waterways: ["waterways-line"],
@@ -494,7 +533,12 @@ function bindInteractions(map: MapLibre, latest: { current: Props }, setTip: (t:
       setTip({
         ...place(e),
         title: `${b.locId} · ${HOUSING_LABELS[b.housingClass as HousingClass]}`,
-        lines: [`Insured ${fmtKes(b.tivKes, 2)}`, t.depthM > 0 ? `${event}: ${fmtNum(t.depthM)} m, ${fmtPct(t.damageRatio, 1)} damage` : `${event}: dry`, `Loss ${fmtKes(t.lossKes, 2)}`, "Click to trace the loss"],
+        lines: [
+          `Insured ${fmtKes(b.tivKes, 2)}`,
+          t.depthM > 0 ? `${event}: ${fmtNum(t.depthM)} m${t.drainageM > 0 && t.drainageM >= t.depthM ? " (drainage ponding)" : ""}, ${fmtPct(t.damageRatio, 1)} damage` : `${event}: dry`,
+          `Loss ${fmtKes(t.lossKes, 2)}`,
+          "Click to trace the loss",
+        ],
       });
     } else if (hit.layer.id === "wards-fill") {
       const row = p.wardRows[Number(props.i)];
@@ -510,7 +554,7 @@ function bindInteractions(map: MapLibre, latest: { current: Props }, setTip: (t:
       const d = p.facilityDepth[i]?.[p.k] ?? 0;
       setTip({ ...place(e), title: f?.properties.name ?? "Unnamed facility", lines: [String(props.kind).replace("_", " "), d > 0 ? `${event}: ${fmtNum(d)} m of water` : `${event}: dry`] });
     } else if (hit.layer.id === "hotspots") {
-      setTip({ ...place(e), title: String(props.name), lines: ["County-named flood area", Number(props.hit) === 1 ? "Flagged by the hazard proxy" : "Missed by the proxy (drainage-driven flooding)"] });
+      setTip({ ...place(e), title: String(props.name), lines: ["County-named flood area", Number(props.hit) === 1 ? (p.session.dataset.drainage ? "Flagged by terrain or the drainage zone" : "Flagged by the hazard proxy") : "Missed: drainage-driven flooding the open maps cannot see"] });
     } else if (hit.layer.id === "settlements-fill") {
       setTip({ ...place(e), title: (props.name as string) || "Informal settlement", lines: ["Informal settlement (OpenStreetMap)"] });
     }

@@ -14,7 +14,21 @@ import { CLASS_COLORS } from "./DataStep";
 const curve = (r: ModelResult): Point[] => r.scenarios.map((s) => ({ x: s.returnPeriod, y: s.lossKes }));
 const signed = (fraction: number) => `${fraction >= 0 ? "+" : ""}${(fraction * 100).toFixed(0)}%`;
 
-export function ResultsStep({ session, active, deliberation }: { session: Session; active: Active; deliberation: Deliberation | null }) {
+export function ResultsStep({
+  session,
+  active,
+  deliberation,
+  engineSession,
+  terrainResult,
+}: {
+  session: Session;
+  active: Active;
+  deliberation: Deliberation | null;
+  /** The terrain-only session, which the Oasis check was run against. */
+  engineSession?: Session;
+  /** The same assumptions on terrain flooding alone, shown when drainage is switched on. */
+  terrainResult?: ModelResult | null;
+}) {
   const { dataset, reference } = session;
   const r = active.result;
   const isScore = dataset.hazardKind === "score";
@@ -142,6 +156,51 @@ export function ResultsStep({ session, active, deliberation }: { session: Sessio
         <div className="mt-4"><Note>These results use the reference assumptions only. Run the agents in step 3 to see how their agreed assumptions change the curve.</Note></div>
       )}
 
+      {terrainResult && dataset.drainage && (
+        <Card title="What drainage-driven flooding adds" className="mt-4" aside={<Tag kind="assumption">Drainage ponding assumed</Tag>}>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[520px] text-sm">
+              <thead className="text-xs text-muted">
+                <tr>
+                  <th className="pb-2 text-left font-medium">Event</th>
+                  <th className="pb-2 text-right font-medium">Buildings flooded</th>
+                  <th className="pb-2 text-right font-medium">Terrain only</th>
+                  <th className="pb-2 text-right font-medium">Terrain + drainage</th>
+                  <th className="pb-2 text-right font-medium">Added</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {r.scenarios.map((sc) => {
+                  const base = terrainResult.scenarios.find((x) => x.id === sc.id);
+                  if (!base) return null;
+                  return (
+                    <tr key={sc.id}>
+                      <td className="tabular py-2 text-ink">1 in {sc.returnPeriod}</td>
+                      <td className="tabular py-2 text-right text-ink-2">
+                        {fmtInt(base.affected)} to {fmtInt(sc.affected)}
+                      </td>
+                      <td className="tabular py-2 text-right text-ink-2">{fmtKes(base.lossKes, 2)}</td>
+                      <td className="tabular py-2 text-right font-semibold text-ink">{fmtKes(sc.lossKes, 2)}</td>
+                      <td className="tabular py-2 text-right text-ink-2">{base.lossKes > 0 ? signed(sc.lossKes / base.lossKes - 1) : "new"}</td>
+                    </tr>
+                  );
+                })}
+                <tr>
+                  <td className="py-2 text-ink">Average annual loss</td>
+                  <td />
+                  <td className="tabular py-2 text-right text-ink-2">{fmtKes(terrainResult.aalKes, 2)}</td>
+                  <td className="tabular py-2 text-right font-semibold text-ink">{fmtKes(r.aalKes, 2)}</td>
+                  <td className="tabular py-2 text-right text-ink-2">{signed(r.aalKes / (terrainResult.aalKes || 1) - 1)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-3 text-xs leading-relaxed text-muted">
+            Ponding is shallow, so it adds most where it reaches buildings the terrain map leaves dry, and adds proportionally more to frequent events. The added loss rests on open drain and settlement maps and on our assumed ponding depths; it is a first estimate of a peril the proxy leaves out, not a measurement.
+          </p>
+        </Card>
+      )}
+
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
         <h3 className="text-[15px] font-semibold text-ink">Where the loss comes from</h3>
         <Segmented label="Scenario" value={String(k)} onChange={(v) => setScenario(Number(v))} options={r.scenarios.map((sc, i) => ({ value: String(i), label: `1 in ${sc.returnPeriod}` }))} />
@@ -197,7 +256,7 @@ export function ResultsStep({ session, active, deliberation }: { session: Sessio
         </Card>
       </div>
 
-      <OasisCheck session={session} />
+      <OasisCheck session={engineSession ?? session} />
     </div>
   );
 }

@@ -8,7 +8,7 @@ import { loadGeo, type FacilityKind, type GeoLayers } from "@/lib/geo/layers";
 import { assignPoints, facilityDepths, geometryBBox, wardAccumulation, type AreaRow, type BBox } from "@/lib/geo/spatial";
 import { HOUSING_CLASSES, HOUSING_LABELS } from "@/lib/model/types";
 import type { Active, Session } from "@/lib/session";
-import { FACILITY_COLORS, SETTLEMENT_COLOR, WARD_COLOR, WARD_METRICS, WATER_COLORS, type BasemapStatus, type LayerKey, type LayerState, type Selection, type WardMetric } from "../map/mapTheme";
+import { DRAINAGE_COLOR, FACILITY_COLORS, SETTLEMENT_COLOR, WARD_COLOR, WARD_METRICS, WATER_COLORS, type BasemapStatus, type LayerKey, type LayerState, type Selection, type WardMetric } from "../map/mapTheme";
 import { Button, Card, Note, Segmented, StepHeader, Tag } from "../ui";
 import { CLASS_COLORS } from "./DataStep";
 
@@ -56,7 +56,7 @@ export function MapStep({ session, active }: { session: Session; active: Active 
   const [geo, setGeo] = useState<GeoLayers | null>(null);
   const [k, setK] = useState(initialK === -1 ? last : initialK);
   const [playing, setPlaying] = useState(false);
-  const [layers, setLayers] = useState<LayerState>({ hazard: true, buildings: true, wards: true, waterways: true, settlements: true, facilities: true, hotspots: true });
+  const [layers, setLayers] = useState<LayerState>({ hazard: true, drainage: true, buildings: true, wards: true, waterways: true, settlements: true, facilities: true, hotspots: true });
   const [threeD, setThreeD] = useState(false);
   const [wardMetric, setWardMetric] = useState<WardMetric>("loss");
   const [selection, setSelection] = useState<Selection | null>(null);
@@ -112,7 +112,8 @@ export function MapStep({ session, active }: { session: Session; active: Active 
   };
 
   const setLayer = (key: LayerKey, v: boolean) => setLayers((l) => ({ ...l, [key]: v }));
-  const tierNote = isScore ? `the "${s.id}" map, assumed to be a 1 in ${s.returnPeriod} event` : `the published 1 in ${s.returnPeriod} depth map`;
+  const drainage = dataset.drainage;
+  const tierNote = `${isScore ? `the "${s.id}" map, assumed to be a 1 in ${s.returnPeriod} event` : `the published 1 in ${s.returnPeriod} depth map`}${drainage ? `, plus drainage ponding up to ${fmtNum(drainage.depthM[dataset.scenarios.findIndex((x) => x.id === s.id)] ?? 0)} m near drains and in informal settlements` : ""}`;
 
   return (
     <div>
@@ -253,6 +254,12 @@ export function MapStep({ session, active }: { session: Session; active: Active 
                   ))}
                 </span>
               </Toggle>
+              {drainage && (
+                <Toggle id="lyr-drainage" checked={layers.drainage} onChange={(v) => setLayer("drainage", v)}>
+                  <span className="inline-flex items-center gap-1.5"><Swatch shape="square" color={DRAINAGE_COLOR} /> Drainage zone</span>
+                  <span className="mt-0.5 block text-[11px] text-ink-2">Within {fmtInt(drainage.reachM)} m of a mapped drain or inside an informal settlement; darker means closer.</span>
+                </Toggle>
+              )}
               <Toggle id="lyr-buildings" checked={layers.buildings} onChange={(v) => setLayer("buildings", v)}>
                 Insured buildings <span className="text-xs text-muted">(synthetic)</span>
                 <span className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-ink-2">
@@ -358,7 +365,7 @@ export function MapStep({ session, active }: { session: Session; active: Active 
       </Card>
 
       <Note>
-        <strong className="font-semibold text-ink">What is real here.</strong> Ward boundaries are the 85 Nairobi wards (Omare &amp; Omare 2017, CC BY 4.0). Rivers, drains, informal settlements, schools and health facilities are from OpenStreetMap (data from February and May 2025); informal settlement outlines are incomplete there, Kibera for instance is mapped only as a point. The flood layer is the hazard proxy converted to depth with the assumptions in force. The buildings are synthetic and placed at random, so ward totals show how accumulation would be read, not a real concentration of risk.
+        <strong className="font-semibold text-ink">What is real here.</strong> Ward boundaries are the 85 Nairobi wards (Omare &amp; Omare 2017, CC BY 4.0). Rivers, drains, informal settlements, schools and health facilities are from OpenStreetMap (data from February and May 2025); informal settlement outlines are incomplete there, Kibera for instance is mapped only as a point. The flood layer is the hazard proxy converted to depth with the assumptions in force{dataset.drainage ? ", plus drainage ponding near OpenStreetMap drains and inside informal settlements, which is our own assumption" : ""}. The buildings are synthetic and placed at random, so ward totals show how accumulation would be read, not a real concentration of risk.
       </Note>
     </div>
   );
@@ -401,7 +408,8 @@ function SelectionCard({
     const rows: [string, string][] = [
       ["Insured value", fmtKes(b.tivKes, 2)],
       [isScore ? "Hazard score" : "Flood depth", isScore ? fmtNum(t.hazard, 3) : `${fmtNum(t.hazard)} m`],
-      ...(isScore ? ([["Depth", `${fmtNum(t.hazard, 3)} × ${fmtNum(s.tierSlope, 3)} × ${fmtNum(r.params.depthScaleM)} m = ${fmtNum(t.depthM)} m`]] as [string, string][]) : []),
+      ...(isScore ? ([["Terrain depth", `${fmtNum(t.hazard, 3)} × ${fmtNum(s.tierSlope, 3)} × ${fmtNum(r.params.depthScaleM)} m = ${fmtNum(t.hazard > 0 ? t.hazard * s.tierSlope * r.params.depthScaleM : 0)} m`]] as [string, string][]) : []),
+      ...(t.drainageM > 0 ? ([["Drainage ponding", `${fmtNum(t.drainageM)} m${t.drainageM >= t.depthM ? ", deeper than the terrain depth, so used" : ""}`]] as [string, string][]) : []),
       ["Depth on the curve", `${fmtNum(t.effectiveDepthM)} m (fragility ${fmtNum(r.params.fragility[b.housingClass])})`],
       ["Damage", `${fmtPct(t.damageRatio, 1)}${t.capped ? " (capped)" : ""}`],
       ["Loss", fmtKes(t.lossKes, 2)],

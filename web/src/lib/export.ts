@@ -2,6 +2,7 @@ import { buildLedger, type Deliberation } from "./agents/orchestrate";
 import { ROLE_LABELS, ROLES } from "./agents/schema";
 import type { Check } from "./checks";
 import { fmtInt, fmtKes, fmtNum, fmtPct } from "./format";
+import { hotspotHits } from "./model/hotspots";
 import { REFERENCE_PARAMS } from "./model/params";
 import { HOUSING_CLASSES, HOUSING_LABELS, SCORE_TIERS, type ModelParams } from "./model/types";
 import { JRC_AFRICA_RESIDENTIAL } from "./model/vulnerability";
@@ -74,6 +75,14 @@ export function buildNote(session: Session, active: Active, deliberation: Delibe
   lines.push(`## 2. Assumptions`, ``);
   lines.push(`Assumptions in force: **${active.source === "ai" ? "agreed by the agent panel" : "reference values (no AI)"}**.`, ``);
   if (isScore) lines.push(`- Depth (m) = score × tier slope × ${fmtNum(p.depthScaleM)}. Each tier map is rescaled to run 0 to 1, so the tier slope (${r.scenarios.map((s) => `${s.id} ${fmtNum(s.tierSlope, 3)}`).join(", ")}) puts every tier back on the widest tier's scale and depth grows as the event gets rarer. The slopes are fitted from the maps. The score is a susceptibility proxy, so this conversion is assumed.`);
+  if (dataset.drainage) {
+    const dr = dataset.drainage;
+    const withD = hotspotHits(dataset);
+    const without = hotspotHits({ ...dataset, drainage: undefined });
+    lines.push(
+      `- Drainage-driven flooding: ponding of ${dataset.scenarios.map((sc, i) => `${fmtNum(dr.depthM[i])} m (${sc.id})`).join(", ")} within ${fmtNum(dr.reachM, 0)} m of OpenStreetMap drains, ditches and canals and inside informal settlements, fading to nothing at the edge of that reach. Each building takes the deeper of terrain depth and ponding. With it, ${withD.filter((h) => h.hit).length} of ${withD.length} county-named flood areas are flagged; terrain alone flags ${without.filter((h) => h.hit).length}. The reach and depths are assumptions.`,
+    );
+  }
   lines.push(`- Damage ratio = min( JRC curve( depth × fragility ), cap ), per construction class:`);
   for (const c of HOUSING_CLASSES) lines.push(`  - ${HOUSING_LABELS[c]}: fragility ${fmtNum(p.fragility[c])}, cap ${fmtNum(p.cap[c])}`);
   lines.push(`- Return periods: ${r.scenarios.map((s) => `${s.id} = ${s.returnPeriod} years`).join(", ")}${isScore ? " (assumed)" : " (from the data)"}.`);

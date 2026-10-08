@@ -1,17 +1,20 @@
 import { HOUSING_CLASSES } from "../model/types";
 import { describeReading, inKenya, parseCoordinates } from "./coords";
-import { missingValue as missing } from "./extraction";
+import { LOSS_YEAR_RANGE, missingValue as missing, MOST_LOSSES } from "./extraction";
 import { DISTANCE_SCALES, MONEY_SCALES } from "./shared";
 import {
   DEDUCTIBLE_BASES,
   FLOOD_COVERS,
   OCCUPANCIES,
+  OFFER_LOSS_KEYS,
   OFFER_ROW_KEYS,
   OFFER_TERM_KEYS,
   USABLE_STATUSES,
   type ConfirmValue,
   type CoordinateReading,
+  type CoreTermKey,
   type EditValue,
+  type FloodLoss,
   type NumberInQuote,
   type OfferExtraction,
   type OfferNote,
@@ -183,6 +186,19 @@ function check<T>(q: Quoted<T>, tidiedDocument: string, named = false): Quoted<T
   return verified(q);
 }
 
+/**
+ * A loss's year, checked as a number and then as a year: "KES 2,024" holds the number 2024,
+ * but a year is written as four digits standing on their own, so that quote does not hold it.
+ */
+function checkYear(q: Quoted<number>, tidiedDocument: string): Quoted<number> {
+  const checked = check(q, tidiedDocument);
+  if (checked.status !== "verified" || checked.value === null) return checked;
+  const year = checked.value;
+  if (!Number.isInteger(year) || year < LOSS_YEAR_RANGE.min || year > LOSS_YEAR_RANGE.max) return unverified(checked, `${plain(year)} is not a year.`);
+  if (!new RegExp(`(?:^|[^\\d.,])${year}(?![\\d]|[.,]\\d)`).test(checked.quote.normalize("NFKC"))) return unverified(checked, `The year ${year} is not written in the quoted sentence.`);
+  return checked;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Coordinates
 // ---------------------------------------------------------------------------------------------
@@ -289,10 +305,13 @@ export const verifyExtraction: VerifyExtraction = (extraction, documentText) => 
     tivKes: check(row.tivKes, doc),
     ...checkCoordinates(row, doc),
   }));
-  const terms = { ...extraction.terms } as Record<keyof OfferTerms, Quoted<unknown>>;
+  // Terms built before the loss history existed carry no years value: it is read as not stated.
+  const terms = { ...extraction.terms, floodHistoryYears: extraction.terms.floodHistoryYears ?? missing<number>() } as Record<keyof OfferTerms, Quoted<unknown>>;
   for (const key of Object.keys(terms) as (keyof OfferTerms)[]) terms[key] = check(terms[key], doc, NAMED_TERMS.has(key));
   const notes = extraction.notes.map((note): OfferNote => ({ ...check(note, doc), kind: note.kind }));
-  return { rows, terms: terms as unknown as OfferTerms, notes };
+  // Each loss's year and amount stand on their own sentence, and each is checked like any other number.
+  const floodLosses = (extraction.floodLosses ?? []).map((loss): FloodLoss => ({ year: checkYear(loss.year, doc), amountKes: check(loss.amountKes, doc) }));
+  return { rows, terms: terms as unknown as OfferTerms, notes, floodLosses };
 };
 
 export const usableValue: UsableValue = (quoted) => ((USABLE_STATUSES as readonly string[]).includes(quoted.status) ? quoted.value : null);
@@ -311,7 +330,7 @@ const PRICED_ROW_VALUES: [keyof OfferRowValues, string][] = [
   ["tivKes", "Insured value"],
 ];
 
-const PRICED_TERMS: [keyof OfferTerms, string][] = [
+const PRICED_TERMS: [CoreTermKey, string][] = [
   ["floodDeductiblePct", "Flood deductible"],
   ["floodDeductibleMinKes", "Deductible minimum"],
   ["floodDeductibleBasis", "What the deductible is a percentage of"],
@@ -343,7 +362,9 @@ export const waitingValues: WaitingValues = (extraction) => {
 export const statusCounts: StatusCounts = (extraction) => {
   const counts: Record<ValueStatus, number> = { verified: 0, unverified: 0, confirmed: 0, edited: 0, missing: 0 };
   for (const row of extraction.rows) for (const key of Object.values(OFFER_ROW_KEYS)) counts[row[key].status]++;
-  for (const key of Object.values(OFFER_TERM_KEYS)) counts[extraction.terms[key].status]++;
+  // A years value that is absent is one that was not stated.
+  for (const key of Object.values(OFFER_TERM_KEYS)) counts[extraction.terms[key]?.status ?? "missing"]++;
+  for (const loss of extraction.floodLosses ?? []) for (const key of Object.values(OFFER_LOSS_KEYS)) counts[loss[key].status]++;
   for (const note of extraction.notes) counts[note.status]++;
   return counts;
 };
@@ -353,7 +374,7 @@ export const statusCounts: StatusCounts = (extraction) => {
 // ---------------------------------------------------------------------------------------------
 
 /** What kind of thing each value holds, so a typed edit can be read the same way wherever it is made. */
-type ValueKind = "text" | "count" | "kes" | "percent" | "area" | "distance" | "lat" | "lon" | readonly string[];
+type ValueKind = "text" | "count" | "kes" | "percent" | "area" | "distance" | "lat" | "lon" | "year" | "years" | readonly string[];
 
 const ROW_KINDS: Record<keyof OfferRowValues, ValueKind> = {
   name: "text",
@@ -377,6 +398,12 @@ const TERM_KINDS: Record<keyof OfferTerms, ValueKind> = {
   placeName: "text",
   riverName: "text",
   riverDistanceM: "distance",
+  floodHistoryYears: "years",
+};
+
+const LOSS_KINDS: Record<keyof FloodLoss, ValueKind> = {
+  year: "year",
+  amountKes: "kes",
 };
 
 // A sign, the digits, then whatever unit was typed after them.
@@ -402,6 +429,9 @@ function typedNumber(input: string | number, kind: ValueKind): number | undefine
   if (!Number.isFinite(n)) return undefined;
   if (kind === "lat") return Math.abs(n) <= 90 ? n : undefined;
   if (kind === "lon") return Math.abs(n) <= 180 ? n : undefined;
+  // A loss happened in a year; a history covers some years, never none.
+  if (kind === "year") return Number.isInteger(n) && n >= LOSS_YEAR_RANGE.min && n <= LOSS_YEAR_RANGE.max ? n : undefined;
+  if (kind === "years") return n > 0 ? n : undefined;
   // Nothing else on an offer can be below zero.
   return n >= 0 ? n : undefined;
 }
@@ -431,9 +461,23 @@ function withValue(extraction: OfferExtraction, ref: ValueRef, change: (q: Quote
   }
   if (ref.scope === "terms") {
     if (!(ref.key in TERM_KINDS)) return extraction;
-    const next = change(extraction.terms[ref.key], TERM_KINDS[ref.key]);
-    if (next === extraction.terms[ref.key]) return extraction;
+    // Only the years of loss history can be absent, and absent is not stated.
+    const now: Quoted<unknown> = extraction.terms[ref.key] ?? missing();
+    const next = change(now, TERM_KINDS[ref.key]);
+    if (next === now) return extraction;
     return { ...extraction, terms: { ...extraction.terms, [ref.key]: next } as OfferTerms };
+  }
+  if (ref.scope === "loss") {
+    const losses = extraction.floodLosses ?? [];
+    if (!(ref.key in LOSS_KINDS) || !Number.isInteger(ref.index) || ref.index < 0 || ref.index > Math.min(losses.length, MOST_LOSSES - 1)) return extraction;
+    // One past the end is a loss the reading did not find: it starts with nothing stated.
+    const loss: FloodLoss = losses[ref.index] ?? { year: missing(), amountKes: missing() };
+    const next = change(loss[ref.key], LOSS_KINDS[ref.key]) as Quoted<number>;
+    // Nothing typed into a loss that is not there yet adds no loss.
+    if (next === loss[ref.key] || (ref.index === losses.length && next.value === null)) return extraction;
+    const changed: FloodLoss = { ...loss, [ref.key]: next };
+    // A cleared loss keeps its place, so the losses after it are still found by the same number.
+    return { ...extraction, floodLosses: ref.index === losses.length ? [...losses, changed] : losses.map((l, i) => (i === ref.index ? changed : l)) };
   }
   const note = extraction.notes[ref.index];
   if (!note) return extraction;

@@ -1,15 +1,16 @@
 import type { HousingClass } from "../model/types";
 import { inKenya, parseCoordinates } from "./coords";
-import { emptyRow, emptyTerms, NOTE_LABELS, statedValue, unreadValue } from "./extraction";
+import { emptyRow, emptyTerms, missingValue, NOTE_LABELS, statedValue, uniqueLosses, unreadValue } from "./extraction";
 import { MONEY_SCALES as SCALES } from "./shared";
-import type { DeductibleBasis, ExtractByRules, FloodCover, NoteKind, Occupancy, OfferNote } from "./types";
+import type { DeductibleBasis, ExtractByRules, FloodCover, FloodLoss, NoteKind, Occupancy, OfferNote, Quoted } from "./types";
 
 /**
  * Reading an offer with fixed rules and no model: what is used when no key is set or the
  * call fails. The rules look for labelled lines and for a handful of plain phrases, and keep
  * the line or sentence each value came from, so the same checks run on them as on the model's
  * reply. They read one building per document. A memo that describes several gets one row,
- * and the underwriter adds the rest.
+ * and the underwriter adds the rest. They also read the document's own flood loss history:
+ * the years it covers and each flood or water damage loss in it, never a fire or a theft.
  *
  * The rules never guess: a field they cannot find is left missing.
  */
@@ -27,22 +28,27 @@ interface Line {
   value: string;
   /** The nearest label above that stood alone on its line: the section this line sits in. */
   heading: string;
+  /** True when a blank line, or the start of the text, comes straight before it. */
+  first: boolean;
 }
 
 function linesOf(documentText: string): Line[] {
   const lines: Line[] = [];
   let heading = "";
+  let first = true;
   for (const raw of documentText.split(/\r?\n/)) {
     const text = raw.trim();
     if (!text) {
       // A blank line closes the section.
       heading = "";
+      first = true;
       continue;
     }
     const m =/^(?:[-•*▪●◦]\s*)?([A-Za-z][^:]{1,60}):\s*(.*)$/.exec(text);
     const label = m ? m[1].trim() : null;
     const value = m ? m[2].trim() : "";
-    lines.push({ text, label, value, heading });
+    lines.push({ text, label, value, heading, first });
+    first = false;
     if (label && !value) heading = label;
   }
   return lines;
@@ -158,6 +164,151 @@ const countOf = (written: string) => NUMBER_WORDS[written.toLowerCase()] ?? Numb
 const NEGATED = /\b(?:no|none|nil|never|not|without|zero)\b/i;
 
 const escapeForPattern = (text: string) => text.replace(/[.*+?^${}()|[\]\\\/]/g, "\\$&");
+
+// ---------------------------------------------------------------------------------------------
+// The loss history
+// ---------------------------------------------------------------------------------------------
+
+const YEAR_AT = String.raw`\b((?:19|20)\d{2})\b`;
+const MONTH = String.raw`(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?,?`;
+const LOSS_NOUN = String.raw`(?:LOSS|EVENT|CLAIM|INCIDENT)`;
+
+/** A loss with a number of its own: "LOSS #2: 2019, March", "FLOOD EVENT #1 (April 2018):", "Event 3 (2020): KES 1,250,000". */
+const NUMBERED_LOSS = new RegExp(String.raw`^\W*(?:[A-Za-z]+\s+){0,2}?${LOSS_NOUN}\s*(?:#|NO\.?\s*|NUMBER\s*)?\d{1,2}\b.{0,30}?${YEAR_AT}`, "i");
+/** A loss on a line that opens with its date: "4. 2020 Flood: KES 1,250,000 paid", "April 2018: storm water in the basement", "Loss in 2021: burst pipe". */
+const DATED_LOSS = new RegExp(String.raw`^\W*(?:\d{1,2}[.)]\s+)?(?:${LOSS_NOUN}\s+(?:in\s+|of\s+)?)?\(?(?:\d{1,2}(?:st|nd|rd|th)?\s+)?(?:${MONTH}\s+)?${YEAR_AT}(?!\s*[-/]\s*\d)`, "i");
+
+/** Flood and water damage: a river or storm water, water in a basement, a burst pipe, drains that block or overflow. */
+const WATER_LOSS = /\b(?:flood(?:s|ed|ing)?|inundat(?:ed|ion)|water|stormwater|burst\s+(?:\w+\s+)?(?:pipes?|mains?)|pipes?\s+burst|overflow\w*|seepage|sewer\w*\s+back\w*|blocked\s+(?:\w+\s+)?drain\w*)\b/i;
+/** The other perils a loss history lists. A loss that names one is not read, even when water came into it. */
+const OTHER_PERIL = /\b(?:fire|arson|theft|burglary|break[\s-]?in|robbery|stolen|machinery|breakdown|riot|vandalism|malicious|explosion|lightning|collision|vehicle|earthquake|wind(?:storm)?|hail|subsidence)\b/i;
+const LOSS_WORD = /\b(?:loss(?:es)?|claims?|damage[ds]?|paid|settled|incurred|events?|incidents?)\b/i;
+/** The lines of a loss that say what happened. */
+const CAUSE_LABEL = /^(?:description|cause|peril|type|nature|event|details?|trigger|circumstances|what\s+happened)\b/i;
+/** The line of a loss that gives its amount: "Amount paid", "Total claim", "Settled". A plain "Total" is the second choice. */
+const AMOUNT_LABEL = /\b(?:claim(?:ed)?|paid|settled|settlement|amount|incurred)\b/i;
+const TOTAL_LABEL = /^total\b/i;
+/** A figure for several losses together, or for something that is not a loss. Never one loss's amount. */
+const AGGREGATE_LABEL = /\b(?:years|yrs|losses|claims|events|average|annual|premium|frequency|ratio|deductible|excess|limit)\b/i;
+/** An amount that follows one of these words is the loss, not the value of what was damaged. */
+const CLAIMED = /\b(?:claim(?:ed)?|paid|settled|loss|total)\b[^\d]{0,25}$/i;
+
+/** The text names flood or water damage, and does not say there was none. A loss number ("No. 2") is not a "no". */
+function saysWater(text: string): boolean {
+  const said = text.replace(/\bno\.?\s*(?=\d)/gi, "");
+  const at = WATER_LOSS.exec(said);
+  return at !== null && !NEGATED.test(said.slice(0, at.index));
+}
+
+/** A section heading as memos write them: a label alone on its line, or a line in capitals. Words in brackets may be in lower case. */
+const isHeading = (line: Line) => (line.label !== null && !line.value) || (/[A-Z]{3}/.test(line.text) && !/[a-z]{2}/.test(line.text.replace(/\([^)]*\)/g, "")) && amountsIn(line.text).length === 0);
+
+/**
+ * Every past flood or water damage loss the text lists, with its year and, where one is
+ * written, its amount. Two shapes are read:
+ *   a numbered loss   a line such as "LOSS #2: 2019, March" or "FLOOD EVENT #1 (April 2018):",
+ *                     with the lines under it up to the next blank line. What happened is taken
+ *                     from its description and cause lines, the amount from its amount or total line.
+ *   a dated line      a line that opens with the year, such as "4. 2020 Flood: KES 1,250,000 paid".
+ * A loss is kept only when its own words, or the heading it stands under, name flood or water
+ * damage and name no other peril. The amount is the one written for the loss as a whole. Parts
+ * are never added up, so a loss with no such figure keeps its year and a missing amount.
+ */
+function floodLossesIn(lines: Line[]): FloodLoss[] {
+  const losses: FloodLoss[] = [];
+  // The section the line sits in. Unlike a line's heading it runs on past blank lines, to the next heading.
+  let section = "";
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const numbered = NUMBERED_LOSS.exec(line.text);
+    const found = numbered ?? DATED_LOSS.exec(line.text);
+    if (!found) {
+      if (isHeading(line)) section = line.text;
+      continue;
+    }
+    const header = line.text;
+    const afterYear = found.index + found[0].length;
+    const amounts = amountsIn(header).filter((a) => a.index >= afterYear);
+    const onHeader = amounts.find((a) => CLAIMED.test(header.slice(0, a.index))) ?? amounts[0];
+
+    // A numbered loss with no amount on its own line owns the lines under it.
+    const body: Line[] = [];
+    if (numbered && !onHeader) for (let j = i + 1; j < lines.length && !lines[j].first && !NUMBERED_LOSS.test(lines[j].text); j++) body.push(lines[j]);
+    // Those lines are part of this loss, not losses of their own.
+    i += body.length;
+
+    const around = [line.heading, section];
+    // A dated line is a loss only where losses are being listed.
+    if (!numbered && ![header, ...around].some((text) => LOSS_WORD.test(text))) continue;
+
+    let water: boolean;
+    if (OTHER_PERIL.test(header)) water = false;
+    else if (saysWater(header)) water = true;
+    else {
+      const causes = body.filter((l) => l.label !== null && CAUSE_LABEL.test(l.label));
+      const told = (causes.length ? causes : body).map((l) => l.text);
+      if (told.some((text) => OTHER_PERIL.test(text))) water = false;
+      else water = told.some(saysWater) || around.some((text) => saysWater(text) && !OTHER_PERIL.test(text));
+    }
+    if (!water) continue;
+
+    let amountKes: FloodLoss["amountKes"] = missingValue();
+    if (onHeader) amountKes = statedValue(onHeader.kes, header);
+    else {
+      const stated = body.filter((l) => l.label !== null && !AGGREGATE_LABEL.test(l.label) && amountsIn(l.value).length > 0);
+      const amountLine = stated.find((l) => AMOUNT_LABEL.test(l.label!)) ?? stated.find((l) => TOTAL_LABEL.test(l.label!));
+      if (amountLine) amountKes = statedValue(amountsIn(amountLine.value)[0].kes, amountLine.text);
+    }
+    losses.push({ year: statedValue(Number(found[1]), header), amountKes });
+  }
+  return losses;
+}
+
+/** Something that happened, as a typed sentence puts it. "Flood cover" and "flood limit" are terms, not events. */
+const WATER_EVENT = String.raw`\b(?:flooded|flooding|floods?(?!\s+(?:cover|limit|sub-?limit|deductible|excess|risk|insurance|extension|zone|plain|maps?|defen[cs]es?|protection))|inundat(?:ed|ion)|water\s+damage|storm\s?water|burst\s+(?:\w+\s+)?(?:pipes?|mains?))\b`;
+
+/**
+ * In a few typed lines: "flooded in 2018 with a loss of KES 1.2 million". The sentence must
+ * hold one year, standing beside the event, and the amount is read only beside a loss word,
+ * so the insured value in the same sentence is never taken for the loss.
+ */
+function typedFloodLosses(sentences: string[]): FloodLoss[] {
+  const happened = new RegExp(String.raw`${WATER_EVENT}[^.;]{0,40}?\b(?:in|during|of)\s+(?:${MONTH}\s+)?${YEAR_AT}|${YEAR_AT}[^.;]{0,20}?${WATER_EVENT}`, "i");
+  const lossAmount = new RegExp(String.raw`\b(?:loss(?:es)?|claims?|damage|paid|settled|cost(?:ing)?)\b[^.;\d]{0,25}?${KES_AMOUNT}|${KES_AMOUNT}\s+(?:loss|claim|(?:in\s+|of\s+)?damage|paid)\b`, "i");
+  const losses: FloodLoss[] = [];
+  for (const sentence of sentences) {
+    const years = sentence.match(new RegExp(YEAR_AT, "g")) ?? [];
+    const when = happened.exec(sentence);
+    if (years.length !== 1 || !when || OTHER_PERIL.test(sentence)) continue;
+    // "Has not flooded since 2018" reports no loss. Only the clause the event stands in is asked.
+    if (NEGATED.test(sentence.slice(0, when.index).split(/[,;:]/).pop()!)) continue;
+    const m = lossAmount.exec(sentence);
+    losses.push({ year: statedValue(Number(years[0]), sentence), amountKes: m ? statedValue(toNumber(m[1] ?? m[3], m[2] ?? m[4]), sentence) : missingValue() });
+  }
+  return losses;
+}
+
+const SPAN_YEARS = /(?:^|[^\d.,+-])(\d{1,3})\s*(?:years|yrs)\b(?!\s+(?:old|ago))/i;
+/** "11-year loss history", "10 years of claims history". */
+const HISTORY_SPAN = /(?:^|[^\d.,])(\d{1,3})[\s-]*years?\s+(?:of\s+)?(?:loss|claims?|flood)\s+(?:history|experience|record)\b/i;
+const HISTORY_WORDS = /\b(?:loss(?:es)?|claims?|flood(?:ing|s)?)\s+(?:history|experience|record)\b|\b(?:history|record)\s+of\s+(?:\w+\s+)?(?:loss(?:es)?|claims?|flood)/i;
+const LOSS_CONTEXT = /\b(?:loss(?:es)?|claims?|events?|incidents?)\b/i;
+
+/**
+ * The number of years the loss history covers, where the text writes one: a loss or claims
+ * history line first ("LOSS HISTORY (11 YEARS: 2014-2024)"), else any line about losses that
+ * gives a span ("3 events in 11 years"). A range of dates alone is not read: nothing is worked out.
+ * "25-year" is a return period and "12 years old" an age; neither is a history.
+ */
+function historyYearsIn(lines: Line[]): Quoted<number> {
+  const span = (text: string) => {
+    const n = Number((HISTORY_SPAN.exec(text) ?? SPAN_YEARS.exec(text))?.[1] ?? 0);
+    return n > 0 ? n : null;
+  };
+  const stating = lines.filter((l) => span(l.text) !== null);
+  const line = stating.find((l) => HISTORY_WORDS.test(l.text)) ?? stating.find((l) => LOSS_CONTEXT.test(l.text) || LOSS_CONTEXT.test(l.heading));
+  return line ? statedValue(span(line.text)!, line.text) : missingValue();
+}
 
 // ---------------------------------------------------------------------------------------------
 // The rules
@@ -457,5 +608,9 @@ export const extractByRules: ExtractByRules = (documentText, knownPlaces = []) =
     if (line.label && line.value && (LABELS.floodView.test(line.label) || (LABELS.generalView.test(line.label) && /\bflood/i.test(line.value)))) note("broker_view", line.text);
   }
 
-  return { rows: [row], terms, notes };
+  // --- Loss history: the years it covers, and each flood or water damage loss listed in it, once.
+  terms.floodHistoryYears = historyYearsIn(lines);
+  const floodLosses = uniqueLosses([...floodLossesIn(lines), ...(typed ? typedFloodLosses(sentences) : [])]);
+
+  return { rows: [row], terms, notes, floodLosses };
 };

@@ -6,16 +6,20 @@ import {
   NOTE_KINDS,
   OCCUPANCIES,
   OFFER_FIELDS,
+  OFFER_LOSS_FIELDS,
+  OFFER_LOSS_KEYS,
   OFFER_ROW_FIELDS,
   OFFER_ROW_KEYS,
   OFFER_TERM_FIELDS,
   OFFER_TERM_KEYS,
   type BuildOfferPrompt,
   type ExtractionPath,
+  type FloodLoss,
   type FromFlatReply,
   type NoteKind,
   type OfferField,
   type OfferFlatEntry,
+  type OfferLossField,
   type OfferNote,
   type OfferReplySchema,
   type OfferResponseSchema,
@@ -72,7 +76,33 @@ export const emptyTerms = (): OfferTerms => ({
   placeName: missingValue(),
   riverName: missingValue(),
   riverDistanceM: missingValue(),
+  floodHistoryYears: missingValue(),
 });
+
+/** The most past flood losses kept from one document. A memo with more than this is read by a person. */
+export const MOST_LOSSES = 20;
+
+/**
+ * The losses with each one kept once, in the order given. A memo tells the same flood in
+ * several places: where it describes the event, in a summary of flood losses and again in the
+ * list of all claims. Counting it each time would multiply the burning cost.
+ *   same year and same amount           one loss: the first is kept
+ *   same year, one with no amount       one loss: the one with the amount is kept
+ *   same year, two different amounts    two losses, both kept for the underwriter to see
+ * A loss with no year is never taken for another: there is nothing to match it on.
+ */
+export function uniqueLosses(losses: readonly FloodLoss[]): FloodLoss[] {
+  const kept: FloodLoss[] = [];
+  for (const loss of losses) {
+    const year = loss.year.value;
+    const amount = loss.amountKes.value;
+    const at = year === null ? -1 : kept.findIndex((k) => k.year.value === year && (k.amountKes.value === amount || k.amountKes.value === null || amount === null));
+    if (at < 0) kept.push(loss);
+    // The fuller of the two tellings takes the place of the first.
+    else if (kept[at].amountKes.value === null && amount !== null) kept[at] = loss;
+  }
+  return kept.slice(0, MOST_LOSSES);
+}
 
 /** What a note of each kind is called when the extractor gave it no summary of its own. */
 export const NOTE_LABELS: Record<NoteKind, string> = {
@@ -161,10 +191,11 @@ Rows:
 - Send one row per insured building, in the shape of an exposure file. Number the buildings from 1 in the order the document lists them, and give every entry about a building that building's number in "row".
 - A building is a structure that is insured. Plant, machinery, equipment, stock and contents are not buildings and get no row, even when the document gives them their own coordinates or values.
 - When the document describes one building, or one site with a single total, send one row.
+- Entries about a past flood loss carry that loss's number in "row": number the losses from 1 in the order the document lists them.
 - Entries about the offer as a whole, and all notes, have "row": 0.
 
 Values are always text:
-- A number is plain digits in the base unit, with a dot for decimals and no separators, units or scale words. "KES 4.25 billion" is "4250000000". "48,500 m²" is "48500". "1.8 km" is "1800". "5%" is "5".
+- A number is plain digits in the base unit, with a dot for decimals and no separators, units or scale words. "KES 4.25 billion" is "4250000000". "KES 4.2 million" is "4200000". "48,500 m²" is "48500". "1.8 km" is "1800". "5%" is "5".
 - Where a field takes one of a list of words, send the word exactly as listed.
 
 Fields for a building (row is the building's number):
@@ -187,7 +218,12 @@ Fields for the offer (row 0):
 - place_name: the neighbourhood, estate, ward or town the site is in, as short as the document allows, for example "Kibera" or "Upper Hill". Send it whenever the document names the place, with or without coordinates.
 - river_name: the river the document names as nearest to the site.
 - river_distance_m: the stated distance from the site to that river, in metres.
+- flood_history_years: the number of years the document's loss or claims history covers, with the sentence or heading that states it. "Loss history (11 years: 2014 to 2024)" is "11". Send it only when a number of years is written. Never work it out from a range of dates.
 Where the document states both the terms of the current policy and the terms asked for in this offer, send the terms asked for.
+
+Past flood losses (row is the loss's number, from 1). List every past loss at the site from flood or water damage that the document states: a river in flood, storm water, water in a basement, a burst pipe, blocked or overflowing drains. Leave out fire, theft, machinery breakdown and every other cause, even when they stand in the same loss history. List each loss once, even when the document reports it in more than one place.
+- flood_loss_year: the year the loss happened, as four digits. Its quote is the exact sentence or line that states the year.
+- flood_loss_amount_kes: the amount of that loss in KES: the document's own total for the event, not one part of it. Its quote is the exact sentence or line that states the amount. Never invent, estimate or add up an amount, and do not convert from another currency. A loss with no amount stated is listed with its year only.
 
 Notes (row 0). A note's value is one short line in plain words; its quote is the document's sentence. A kind may be sent more than once:
 - basement_plant: critical plant, such as generators, switchgear, pumps or lift machinery, kept in a basement.
@@ -214,7 +250,24 @@ List every entry the document supports, each with its quote copied word for word
 /** Words a model may send in place of leaving an entry out. They mean "not stated". */
 const NOT_STATED = /^(?:not[ _]stated|not[ _]given|not[ _]specified|unknown|none stated|n\/?a|null|nil)?$/i;
 
-const NUMBER_FIELDS = new Set<OfferField>(["lat", "lon", "floor_area_m2", "cost_per_m2_kes", "tiv_kes", "basements", "flood_deductible_pct", "flood_deductible_min_kes", "flood_limit_kes", "river_distance_m"]);
+const NUMBER_FIELDS = new Set<OfferField>([
+  "lat",
+  "lon",
+  "floor_area_m2",
+  "cost_per_m2_kes",
+  "tiv_kes",
+  "basements",
+  "flood_deductible_pct",
+  "flood_deductible_min_kes",
+  "flood_limit_kes",
+  "river_distance_m",
+  "flood_history_years",
+  "flood_loss_year",
+  "flood_loss_amount_kes",
+]);
+
+/** A year a loss can have happened in. Anything outside this is a figure taken for a year by mistake. */
+export const LOSS_YEAR_RANGE = { min: 1900, max: 2100 } as const;
 const WORD_LISTS: Partial<Record<OfferField, readonly string[]>> = {
   housing_class: HOUSING_CLASSES,
   occupancy: OCCUPANCIES,
@@ -239,6 +292,8 @@ function readEntry(entry: OfferFlatEntry): Quoted<unknown> {
     if (n === null) return unreadValue(quote, `The model's value "${written}" is not a plain number.`);
     if (n < 0 && entry.field !== "lat" && entry.field !== "lon") return unreadValue(quote, `The model's value "${written}" is below zero.`);
     if (entry.field === "basements" && !Number.isInteger(n)) return unreadValue(quote, `The model's value "${written}" is not a whole number of basement levels.`);
+    if (entry.field === "flood_history_years" && n <= 0) return unreadValue(quote, `The model's value "${written}" is not a number of years above zero.`);
+    if (entry.field === "flood_loss_year" && (!Number.isInteger(n) || n < LOSS_YEAR_RANGE.min || n > LOSS_YEAR_RANGE.max)) return unreadValue(quote, `The model's value "${written}" is not a year.`);
     return statedValue(n, quote);
   }
   const words = WORD_LISTS[entry.field];
@@ -252,10 +307,12 @@ function readEntry(entry: OfferFlatEntry): Quoted<unknown> {
 /**
  * The flat reply as an extraction. A field repeated for the same row keeps its last entry;
  * notes all stay. A reply with no entry about any building still gives one empty row, as the
- * rules do, so there is always a row on screen to fill in.
+ * rules do, so there is always a row on screen to fill in. Past flood losses are built the way
+ * rows are, by their number, and a loss the model listed twice is kept once.
  */
 export const fromFlatReply: FromFlatReply = (reply) => {
   const rowEntries = new Map<number, Map<OfferRowField, OfferFlatEntry>>();
+  const lossEntries = new Map<number, Map<OfferLossField, OfferFlatEntry>>();
   const terms = emptyTerms();
   const notes: OfferNote[] = [];
 
@@ -279,6 +336,13 @@ export const fromFlatReply: FromFlatReply = (reply) => {
       const number = Math.max(1, entry.row);
       if (!rowEntries.has(number)) rowEntries.set(number, new Map());
       rowEntries.get(number)!.set(field as OfferRowField, entry);
+      continue;
+    }
+    if ((OFFER_LOSS_FIELDS as readonly string[]).includes(field)) {
+      // A model with a single loss sometimes files it under 0, as it does with a single building.
+      const number = Math.max(1, entry.row);
+      if (!lossEntries.has(number)) lossEntries.set(number, new Map());
+      lossEntries.get(number)!.set(field as OfferLossField, entry);
     }
   }
 
@@ -290,5 +354,15 @@ export const fromFlatReply: FromFlatReply = (reply) => {
       return row;
     });
 
-  return { rows: rows.length ? rows : [emptyRow("model")], terms, notes };
+  const floodLosses = uniqueLosses(
+    [...lossEntries.keys()]
+      .sort((a, b) => a - b)
+      .map((number) => {
+        const loss: FloodLoss = { year: missingValue(), amountKes: missingValue() };
+        for (const [field, entry] of lossEntries.get(number)!) loss[OFFER_LOSS_KEYS[field]] = readEntry(entry) as Quoted<number>;
+        return loss;
+      }),
+  );
+
+  return { rows: rows.length ? rows : [emptyRow("model")], terms, notes, floodLosses };
 };

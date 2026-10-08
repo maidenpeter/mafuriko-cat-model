@@ -127,6 +127,32 @@ export interface OfferTerms {
   riverName: Quoted<string>;
   /** The stated distance to that river, in metres ("1.8 km" is 1800). */
   riverDistanceM: Quoted<number>;
+  /**
+   * The number of years the document's loss history covers: 11 for "Loss history (11 years:
+   * 2014 to 2024)". Only a number of years that is written; never worked out from a range of dates.
+   * Optional in the type only so that terms built by hand before this value existed still fit.
+   * fromFlatReply, extractByRules and verifyExtraction always fill it; read an absent one as missing.
+   */
+  floodHistoryYears?: Quoted<number>;
+}
+
+/** The offer-level values that are always present. floodHistoryYears stands apart: see its note above. */
+export type CoreTermKey = Exclude<keyof OfferTerms, "floodHistoryYears">;
+
+/**
+ * One past flood or water damage loss the document states for the site: river or storm water
+ * flooding, water in a basement, a burst pipe, blocked or overflowing drains. A fire, a theft
+ * or any other peril in the same loss history is not one of these.
+ *
+ * Each of the two values has its own quote and status, like every other value. The amount is
+ * the document's own figure for the whole event. It is never estimated and never added up from
+ * parts: a loss the document gives no amount for has a missing amount and its year only.
+ */
+export interface FloodLoss {
+  /** The year the loss happened, as four digits. */
+  year: Quoted<number>;
+  /** The amount of the loss in KES. */
+  amountKes: Quoted<number>;
 }
 
 /**
@@ -152,6 +178,13 @@ export interface OfferExtraction {
   terms: OfferTerms;
   /** Any number of notes; a kind can appear more than once. */
   notes: OfferNote[];
+  /**
+   * The document's own flood loss history, in the order it lists the losses, each loss once.
+   * With terms.floodHistoryYears this is what a burning cost is worked out from, by code, and only
+   * from values whose status is one of USABLE_STATUSES. Empty when the document states none.
+   * Optional in the type for the same reason as floodHistoryYears; read an absent list as empty.
+   */
+  floodLosses?: FloodLoss[];
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -175,11 +208,16 @@ export const OFFER_TERM_FIELDS = [
   "place_name",
   "river_name",
   "river_distance_m",
+  "flood_history_years",
 ] as const;
 export type OfferTermField = (typeof OFFER_TERM_FIELDS)[number];
 
-/** Every field name the model may reply with: row fields, offer-level fields, then the note kinds (row = 0). */
-export const OFFER_FIELDS = [...OFFER_ROW_FIELDS, ...OFFER_TERM_FIELDS, ...NOTE_KINDS] as const;
+/** Past flood loss fields. Sent with row = the loss's number, from 1, in the same flat style as the building rows. */
+export const OFFER_LOSS_FIELDS = ["flood_loss_year", "flood_loss_amount_kes"] as const;
+export type OfferLossField = (typeof OFFER_LOSS_FIELDS)[number];
+
+/** Every field name the model may reply with: row fields, offer-level fields, past flood loss fields, then the note kinds (row = 0). */
+export const OFFER_FIELDS = [...OFFER_ROW_FIELDS, ...OFFER_TERM_FIELDS, ...OFFER_LOSS_FIELDS, ...NOTE_KINDS] as const;
 export type OfferField = (typeof OFFER_FIELDS)[number];
 
 /** Flat field name to the key that holds it on OfferRowValues. */
@@ -206,7 +244,14 @@ export const OFFER_TERM_KEYS = {
   place_name: "placeName",
   river_name: "riverName",
   river_distance_m: "riverDistanceM",
+  flood_history_years: "floodHistoryYears",
 } as const satisfies Record<OfferTermField, keyof OfferTerms>;
+
+/** Flat field name to the key that holds it on FloodLoss. */
+export const OFFER_LOSS_KEYS = {
+  flood_loss_year: "year",
+  flood_loss_amount_kes: "amountKes",
+} as const satisfies Record<OfferLossField, keyof FloodLoss>;
 
 /**
  * One entry of the reply. The list is flat, like the parameter list in agents/responseSchema.ts,
@@ -214,7 +259,7 @@ export const OFFER_TERM_KEYS = {
  *
  * The value is always text, so one entry shape serves every field:
  *   numbers       plain digits with a dot for decimals, in the base unit, with no separators,
- *                 units or scale words: "4250000000", "48500", "1800", "5", "-1.2921"
+ *                 units or scale words: "4250000000", "48500", "1800", "5", "-1.2921", "2018"
  *   lat and lon   decimal degrees, south and west negative
  *   housing_class one of HOUSING_CLASSES
  *   occupancy, flood_cover, flood_deductible_basis: one of their lists above
@@ -223,14 +268,17 @@ export const OFFER_TERM_KEYS = {
  */
 export interface OfferFlatEntry {
   field: OfferField;
-  /** The building's number, counted from 1, for a row field. 0 for offer-level fields and notes. */
+  /**
+   * The building's number, counted from 1, for a row field. The loss's number, counted from 1,
+   * for a past flood loss field. 0 for offer-level fields and notes.
+   */
   row: number;
   value: string;
   /** The exact sentence or line the value came from, copied from the document. */
   quote: string;
 }
 
-/** The whole reply. A row field repeated for the same row keeps its last entry; notes may repeat and all are kept. */
+/** The whole reply. A row or loss field repeated for the same number keeps its last entry; notes may repeat and all are kept. */
 export interface OfferFlatReply {
   entries: OfferFlatEntry[];
 }
@@ -643,6 +691,9 @@ export type NumberInQuote = (value: number, quote: string) => boolean;
  * For coordinates it also runs parseCoordinates on the latitude quote, stores the reading on
  * the row, sets lat and lon from it, and marks both unverified when the reading conflicts,
  * disagrees with the stated numbers, or falls outside Kenya.
+ * The loss history is checked the same way: the years it covers, and the year and the amount of
+ * every past flood loss ("KES 4.2 million" and "KES 4,200,000" both hold 4200000). The result
+ * always carries terms.floodHistoryYears and floodLosses, missing and empty when nothing was read.
  * documentText is the text the extraction was made from: the redacted text, on both paths.
  */
 export type VerifyExtraction = (extraction: OfferExtraction, documentText: string) => OfferExtraction;
@@ -654,7 +705,9 @@ export type UsableValue = <T>(quoted: Quoted<T>) => T | null;
 export type ValueRef =
   | { scope: "row"; row: number; key: keyof OfferRowValues }
   | { scope: "terms"; key: keyof OfferTerms }
-  | { scope: "note"; index: number };
+  | { scope: "note"; index: number }
+  /** One value of one past flood loss: index is its place in OfferExtraction.floodLosses, from 0. */
+  | { scope: "loss"; index: number; key: keyof FloodLoss };
 
 /** An unverified value that feeds the price. Pricing waits until it is confirmed, edited or cleared. */
 export interface WaitingValue {
@@ -669,17 +722,20 @@ export interface WaitingValue {
  * coordinates, class and insured value (floor area and cost per m² only when no insured value is
  * usable), the flood deductible and limit, and the place name when a row has no usable coordinates.
  * pricingRows turns each one into a blocker, so nothing is priced around a value that failed its check.
+ * The loss history is never in this list: an unverified year or amount is left out of the burning
+ * cost until the underwriter confirms or edits it, and the rest of the price does not wait for it.
  */
 export type WaitingValues = (extraction: OfferExtraction) => WaitingValue[];
 
-/** How many values hold each status: every row field, every offer-level field and every note. */
+/** How many values hold each status: every row field, every offer-level field, both values of every past flood loss, and every note. */
 export type StatusCounts = (extraction: OfferExtraction) => Record<ValueStatus, number>;
 
 /**
  * A new extraction with that value replaced by what the underwriter typed: status "edited",
  * reason null, quote kept. A value of null clears it: status "missing". A typed value that cannot
  * be read for its field returns the extraction it was given, unchanged, so the caller can tell
- * by comparing the two.
+ * by comparing the two. A "loss" reference one past the end of the list adds a loss with that
+ * value, so a loss the reading missed can be typed in.
  */
 export type EditValue = (extraction: OfferExtraction, ref: ValueRef, value: string | number | null) => OfferExtraction;
 
@@ -699,7 +755,8 @@ export type BuildOfferPrompt = (documentText: string) => { system: string; user:
 
 /**
  * The flat reply turned into an extraction: rows numbered from 1 become rows in order, every row
- * has path "model", number text is parsed, and anything not stated is "missing". Statuses are
+ * has path "model", number text is parsed, and anything not stated is "missing". Past flood
+ * losses numbered from 1 become floodLosses in order, a loss reported twice kept once. Statuses are
  * provisional until verifyExtraction runs. Text that should be a number or a listed word but
  * is not keeps its quote with a null value, "unverified", and a reason.
  */
@@ -712,7 +769,9 @@ export type FromFlatReply = (reply: OfferFlatReply) => OfferExtraction;
  * (GPS COORDINATES:, GROSS FLOOR AREA:, CONSTRUCTION CLASSIFICATION:, a TIV in KES), the plain
  * deductible and limit phrases, and words that name a housing class. Every row has path "rules".
  * knownPlaces are the ward and hotspot names: one found in the text becomes the place name, which
- * is how a typed sentence with no coordinates gets a location. Statuses are provisional until
+ * is how a typed sentence with no coordinates gets a location. The loss history is read too: the
+ * number of years a loss or claims history says it covers, and each numbered or dated loss that is
+ * flood or water damage, with its year and its KES amount. Statuses are provisional until
  * verifyExtraction runs. A text with nothing recognisable still returns one row of missing values.
  */
 export type ExtractByRules = (documentText: string, knownPlaces?: readonly string[]) => OfferExtraction;

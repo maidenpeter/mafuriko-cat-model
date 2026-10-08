@@ -1,3 +1,4 @@
+import { BRIEF_MAX_QUOTES, BRIEF_QUOTE_MAX_CHARS, type OfferBrief } from "../agents/offerBrief";
 import type { Deliberation } from "../agents/orchestrate";
 import type { Usage } from "../agents/provider";
 import type { Check } from "../checks";
@@ -16,7 +17,7 @@ import {
 } from "../decision";
 import { fmtInt, fmtNum, fmtPct } from "../format";
 import { DRAIN_KINDS, DRAINAGE_DEFAULTS, sampleGrid } from "../geo/drainage";
-import type { DrainageState } from "../geo/drainageView";
+import { withDrainage, type DrainageState } from "../geo/drainageView";
 import type { GeoCollection, WardProps, WaterwayProps } from "../geo/layers";
 import { assignPoints } from "../geo/spatial";
 import { kes1, rpLabel } from "../labels";
@@ -31,10 +32,12 @@ import { offerChecks } from "./checks";
 import { describeReading } from "./coords";
 import { NOTE_LABELS } from "./extraction";
 import { fieldLabel, fieldText, ROW_FIELDS, TERM_FIELDS, type FieldDef } from "./fields";
+import { enforceJudgement, JUDGEMENT_KEYS, REFERENCE_JUDGEMENT, type OfferJudgement } from "./judgement";
 import { nearestWaterway, riverDistanceM, wardOf, type WaterwayMatch } from "./locate";
 import { priceOffer, pricingRows } from "./price";
 import { describeRemoved } from "./redact";
 import { fmtDistance, fmtPoint, plural } from "./shared";
+import { floodFactsOf, statedFloodHistory, technicalPrice, usableNotes, wetShareAround, type FloodFacts, type StatedFloodHistory, type TechnicalBuilding, type TechnicalPrice } from "./technical";
 import { describeTerms, policyTerms, termsSplit } from "./terms";
 import {
   OUTSIDE_MAPS_MESSAGE,
@@ -81,9 +84,25 @@ import { statusCounts, usableValue, waitingValues } from "./verify";
  *   focus.outside             true with focus.outsideMessage when the building lies outside the hazard maps: no loss fields
  *   focus.waiting             the values that hold pricing up, each as a sentence
  *
- * Every step of the walkthrough receives two props:
- *   focus       PricedFocus | null   the priced offer while the header switch is on "Offer", otherwise null
- *   offerFocus  OfferFocus | null    the offer whatever the switch says and whether or not it is priced
+ * The price is the technical price (technical.ts, method at the top of judgement.ts): the flood
+ * maps read around the site, the document's story as loadings, its own loss history and a minimum
+ * rate. A reading at the stated point alone can be zero for a building that plainly can flood, so
+ * it is kept as one line of evidence and is never the price by itself.
+ *
+ *   focus.technical           the whole build-up, line by line: null unless the offer is priced
+ *   focus.judgement           the five judgement figures in force, and whose they are
+ *   focus.price.total         the headline figures: the INDICATED average annual loss and pure rate,
+ *                             and the loaded loss at each return period
+ *   focus.price.atPoint       the same figures at the stated point alone, as the engine gives them
+ *   focus.price.building      the followed building at the stated point: depth, damage and loss per return period
+ *
+ * Words: "indicated" for the technical price's result; "at the stated point" for the single-cell reading.
+ *
+ * Every step of the walkthrough receives these props:
+ *   focus        PricedFocus | null     the priced offer while the header switch is on "Offer", otherwise null
+ *   offerFocus   OfferFocus | null      the offer whatever the switch says and whether or not it is priced
+ *   judgement    FocusJudgement | null  offerFocus.judgement, or null when no offer has been read
+ *   onJudgement  (next) => void         types over any of the five judgement figures: see OfferFocusProps
  * A step that shows "This offer" reads `focus`; a step in Portfolio mode can show a small card from `offerFocus`.
  *
  * Code only. Nothing here reaches a model, and no loss figure comes from one: a language model
@@ -116,6 +135,8 @@ export const CONCENTRATION_HIGH_SHARE = 0.1;
 export const ASSUMPTION_SPREAD_RATIO = 2;
 /** Insured buildings of the portfolio within this many metres of the site count as its neighbours. */
 export const NEIGHBOUR_RADIUS_M = 1000;
+/** The distances, in metres, at which the share of wet ground around the site is reported. */
+export const WET_SHARE_RADII_M = [100, 250, 500] as const;
 
 // ---------------------------------------------------------------------------------------------
 // The type
@@ -301,7 +322,15 @@ export interface FocusReturnPeriod {
   nearestWetM: number | null;
 }
 
-/** A loss curve and the figures read off it: for the building, or for the whole offer. */
+/**
+ * A loss curve and the figures read off it: for the building, or for the whole offer.
+ *
+ * In FocusPrice.total the curve is the LOADED loss per return period and the average annual loss
+ * and the rates are the INDICATED ones. Those can be set by the document's loss history or by the
+ * minimum rate, which are yearly figures with no return period, so they need not equal the area
+ * under `curve`: OfferFocus.technical.buildUp shows every line between the two.
+ * In FocusPrice.atPoint and FocusPrice.building everything is the reading at the stated point.
+ */
 export interface LossFigures {
   /** The insured value the losses and rates are measured against. */
   tivKes: number;
@@ -309,9 +338,9 @@ export interface LossFigures {
   curve: (OfferScenario & { groundUpKes: number; grossKes: number })[];
   /** The curve read at 10, 25, 50, 100 and 250 years, interpolated the way the portfolio's standard losses are. null where the return period is more frequent than anything modelled. */
   standard: { returnPeriod: number; groundUpKes: number | null; grossKes: number | null; extrapolated: boolean }[];
-  /** Average annual loss before any terms. */
+  /** Average annual loss before any terms. In FocusPrice.total: the indicated average annual loss, ground-up. */
   aalGroundUpKes: number;
-  /** Average annual loss after the deductible and the limit. */
+  /** Average annual loss after the deductible and the limit. In FocusPrice.total: the indicated average annual loss, gross. */
   aalGrossKes: number;
   /** Pure flood rate, ground-up: average annual loss ÷ insured value × 1000. Before expense, profit and uncertainty loadings. */
   ratePerMilleGroundUp: number;
@@ -325,7 +354,11 @@ export interface LossFigures {
   loss100Extrapolated: boolean;
 }
 
-/** The followed building's own result. */
+/**
+ * The followed building at the stated point: the single map cell its coordinates fall in, read
+ * exactly as a portfolio building is read. Evidence for the price, not the price: the headline
+ * figures are in FocusPrice.total.
+ */
 export interface FocusBuildingPrice extends LossFigures {
   /** The building these figures are for: FocusBuilding.locId. */
   locId: string;
@@ -366,22 +399,30 @@ export interface ClassRange {
   shareAtOrBelow: number | null;
 }
 
-/** What the offer does to the loaded portfolio. Ground-up unless a field says gross. */
+/**
+ * What the offer does to the loaded portfolio. Ground-up unless a field says gross.
+ *
+ * The portfolio's own buildings keep their reading at the point. The offer is added with its
+ * LOADED loss at each return period (technical.perReturnPeriod). The document's loss history and
+ * the minimum rate are yearly figures with no return period, so they are not in these figures.
+ */
 export interface FocusPortfolio {
   /** The portfolio as loaded, under the assumptions and flood source in force. */
   without: PortfolioFigures;
-  /** The same portfolio with the offer's priced buildings added. */
+  /** The same portfolio with the offer added: its loaded ground-up loss at each return period on top of the portfolio's own. */
   with: PortfolioFigures;
   /** True when "without" is exactly the portfolio the rest of the app shows (the figures in the header in Portfolio mode). */
   sameAsPortfolioView: boolean;
-  /** What the offer adds to the portfolio's 1-in-100 ground-up loss. null when either side is not modelled. */
+  /** What the offer adds to the portfolio's 1-in-100 ground-up loss: its loaded 1-in-100 loss. null when either side is not modelled. */
   loss100ChangeKes: number | null;
   /** The same as a fraction of the portfolio's 1-in-100 before the offer: 0.004 is 0.4%. null as above, or when that loss is zero. */
   loss100ChangeShare: number | null;
-  /** What the offer adds to the portfolio's ground-up average annual loss. */
+  /** What the offer adds to the portfolio's ground-up average annual loss: the area under its loaded curve. */
   aalChangeKes: number;
   /** The same as a fraction of the portfolio's average annual loss before the offer. null when that is zero. */
   aalChangeShare: number | null;
+  /** The same two changes with the offer read at the stated point alone, as the engine adds a building. */
+  atPoint: { loss100ChangeKes: number | null; aalChangeKes: number };
   /** The offer's insured value as a share of the portfolio's with the offer in it: 0.06 is 6%. */
   tivShare: number;
   /** The largest single insured value in the portfolio before the offer. */
@@ -408,7 +449,10 @@ export interface FocusPortfolio {
   } | null;
 }
 
-/** The offer priced under one set of assumptions. The rows are the same; only the parameters differ. */
+/**
+ * The offer's technical price under one set of assumptions. The rows are the same; what differs is
+ * the model's parameters and, when the agents argued the offer, the five judgement figures.
+ */
 export interface AssumptionPrice {
   /** Whose assumptions: the reference set, one agent's proposal, or the set the agents agreed. */
   id: "reference" | "optimist" | "cautious" | "agreed";
@@ -416,22 +460,62 @@ export interface AssumptionPrice {
   label: string;
   /** True for the set the rest of the focus is priced on. */
   inForce: boolean;
-  /** The parameters themselves. */
+  /** The model's parameters themselves. */
   params: ModelParams;
-  /** Whole offer, gross, in a 1-in-100 flood. null when 100 years is more frequent than anything modelled under this set. */
+  /**
+   * The five judgement figures this set was priced with: this set's own when the agents gave one
+   * for the offer, otherwise the reference values. A figure the underwriter typed replaces that
+   * figure in every set, so the sets stay comparable.
+   */
+  judgement: OfferJudgement;
+  /** True when the agents gave this set its own judgement figures for the offer. */
+  judgementFromAgents: boolean;
+  /** Whole offer, loaded gross loss in a 1-in-100 flood. null when 100 years is more frequent than anything modelled under this set. */
   loss100GrossKes: number | null;
-  /** Whole offer, ground-up, in a 1-in-100 flood. */
+  /** Whole offer, loaded ground-up loss in a 1-in-100 flood. */
   loss100GroundUpKes: number | null;
   /** True when those two are held flat beyond the rarest modelled flood. */
   loss100Extrapolated: boolean;
-  /** Whole offer, gross average annual loss. */
+  /** Whole offer, indicated average annual loss, gross. */
   aalGrossKes: number;
-  /** Whole offer, ground-up average annual loss. */
+  /** Whole offer, indicated average annual loss, ground-up. */
   aalGroundUpKes: number;
-  /** Whole offer, pure rate per mille, gross. */
+  /** Whole offer, indicated pure rate per mille, gross. */
   ratePerMilleGross: number;
-  /** The followed building under this set, one point per return period, most frequent first: for its points on the class curve. */
+  /** Which line set the indicated gross figure under this set: the blended line, or the minimum rate. */
+  setBy: "blended" | "minimum rate";
+  /** The same set read at the stated point alone: the engine's figures, with no surroundings, loadings, loss history or minimum. */
+  atPoint: { loss100GrossKes: number | null; loss100GroundUpKes: number | null; loss100Extrapolated: boolean; aalGrossKes: number; aalGroundUpKes: number; ratePerMilleGross: number };
+  /** The followed building at the stated point under this set, one point per return period, most frequent first: for its points on the class curve. */
   building: { id: string; returnPeriod: number; depthM: number; effectiveDepthM: number; damageRatio: number; capped: boolean; groundUpKes: number; grossKes: number }[];
+}
+
+/** The five judgement figures behind the technical price, and whose they are. */
+export interface FocusJudgement {
+  /** The figures the price is worked out with, inside their allowed ranges. */
+  inForce: OfferJudgement;
+  /**
+   * Whose they are, for the screen to say:
+   *   "reference"  the reference values: no agent has argued this offer, or "Reference, no AI" is on
+   *   "agents"     the set the agents agreed for this offer, while "Agreed by agents" is on
+   *   "typed"      the underwriter typed one or more of the five; the rest are as `base` says
+   */
+  source: "reference" | "agents" | "typed";
+  /** The reference values. */
+  reference: OfferJudgement;
+  /** The set the agents agreed when they ran with this offer. null when they have not. */
+  agreed: OfferJudgement | null;
+  /** What the figures the underwriter has not typed rest on. */
+  base: "reference" | "agents";
+  /** The figures the underwriter typed, as used. Empty when none is typed. */
+  typed: Partial<OfferJudgement>;
+  /**
+   * Whether the agents have argued the five figures:
+   *   "this_offer"     they ran with the offer now on screen: `agreed` is their set when the Chair decided
+   *   "another_offer"  they ran with a different offer, or its facts have changed since: their figures are not used
+   *   "none"           they have not run, or ran with no offer loaded
+   */
+  agents: "this_offer" | "another_offer" | "none";
 }
 
 /** One of the two terms the gross loss was worked out with. */
@@ -487,6 +571,12 @@ export interface FocusSite {
   drainageReachM: number | null;
   /** True when the site's cell lies inside a mapped informal settlement. null when drainage is off or the building is not priced. */
   inInformalSettlement: boolean | null;
+  /**
+   * How much of the ground around the point is wet in the rarest flood modelled, which has the widest
+   * footprint: the share of map cells at each of WET_SHARE_RADII_M, terrain water or drainage
+   * ponding as the view shows it. null when the building is not priced.
+   */
+  mappedWater: { id: string; label: string; returnPeriod: number; within: { radiusM: number; cells: number; wetCells: number; wetShare: number }[] } | null;
   /** The insured buildings of the loaded portfolio around the site. */
   neighbours: {
     /** The radius searched, in metres. */
@@ -510,13 +600,18 @@ export interface FocusPrice {
   scenarios: OfferScenario[];
   /** How many buildings of the offer were priced. */
   pricedCount: number;
-  /** The building the steps follow: the first priced one. */
+  /** The building the steps follow, the first priced one, read at the stated point: the trace from the map cell to the gross loss. */
   building: FocusBuildingPrice;
-  /** Every priced building of the offer added together. With one building it equals `building`. */
+  /**
+   * The headline figures, from the technical price, for every priced building of the offer together:
+   * the loaded loss per return period, and the indicated average annual loss and pure rate.
+   */
   total: LossFigures;
+  /** The same offer read at the stated point alone, as the engine gives it. With one building it equals `building`. */
+  atPoint: LossFigures;
   /** What the offer does to the portfolio. */
   portfolio: FocusPortfolio;
-  /** The offer priced on the reference assumptions, and on the Optimist's, the Cautious and the agreed set once the agents have run. */
+  /** The technical price on the reference assumptions, and on the Optimist's, the Cautious and the agreed set once the agents have run. */
   assumptions: AssumptionPrice[];
 }
 
@@ -590,6 +685,14 @@ export interface OfferFocus {
   terms: FocusTerms;
 
   // --- the price --------------------------------------------------------------------------------
+  /** The five judgement figures behind the technical price, and whose they are. Present whether or not the offer is priced. */
+  judgement: FocusJudgement;
+  /**
+   * The technical price under the assumptions and the judgement in force, line by line: at the
+   * stated point, around the site, with loadings, the loss history, blended, the minimum rate,
+   * indicated. null unless status is "priced": outside the maps, or while a value waits, there is no figure.
+   */
+  technical: TechnicalPrice | null;
   /** Depth, damage, loss, the portfolio effect and the price under each set of assumptions. null unless status is "priced". */
   price: FocusPrice | null;
   /** Distances to rivers and drains, drainage stress and the portfolio around the site. null when the followed building has no location or is outside the maps. */
@@ -615,18 +718,39 @@ export interface OfferFocus {
 }
 
 /** An offer with every loss figure in place. This is what a step receives as `focus` in Offer mode. */
-export type PricedFocus = OfferFocus & { status: "priced"; price: FocusPrice; building: FocusBuilding; site: FocusSite };
+export type PricedFocus = OfferFocus & { status: "priced"; price: FocusPrice; technical: TechnicalPrice; building: FocusBuilding; site: FocusSite };
 
-/** True when the offer is priced: the price, the building and the site facts are all there. */
+/** True when the offer is priced: the price, its build-up, the building and the site facts are all there. */
 export const isPriced = (focus: OfferFocus | null | undefined): focus is PricedFocus =>
-  !!focus && focus.status === "priced" && focus.price !== null && focus.building !== null && focus.site !== null;
+  !!focus && focus.status === "priced" && focus.price !== null && focus.technical !== null && focus.building !== null && focus.site !== null;
 
-/** The two props every step of the walkthrough receives. Add them to a step's Props as they are, both optional. */
+/** The props every step of the walkthrough receives. Add them to a step's Props as they are, all optional. */
 export interface OfferFocusProps {
   /** The priced offer while the header switch is on "Offer". null in Portfolio mode and whenever no offer is priced. */
   focus?: PricedFocus | null;
   /** The offer whatever the switch says, priced or not. null when no offer has been read. */
   offerFocus?: OfferFocus | null;
+  /** The judgement figures in force and whose they are: offerFocus.judgement. null when no offer has been read. */
+  judgement?: FocusJudgement | null;
+  /**
+   * Types over judgement figures. Each figure in `next` replaces what was typed for it before; a
+   * figure left out keeps what was typed; a figure given as undefined goes back to the reference or
+   * the agents' value; an empty object clears everything typed. Code keeps every figure in its range.
+   */
+  onJudgement?: (next: Partial<OfferJudgement>) => void;
+}
+
+/** The agents' judgement on the offer, as the deliberation carries it once they have run with an offer loaded. */
+export interface AgentsJudgement {
+  optimist: OfferJudgement | null;
+  cautious: OfferJudgement | null;
+  final: OfferJudgement | null;
+  /**
+   * The facts of the offer the agents were given. buildOfferFocus compares them with the offer now
+   * on screen (sameOffer) and leaves the agents' figures out when they argued another offer.
+   * Left out, the figures are taken to be for this offer.
+   */
+  brief?: OfferBrief;
 }
 
 /** What buildOfferFocus needs. The walkthrough holds every one of these already. */
@@ -643,8 +767,14 @@ export interface OfferFocusInput {
   policyDefaults: PolicyDefaults;
   /** applyTerms(view.dataset, active.result, terms): the portfolio through the panel's terms, for the gross portfolio comparison. Optional. */
   portfolioTerms?: TermsResult | null;
-  /** The agents' deliberation when there is one. Only the three parameter sets are read. */
-  deliberation: Pick<Deliberation, "optimist" | "cautious" | "final"> | null;
+  /**
+   * The agents' deliberation when there is one. The three parameter sets are read, and
+   * offerJudgement when the agents ran with an offer loaded: its figures are used only when the
+   * brief it carries is for the offer now on screen.
+   */
+  deliberation: (Pick<Deliberation, "optimist" | "cautious" | "final"> & { offerJudgement?: AgentsJudgement | null }) | null;
+  /** Judgement figures the underwriter typed. Each one replaces that figure whoever proposed it; code keeps it in its range. */
+  judgement?: Partial<OfferJudgement>;
   /** The ward map and the waterways once loadGeo has answered: each null when its file is missing. Pass null while they are still loading. */
   layers: { wards: GeoCollection<WardProps> | null; waterways: GeoCollection<WaterwayProps> | null } | null;
 }
@@ -882,6 +1012,136 @@ function priceUnder(dataset: Dataset, params: ModelParams, policy: PolicyTerms, 
 const ASSUMPTION_LABELS: Record<AssumptionPrice["id"], string> = { reference: "Reference, no AI", optimist: "Optimist", cautious: "Cautious", agreed: "Agreed by agents" };
 
 // ---------------------------------------------------------------------------------------------
+// The technical price in the focus
+// ---------------------------------------------------------------------------------------------
+
+/** The drainage grid of a drainage state for a list of scenarios, worked out once: it does not depend on the buildings. */
+const drainageInfoCache = new WeakMap<DrainageState, { scenarios: Dataset["scenarios"]; info: NonNullable<Dataset["drainage"]> }>();
+
+/**
+ * The data set the technical price reads its maps from. Like priceOffer, the drainage argument
+ * alone decides whether ponding is read: drainage the data set arrived with is used when it is
+ * switched on, and dropped when it is not.
+ */
+function mapsFor(dataset: Dataset, drainage: DrainageState | null): Dataset {
+  if (!drainage) return dataset.drainage ? { ...dataset, drainage: undefined } : dataset;
+  if (dataset.drainage) return dataset;
+  let cached = drainageInfoCache.get(drainage);
+  if (!cached || cached.scenarios !== dataset.scenarios) {
+    cached = { scenarios: dataset.scenarios, info: withDrainage({ ...dataset, buildings: [] }, drainage).drainage! };
+    drainageInfoCache.set(drainage, cached);
+  }
+  return { ...dataset, drainage: cached.info };
+}
+
+/** The headline figures of a technical price in the shape every step reads: the loaded curve, and the indicated average annual loss and rates. */
+function technicalFigures(technical: TechnicalPrice): LossFigures {
+  const loaded = lossFigures(technical.tivKes, technical.perReturnPeriod.map((r) => ({ id: r.id, label: r.label, returnPeriod: r.returnPeriod, groundUpKes: r.groundUpKes, grossKes: r.grossKes })));
+  const { indicated } = technical;
+  return { ...loaded, aalGroundUpKes: indicated.aalGroundUpKes, aalGrossKes: indicated.aalGrossKes, ratePerMilleGroundUp: indicated.ratePerMilleGroundUp, ratePerMilleGross: indicated.ratePerMilleGross };
+}
+
+/** The figures the underwriter typed, out of whatever was handed in: finite numbers only. */
+function typedFigures(given: Partial<OfferJudgement> | undefined): Partial<OfferJudgement> {
+  const out: Partial<OfferJudgement> = {};
+  for (const key of JUDGEMENT_KEYS) {
+    const v = given?.[key];
+    if (typeof v === "number" && Number.isFinite(v)) out[key] = v;
+  }
+  return out;
+}
+
+/** One set of judgement figures with the typed ones over it, inside the allowed ranges. */
+const withTyped = (base: OfferJudgement, typed: Partial<OfferJudgement>): OfferJudgement => enforceJudgement({ ...base, ...typed }).judgement;
+
+/**
+ * The judgement in force: the agents' agreed set when they ran with this offer and "Agreed by
+ * agents" is on, otherwise the reference set; anything the underwriter typed goes over either.
+ */
+function judgementOf(input: OfferFocusInput, agents: AgentsJudgement | null, ran: FocusJudgement["agents"]): FocusJudgement {
+  const agreed = agents?.final ? enforceJudgement(agents.final).judgement : null;
+  const base: FocusJudgement["base"] = input.active.source === "ai" && agreed ? "agents" : "reference";
+  const given = typedFigures(input.judgement);
+  const inForce = withTyped(base === "agents" && agreed ? agreed : REFERENCE_JUDGEMENT, given);
+  const typed: Partial<OfferJudgement> = {};
+  for (const key of JUDGEMENT_KEYS) if (key in given) typed[key] = inForce[key];
+  return { inForce, source: Object.keys(typed).length > 0 ? "typed" : base, reference: { ...REFERENCE_JUDGEMENT }, agreed, base, typed, agents: ran };
+}
+
+// ---------------------------------------------------------------------------------------------
+// What the agents are told about the offer
+// ---------------------------------------------------------------------------------------------
+
+/** A sentence as it is sent: one line, cut at the brief's limit. */
+const briefLine = (text: string | null | undefined): string => (text ?? "").replace(/\s+/g, " ").trim().slice(0, BRIEF_QUOTE_MAX_CHARS);
+
+/** The part of the brief that comes from the document and the location alone: it does not change with the flood source or the assumptions. */
+type BriefFacts = Pick<OfferBrief, "housingClass" | "insuredValueKes" | "basements" | "criticalPlantInBasement" | "drainageCondition" | "floodLossCount" | "floodLossTotalKes" | "floodHistoryYears" | "nearestRiverM" | "nearestDrainM" | "quotes">;
+
+function briefFacts(extraction: OfferExtraction, building: FocusBuilding | null, site: FocusSite | null): BriefFacts {
+  const facts = floodFactsOf(extraction);
+  const history = statedFloodHistory(extraction);
+  // Only sentences already shown on screen, and only those behind a usable value.
+  const candidates: [string, string | undefined][] = [
+    ["basements", facts.basementsQuote],
+    ["basement plant", facts.criticalPlantQuote],
+    ["drainage", facts.drainageQuote || usableNotes(extraction, "drainage_condition")[0]?.quote],
+    ...usableNotes(extraction, "past_flood").slice(0, 2).map((n): [string, string] => ["past flood", n.quote]),
+    ["loss history", history.yearsQuote],
+    ...history.losses.slice(0, 2).map((l): [string, string] => ["flood loss", l.quote]),
+    ["river", site?.river.quote],
+  ];
+  const quotes: OfferBrief["quotes"] = [];
+  for (const [about, text] of candidates) {
+    const quote = briefLine(text);
+    if (quote && !quotes.some((q) => q.quote === quote) && quotes.length < BRIEF_MAX_QUOTES) quotes.push({ about, quote });
+  }
+  return {
+    housingClass: building?.housingClass ?? null,
+    insuredValueKes: building?.tivKes ?? null,
+    basements: facts.basements,
+    criticalPlantInBasement: facts.criticalPlantInBasement,
+    drainageCondition: briefLine(facts.drainageCondition) || null,
+    floodLossCount: history.losses.length,
+    floodLossTotalKes: history.losses.length > 0 ? history.losses.reduce((t, l) => t + l.amountKes, 0) : null,
+    floodHistoryYears: history.years,
+    nearestRiverM: site?.river.nearest?.distanceM ?? null,
+    nearestDrainM: site?.drain?.distanceM ?? null,
+    quotes,
+  };
+}
+
+/**
+ * True when two briefs describe the same offer: the same building, the same story in the document
+ * and the same place. What the maps show at the point is left out of the comparison, because it
+ * moves with the flood source switch and not with the offer.
+ */
+export function sameOffer(a: BriefFacts, b: BriefFacts): boolean {
+  const whole = (v: number | null) => (v === null ? null : Math.round(v));
+  const key = (x: BriefFacts) =>
+    JSON.stringify([x.housingClass, whole(x.insuredValueKes), x.basements, x.criticalPlantInBasement, x.drainageCondition, x.floodLossCount, whole(x.floodLossTotalKes), x.floodHistoryYears, whole(x.nearestRiverM), whole(x.nearestDrainM), x.quotes.map((q) => q.quote)]);
+  return key(a) === key(b);
+}
+
+/**
+ * What the agents are told about the offer when they run with one loaded: plain facts worked out
+ * by code, and the few short sentences of the document already quoted on screen. No name, no
+ * address and no other text of the document. Anything not known is null.
+ */
+export function offerBrief(focus: OfferFocus): OfferBrief {
+  const trace = focus.price?.building.perReturnPeriod ?? [];
+  // The rarest flood modelled has the widest footprint.
+  const widest = trace[trace.length - 1];
+  const within = (radiusM: number) => focus.site?.mappedWater?.within.find((w) => w.radiusM === radiusM)?.wetShare ?? null;
+  return {
+    ...briefFacts(focus.extraction, focus.building, focus.site),
+    pointDryByTier: trace.map((r) => ({ tier: r.id, dry: !(r.depthM > 0) })),
+    nearestMappedWaterM: widest ? (widest.depthM > 0 || widest.hazard > 0 ? 0 : widest.nearestWetM) : null,
+    wetShareWidestTier: { within100m: within(100), within250m: within(250), within500m: within(500) },
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
 // The portfolio around the offer
 // ---------------------------------------------------------------------------------------------
 
@@ -925,10 +1185,18 @@ function classRangeOf(building: FocusBuilding, dataset: Dataset): ClassRange | n
   };
 }
 
-function siteOf(building: FocusBuilding, input: OfferFocusInput, extraction: OfferExtraction, priced: PricedRow | null): FocusSite | null {
+function siteOf(building: FocusBuilding, input: OfferFocusInput, extraction: OfferExtraction, priced: PricedRow | null, maps: Dataset): FocusSite | null {
   if (building.lat === null || building.lon === null || building.status === "outside") return null;
   const point = { lat: building.lat, lon: building.lon };
   const { dataset } = input.session;
+
+  // Wet ground around the point in the rarest flood modelled: the last of the priced row's scenarios.
+  let mappedWater: FocusSite["mappedWater"] = null;
+  const rarest = priced?.scenarios[priced.scenarios.length - 1];
+  if (rarest) {
+    const within = wetShareAround(maps, point.lon, point.lat, maps.scenarios.findIndex((s) => s.id === rarest.id), WET_SHARE_RADII_M);
+    if (within) mappedWater = { id: rarest.id, label: rarest.label, returnPeriod: rarest.returnPeriod, within };
+  }
   const waterways = input.layers?.waterways ?? null;
   const wards = input.layers?.wards ?? null;
 
@@ -987,6 +1255,7 @@ function siteOf(building: FocusBuilding, input: OfferFocusInput, extraction: Off
     drainageStress,
     drainageReachM: input.drainage ? DRAINAGE_DEFAULTS.reachM : null,
     inInformalSettlement,
+    mappedWater,
     neighbours: { radiusM: NEIGHBOUR_RADIUS_M, count: inside.length, tivKes: inside.reduce((t, n) => t + n.tivKes, 0), nearestM: near[0]?.m ?? null, indices: inside.map((n) => n.index) },
     wardPortfolio,
   };
@@ -994,13 +1263,25 @@ function siteOf(building: FocusBuilding, input: OfferFocusInput, extraction: Off
 
 const share = (change: number | null, base: number | null): number | null => (change !== null && base !== null && base > 0 ? change / base : null);
 
-function portfolioOf(input: OfferFocusInput, pricing: OfferPricing, total: LossFigures, building: FocusBuilding, housingClass: HousingClass): FocusPortfolio {
+function portfolioOf(input: OfferFocusInput, pricing: OfferPricing, total: LossFigures, technical: TechnicalPrice, building: FocusBuilding, housingClass: HousingClass): FocusPortfolio {
   const { dataset } = input.session;
   const { result } = input.active;
   const effect = pricing.portfolio!;
   const a = effect.without;
-  const b = effect.with;
-  const loss100ChangeKes = a.loss100Kes !== null && b.loss100Kes !== null ? b.loss100Kes - a.loss100Kes : null;
+  // The engine's own "with": the offer read at the stated point alone.
+  const point = effect.with;
+  // The offer's loaded loss on top of the portfolio's own, return period by return period. Reading a
+  // curve at a return period and taking the area under it are both sums over its points, so the
+  // portfolio's figure plus the offer's is exactly the figure of the two curves added together.
+  const loaded100 = total.loss100GroundUpKes;
+  const b: PortfolioFigures = {
+    buildings: point.buildings,
+    totalTivKes: point.totalTivKes,
+    loss100Kes: a.loss100Kes !== null && loaded100 !== null ? a.loss100Kes + loaded100 : null,
+    loss100Extrapolated: a.loss100Extrapolated,
+    aalKes: a.aalKes + technical.model.aalGroundUpKes,
+  };
+  const loss100ChangeKes = a.loss100Kes !== null && loaded100 !== null ? loaded100 : null;
   const largestTivKes = dataset.buildings.reduce((m, x) => Math.max(m, x.tivKes), 0);
   const sameAsPortfolioView = Math.abs(a.aalKes - result.aalKes) <= 1e-6 * Math.max(1, result.aalKes) && a.buildings === result.buildingCount;
 
@@ -1035,8 +1316,9 @@ function portfolioOf(input: OfferFocusInput, pricing: OfferPricing, total: LossF
     sameAsPortfolioView,
     loss100ChangeKes,
     loss100ChangeShare: share(loss100ChangeKes, a.loss100Kes),
-    aalChangeKes: b.aalKes - a.aalKes,
-    aalChangeShare: share(b.aalKes - a.aalKes, a.aalKes),
+    aalChangeKes: technical.model.aalGroundUpKes,
+    aalChangeShare: share(technical.model.aalGroundUpKes, a.aalKes),
+    atPoint: { loss100ChangeKes: a.loss100Kes !== null && point.loss100Kes !== null ? point.loss100Kes - a.loss100Kes : null, aalChangeKes: point.aalKes - a.aalKes },
     tivShare: b.totalTivKes > 0 ? total.tivKes / b.totalTivKes : 0,
     largestTivKes,
     timesLargest: largestTivKes > 0 ? total.tivKes / largestTivKes : null,
@@ -1054,17 +1336,8 @@ const figure = (text: string): FlagEvidence => ({ kind: "figure", text });
 const quoteOr = (quote: string | undefined, fallback: string): FlagEvidence => (quote?.trim() ? { kind: "quote", text: quote.trim() } : figure(fallback));
 const depthText = (m: number) => (m >= 0.005 ? `${fmtNum(m, 2)} m` : m > 0 ? "under 0.01 m" : "dry");
 
-/**
- * Words in a note on the drains that say they are in a poor state. A plain word test, so it can
- * miss a report or catch a harmless one: the note's own sentence is always shown as the evidence.
- */
-const POOR_DRAINS = /\b(block(ed|age|ages)?|clog(ged|s)?|silt(ed|ation)?|poor(ly)?|inadequate|insufficient|overflow(s|ed|ing)?|back(s|ed|ing)? up|undersized|broken|collapsed|damaged|choked|no (storm ?water )?drain(s|age)?)\b/i;
-const DRAINS_FINE = /\b(not|never|no longer|without|free of|free from|cleared of)\s+(\w+\s+){0,2}(block|clog|silt|overflow|back)/i;
-
-const usableNotes = (extraction: OfferExtraction, kind: OfferExtraction["notes"][number]["kind"]) => extraction.notes.filter((n) => n.kind === kind && usableValue(n) !== null);
-
 /** A check that did not pass, retitled as a point to weigh and given the sentence or figure behind it. */
-function checkAsFlag(check: Check, extraction: OfferExtraction, rows: PricingRow[], pricing: OfferPricing, counts: Record<ValueStatus, number>): CheckInput {
+function checkAsFlag(check: Check, extraction: OfferExtraction, rows: PricingRow[], pricing: OfferPricing, counts: Record<ValueStatus, number>, technical: TechnicalPrice | null): CheckInput {
   const [base, locId] = check.id.split(":");
   const row = rows.find((r) => r.locId === locId) ?? rows[0];
   const source = row ? extraction.rows[row.index] : undefined;
@@ -1093,7 +1366,8 @@ function checkAsFlag(check: Check, extraction: OfferExtraction, rows: PricingRow
         ? "Value per m² is above the portfolio's range for its class"
         : "Value per m² could not be compared with the portfolio";
   } else if (base === "offer-basements") {
-    title = "Basements are not in the modelled loss";
+    // Water entering a basement is still not modelled. The price answers it with a loading, which is an assumption.
+    title = technical?.loadings.applied.some((l) => l.id !== "drainage") ? "Basements are not modelled: the price carries a loading for them" : "Basements are not in the modelled loss";
     evidence = quoteOr(extraction.terms.basements.quote || usableNotes(extraction, "basement_plant")[0]?.quote, check.detail);
   } else if (base === "offer-flood-history") {
     title = "Flood history and the hazard maps disagree";
@@ -1105,11 +1379,15 @@ function checkAsFlag(check: Check, extraction: OfferExtraction, rows: PricingRow
   return { id: check.id, status: check.status, title, detail: check.detail, evidence };
 }
 
-function ownFlags(input: OfferFocusInput, extraction: OfferExtraction, terms: FocusTerms, building: FocusBuilding, price: FocusPrice): Flag[] {
+function ownFlags(input: OfferFocusInput, extraction: OfferExtraction, terms: FocusTerms, building: FocusBuilding, price: FocusPrice, technical: TechnicalPrice, facts: FloodFacts): Flag[] {
   const flags: Flag[] = [];
   const add = (id: string, severity: Severity, title: string, detail: string, evidence: FlagEvidence) => flags.push({ id, severity, title, detail, evidence });
   const b = price.building;
   const { total, portfolio } = price;
+  const { aroundSite, indicated, experience } = technical;
+  const perMille = (v: number) => `${fmtNum(v, v !== 0 && Math.abs(v) < 0.1 ? 4 : 2)} per mille`;
+  const loadingFor = (id: TechnicalPrice["loadings"]["applied"][number]["id"]) => technical.loadings.applied.find((l) => l.id === id);
+  const loadingText = (share: number) => ` The price carries a loading of +${fmtPct(share, 0)} on the flood loss for it, which is an assumption.`;
   const isScore = input.session.dataset.hazardKind === "score";
   const depths = b.perReturnPeriod.map((r) => `${rpLabel(r.returnPeriod)} ${depthText(r.depthM)}`).join(", ");
 
@@ -1123,17 +1401,43 @@ function ownFlags(input: OfferFocusInput, extraction: OfferExtraction, terms: Fo
       `The depth used at the building is above zero from the ${rpLabel(b.firstWetReturnPeriod)} flood onwards. A flood of ${rpLabel(FREQUENT_FLOOD_RP)} or more frequent is marked high.`,
       figure(`Depth used at the building: ${depths}.`),
     );
+  } else if (aroundSite.perReturnPeriod.some((r) => r.wetCells > 0)) {
+    // Dry at the stated point, but the radius read around it holds mapped water: that water is in the price.
+    const widest = aroundSite.perReturnPeriod.reduce((m, r) => (r.wetCells > m.wetCells ? r : m));
+    add(
+      "dry-point-wet-nearby",
+      "medium",
+      `Dry at the stated point, but mapped flood water lies within ${fmtInt(aroundSite.radiusM)} m`,
+      "Read at the stated point alone, the maps give no loss. The price counts the water around the site in proportion to the ground it covers, so a small error in the coordinates does not decide the answer.",
+      figure(
+        `${fmtInt(widest.wetCells)} of the ${fmtInt(aroundSite.cells)} map cells within ${fmtInt(aroundSite.radiusM)} m are wet in the ${rpLabel(widest.returnPeriod)} flood (${fmtPct(widest.wetShare, 1)})${b.nearestWetM !== null ? `, the nearest ${fmtDistance(b.nearestWetM)} from the point` : ""}. Average annual loss around the site, ground-up and before loadings: ${kes1(aroundSite.aalGroundUpKes)}, against ${kes1(technical.atPoint.aalGroundUpKes)} at the stated point.`,
+      ),
+    );
   } else if (b.nearestWetM !== null && b.nearestWetM <= NEAR_WET_CELL_M) {
     add(
       "near-water",
       "medium",
       `Dry on every map, but ${fmtDistance(b.nearestWetM)} from mapped flood water`,
-      "The model gives no loss at this exact point. A small error in the coordinates, or in the map, would change that.",
+      `The maps are dry at the stated point and across the ${fmtInt(aroundSite.radiusM)} m read around it, so this water is not in the price. A small error in the coordinates, or in the map, would change that.`,
       figure(`Nearest wet cell on any terrain map: ${fmtDistance(b.nearestWetM)} from the point (${building.approximate ? "approximate location" : "stated coordinates"}).`),
     );
   }
 
-  // The size of the 1-in-100 loss against the sum insured.
+  // The price itself: when nothing the maps or the document give reaches the minimum, the minimum is the price.
+  if (indicated.setBy === "minimum rate") {
+    const blended = technical.buildUp.find((l) => l.id === "blended");
+    add(
+      "minimum-rate",
+      "medium",
+      "The indicated rate is the minimum rate, not a modelled loss",
+      "What the maps and the document give comes to less than the minimum pure rate, so the minimum is the price. It is an assumption that no risk inside the mapped area is priced at zero, not a measurement of this risk.",
+      figure(
+        `Blended gross average annual loss ${kes1(blended?.aalGrossKes ?? 0)} (${perMille(blended?.ratePerMilleGross ?? 0)}), against the minimum of ${perMille(technical.judgement.minimumRatePerMille)}: ${kes1(indicated.aalGrossKes)} a year on a sum insured of ${kes1(technical.tivKes)}.`,
+      ),
+    );
+  }
+
+  // The size of the loaded 1-in-100 loss against the sum insured.
   if (total.loss100GrossKes !== null && total.tivKes > 0) {
     const lossShare = total.loss100GrossKes / total.tivKes;
     if (lossShare >= DEDUCTIBLE_LOSS_SHARE) {
@@ -1179,21 +1483,33 @@ function ownFlags(input: OfferFocusInput, extraction: OfferExtraction, terms: Fo
   // What the document itself reports.
   const plant = usableNotes(extraction, "basement_plant")[0];
   if (plant) {
+    const loading = loadingFor("basement_plant");
     add(
       "critical-plant",
       b.dryAtEveryReturnPeriod ? "medium" : "high",
       "Critical plant is kept below ground",
-      `Water entering a basement is not modelled, so damage to this plant is not in any figure here.${b.dryAtEveryReturnPeriod ? "" : " The maps show water at the building."}`,
+      `Water entering a basement is not modelled.${loading ? loadingText(loading.share) : ""}${b.dryAtEveryReturnPeriod ? "" : " The maps show water at the building."}`,
       quoteOr(plant.quote, plant.value ?? NOTE_LABELS.basement_plant),
     );
   }
   const past = usableNotes(extraction, "past_flood")[0];
-  if (past) add("past-flood-loss", "medium", "The document reports a past flood or water damage", "A site that has flooded before is likely to flood again. Ask for the loss history.", quoteOr(past.quote, past.value ?? NOTE_LABELS.past_flood));
-  const drains = usableNotes(extraction, "drainage_condition").find((n) => {
-    const words = `${n.value ?? ""} ${n.quote}`;
-    return POOR_DRAINS.test(words) && !DRAINS_FINE.test(words);
-  });
-  if (drains) add("drainage-condition", "medium", "The document reports poor drainage at the site", "Blocked or undersized drains flood a site that the terrain maps show as dry.", quoteOr(drains.quote, drains.value ?? NOTE_LABELS.drainage_condition));
+  if (past) {
+    const inPrice =
+      experience.usable && experience.burningCostKes !== null
+        ? `The stated losses are in the price: ${kes1(experience.burningCostKes)} a year, given a weight of ${fmtPct(experience.weight, 0)}.`
+        : `Its losses are not in the price. ${experience.why ?? ""} Ask for the loss history: with the years it covers and the amounts paid, code blends it in.`;
+    add("past-flood-loss", "medium", "The document reports a past flood or water damage", `A site that has flooded before is likely to flood again. ${inPrice}`, quoteOr(past.quote, past.value ?? NOTE_LABELS.past_flood));
+  }
+  if (facts.drainagePoor) {
+    const loading = loadingFor("drainage");
+    add(
+      "drainage-condition",
+      "medium",
+      "The document reports poor drainage at the site",
+      `Blocked or undersized drains flood a site that the terrain maps show as dry.${loading ? loadingText(loading.share) : ""}`,
+      quoteOr(facts.drainageQuote, facts.drainageCondition ?? NOTE_LABELS.drainage_condition),
+    );
+  }
   if (terms.floodCover === "excluded") {
     add("flood-excluded", "medium", "The document asks for flood to be excluded", "The figures here are what flood would cost if it were covered.", quoteOr(extraction.terms.floodCover.quote, "Flood cover: excluded."));
   }
@@ -1244,8 +1560,8 @@ function ownFlags(input: OfferFocusInput, extraction: OfferExtraction, terms: Fo
       "assumption-spread",
       "medium",
       "The price rests heavily on the assumptions",
-      `The Cautious agent's assumptions give ${optimist.aalGrossKes > 0 ? `${fmtNum(cautious.aalGrossKes / optimist.aalGrossKes, 1)} times` : "a loss where"} the Optimist's ${optimist.aalGrossKes > 0 ? "average annual loss" : "give none"} for the same building.`,
-      figure(`Gross average annual loss: ${price.assumptions.map((a) => `${a.label} ${kes1(a.aalGrossKes)}`).join(", ")}.`),
+      `The Cautious agent's assumptions give ${optimist.aalGrossKes > 0 ? `${fmtNum(cautious.aalGrossKes / optimist.aalGrossKes, 1)} times` : "a loss where"} the Optimist's ${optimist.aalGrossKes > 0 ? "indicated average annual loss" : "give none"} for the same building.`,
+      figure(`Indicated average annual loss, gross: ${price.assumptions.map((a) => `${a.label} ${kes1(a.aalGrossKes)}`).join(", ")}.`),
     );
   }
   return flags;
@@ -1320,6 +1636,8 @@ export function buildOfferFocus(input: OfferFocusInput): OfferFocus | null {
       buildings: [],
       building: null,
       severalLine: null,
+      judgement: judgementOf(input, null, "none"),
+      technical: null,
       price: null,
       site: null,
       checks: [],
@@ -1345,7 +1663,7 @@ export function buildOfferFocus(input: OfferFocusInput): OfferFocus | null {
   // A row with a location that is not "outside" is inside the maps, priced or not: outside is tested first.
   const anyInside = buildings.some((b) => b.status !== "outside" && b.lat !== null);
   const outside = buildings.some((b) => b.status === "outside") && !anyInside;
-  const status: OfferFocus["status"] = outside ? "outside" : held ? "waiting" : pricedRows.length > 0 && pricing.totals ? "priced" : "not_ready";
+  let status: OfferFocus["status"] = outside ? "outside" : held ? "waiting" : pricedRows.length > 0 && pricing.totals ? "priced" : "not_ready";
 
   const followed = (status === "priced" ? buildings.find((b) => b.status === "priced") : outside ? buildings.find((b) => b.status === "outside") : undefined) ?? buildings[0] ?? null;
   const followedPriced = followed ? (pricedRows.find((r) => r.locId === followed.locId) ?? null) : null;
@@ -1354,8 +1672,34 @@ export function buildOfferFocus(input: OfferFocusInput): OfferFocus | null {
       ? `This offer lists ${plural(buildings.length, "building")}. The steps follow ${followed.name}${status === "priced" ? `, the first of the ${fmtInt(pricedRows.length)} priced; the totals cover all of them` : ""}.`
       : null;
 
+  // Where the building is does not wait for the price, and the agents' brief is compared against it.
+  const maps = mapsFor(dataset, input.drainage);
+  const site = followed ? siteOf(followed, input, extraction, followedPriced, maps) : null;
+
+  // The judgement in force. The agents' figures count only when they argued the offer now on screen.
+  const argued = input.deliberation?.offerJudgement ?? null;
+  const ran: FocusJudgement["agents"] = !argued ? "none" : !argued.brief || sameOffer(argued.brief, briefFacts(extraction, followed, site)) ? "this_offer" : "another_offer";
+  const agents = ran === "this_offer" ? argued : null;
+  const judgement = judgementOf(input, agents, ran);
+  const floodFacts = floodFactsOf(extraction);
+
+  // The technical price: the maps around the site, the document's story and its loss history, by code.
+  let technical: TechnicalPrice | null = null;
+  let priceWith: ((params: ModelParams, figures: OfferJudgement) => TechnicalPrice | null) | null = null;
+  if (status === "priced" && followedPriced) {
+    const history = statedFloodHistory(extraction);
+    // A priced row always has a location. Were one without, it has no point to read and no figure is given.
+    const asBuilding = (r: PricedRow): TechnicalBuilding => ({ lon: r.location.kind === "none" ? Number.NaN : r.location.lon, lat: r.location.kind === "none" ? Number.NaN : r.location.lat, housingClass: r.housingClass, tivKes: r.tivKes });
+    const building = asBuilding(followedPriced);
+    const others = pricedRows.filter((r) => r !== followedPriced).map(asBuilding);
+    priceWith = (params, figures) => technicalPrice({ dataset: maps, params, building, others, terms: policy, history, facts: floodFacts, judgement: figures });
+    technical = priceWith(input.active.params, judgement.inForce);
+    // The engine has already found every building inside every map, so this does not happen. Were it to, no figure is shown.
+    if (!technical) status = "not_ready";
+  }
+
   let price: FocusPrice | null = null;
-  if (status === "priced" && followed && followedPriced && pricing.totals) {
+  if (status === "priced" && followed && followedPriced && pricing.totals && technical && priceWith) {
     const follow = pricedRows.indexOf(followedPriced);
     const tivs = pricedRows.map((r) => r.tivKes);
     const params = input.active.params;
@@ -1398,32 +1742,50 @@ export function buildOfferFocus(input: OfferFocusInput): OfferFocus | null {
       firstWetReturnPeriod: firstWet?.returnPeriod ?? null,
       nearestWetM: wetDistances.length > 0 ? Math.min(...wetDistances) : null,
     };
-    const total = lossFigures(pricing.totals.tivKes, pricing.totals.scenarios);
+    // At the stated point the figures are the engine's own. The headline figures are the technical price's.
+    const atPoint = lossFigures(pricing.totals.tivKes, pricing.totals.scenarios);
+    const total = technicalFigures(technical);
 
-    // The same rows under each set of assumptions. The set in force takes the engine's own figures.
+    // The same rows under each set of assumptions: that set's parameters, and its own judgement
+    // figures when the agents argued this offer. What the underwriter typed goes over every set.
     const d = input.deliberation;
-    const sets: { id: AssumptionPrice["id"]; params: ModelParams }[] = [
-      { id: "reference", params: REFERENCE_PARAMS },
-      ...(d?.optimist ? [{ id: "optimist" as const, params: d.optimist.params }] : []),
-      ...(d?.cautious ? [{ id: "cautious" as const, params: d.cautious.params }] : []),
-      ...(d?.final ? [{ id: "agreed" as const, params: d.final.params }] : []),
+    const sets: { id: AssumptionPrice["id"]; params: ModelParams; own: OfferJudgement | null }[] = [
+      { id: "reference", params: REFERENCE_PARAMS, own: null },
+      ...(d?.optimist ? [{ id: "optimist" as const, params: d.optimist.params, own: agents?.optimist ?? null }] : []),
+      ...(d?.cautious ? [{ id: "cautious" as const, params: d.cautious.params, own: agents?.cautious ?? null }] : []),
+      ...(d?.final ? [{ id: "agreed" as const, params: d.final.params, own: agents?.final ?? null }] : []),
     ];
     const inForceId: AssumptionPrice["id"] = input.active.source === "ai" && d?.final ? "agreed" : "reference";
     const assumptions = sets.map((set): AssumptionPrice => {
       const inForce = set.id === inForceId;
+      // The set in force takes the figures already worked out: the engine's at the point, and the technical price above.
       const under = priceUnder(dataset, set.params, policy, pricedRows, follow);
-      const figures = inForce ? total : under.total;
+      const figures = inForce ? judgement.inForce : withTyped(set.own ? enforceJudgement(set.own).judgement : REFERENCE_JUDGEMENT, judgement.typed);
+      const priced = inForce ? technical! : (priceWith!(set.params, figures) ?? technical!);
+      const headline = inForce ? total : technicalFigures(priced);
+      const point = inForce ? atPoint : under.total;
       return {
         id: set.id,
         label: ASSUMPTION_LABELS[set.id],
         inForce,
         params: set.params,
-        loss100GrossKes: figures.loss100GrossKes,
-        loss100GroundUpKes: figures.loss100GroundUpKes,
-        loss100Extrapolated: figures.loss100Extrapolated,
-        aalGrossKes: figures.aalGrossKes,
-        aalGroundUpKes: figures.aalGroundUpKes,
-        ratePerMilleGross: figures.ratePerMilleGross,
+        judgement: figures,
+        judgementFromAgents: set.own !== null,
+        loss100GrossKes: headline.loss100GrossKes,
+        loss100GroundUpKes: headline.loss100GroundUpKes,
+        loss100Extrapolated: headline.loss100Extrapolated,
+        aalGrossKes: headline.aalGrossKes,
+        aalGroundUpKes: headline.aalGroundUpKes,
+        ratePerMilleGross: headline.ratePerMilleGross,
+        setBy: priced.indicated.setBy,
+        atPoint: {
+          loss100GrossKes: point.loss100GrossKes,
+          loss100GroundUpKes: point.loss100GroundUpKes,
+          loss100Extrapolated: point.loss100Extrapolated,
+          aalGrossKes: point.aalGrossKes,
+          aalGroundUpKes: point.aalGroundUpKes,
+          ratePerMilleGross: point.ratePerMilleGross,
+        },
         building: under.building,
       };
     });
@@ -1433,14 +1795,15 @@ export function buildOfferFocus(input: OfferFocusInput): OfferFocus | null {
       pricedCount: pricedRows.length,
       building,
       total,
-      portfolio: portfolioOf(input, pricing, total, followed, cls),
+      atPoint,
+      portfolio: portfolioOf(input, pricing, total, technical, followed, cls),
       assumptions,
     };
   }
+  if (!price) technical = null;
 
-  const site = followed ? siteOf(followed, input, extraction, followedPriced) : null;
-  const fromChecks = checks.filter((c) => c.status !== "pass").map((c) => checkAsFlag(c, extraction, rows, pricing, counts));
-  const flags = flagsFromChecks(fromChecks, price && followed ? ownFlags(input, extraction, terms, followed, price) : []);
+  const fromChecks = checks.filter((c) => c.status !== "pass").map((c) => checkAsFlag(c, extraction, rows, pricing, counts, technical));
+  const flags = flagsFromChecks(fromChecks, price && followed && technical ? ownFlags(input, extraction, terms, followed, price, technical, floodFacts) : []);
   const facts = factsOf(extraction, counts, followed, price, flags);
 
   const statusLine =
@@ -1450,7 +1813,7 @@ export function buildOfferFocus(input: OfferFocusInput): OfferFocus | null {
         ? `Pricing is waiting for ${plural(waiting.length, "value")}: ${waiting.map((w) => `${w.where.toLowerCase()}, ${w.label.toLowerCase()}`).join("; ")}.`
         : status === "priced"
           ? "Priced by code on the hazard maps loaded."
-          : `Not priced yet. ${buildings.flatMap((b) => b.blockers).join(" ") || "The offer lists no building."}`;
+          : `Not priced yet. ${buildings.flatMap((b) => b.blockers).join(" ") || (buildings.length > 0 ? "The hazard maps could not be read around the building." : "The offer lists no building.")}`;
 
   return {
     ...common,
@@ -1462,6 +1825,8 @@ export function buildOfferFocus(input: OfferFocusInput): OfferFocus | null {
     buildings,
     building: followed,
     severalLine,
+    judgement,
+    technical,
     price,
     site,
     checks,

@@ -4,11 +4,26 @@ import { motion } from "motion/react";
 import { useMemo, useState } from "react";
 import type { Check } from "@/lib/checks";
 import { fmtInt, fmtKes, fmtNum, fmtPct } from "@/lib/format";
+import { annualChance, kes1, rpLabel, rpWithChance } from "@/lib/labels";
+import type { InsuranceTerms, TermsResult } from "@/lib/model/terms";
 import { HOUSING_LABELS } from "@/lib/model/types";
 import type { Active, Session } from "@/lib/session";
+import { ChartFrame, SourceLine, type ChartSource } from "../charts/ChartFrame";
+import { Waterfall, type WaterfallStep } from "../charts/Waterfall";
+import { TermsPanel } from "../TermsPanel";
 import { Card, CheckList, ChecksSummary, Segmented, StepHeader, Tag } from "../ui";
 
-export function LossStep({ session, active, checks }: { session: Session; active: Active; checks: Check[] }) {
+interface Props {
+  session: Session;
+  active: Active;
+  /** The checks on the arithmetic, the checks on the insurance terms among them. */
+  checks: Check[];
+  /** The insurance terms in force and what they do to every event. */
+  terms: TermsResult;
+  onTermsChange: (t: InsuranceTerms) => void;
+}
+
+export function LossStep({ session, active, checks, terms, onTermsChange }: Props) {
   const { dataset } = session;
   const r = active.result;
   const isScore = dataset.hazardKind === "score";
@@ -28,50 +43,77 @@ export function LossStep({ session, active, checks }: { session: Session; active
   const t = r.buildings[traceIndex]?.perScenario[k];
   const s = r.scenarios[k];
 
+  // How the terms act, event by event. The chart opens on the event nearest 1-in-100.
+  const layers = terms.scenarios;
+  const anyOverLimit = layers.some((row) => row.overLimitKes > 0);
+  const nearest100 = layers.reduce((best, row, i) => (Math.abs(Math.log(row.returnPeriod / 100)) < Math.abs(Math.log(layers[best].returnPeriod / 100)) ? i : best), 0);
+  const [event, setEvent] = useState<string | null>(null);
+  const layer = layers.find((row) => row.id === event) ?? layers[nearest100];
+  const steps: WaterfallStep[] = layer
+    ? [
+        { label: "Ground-up", value: layer.groundUpKes, kind: "total" },
+        { label: "Minus deductibles", value: layer.deductiblesKes, kind: "decrease" },
+        ...(layer.overLimitKes > 0 ? [{ label: "Minus over limit", value: layer.overLimitKes, kind: "decrease" as const }] : []),
+        { label: "Gross", value: layer.grossKes, kind: "total" },
+        { label: "Minus quota share", value: layer.quotaShareKes, kind: "decrease" },
+        { label: "Minus excess of loss", value: layer.xolKes, kind: "decrease" },
+        { label: "Net", value: layer.netKes, kind: "total" },
+      ]
+    : [];
+  const waterfallTitle = layer ? `From ground-up loss to net loss in a ${rpLabel(layer.returnPeriod)} event` : "";
+  const termsSources: ChartSource[] = [
+    { kind: "synthetic", text: "Portfolio of insured buildings and their insured values" },
+    { kind: "assumption", text: "Insurance terms: example terms, not from any real policy or treaty" },
+    { kind: isScore ? "assumption" : "real", text: isScore ? "Return periods attached to the hazard tiers" : "Return periods carried by the hazard maps" },
+  ];
+
   return (
     <div>
       <StepHeader kicker="Step 5" title="Loss engine">
-        For every building and every scenario: hazard value, to depth, to damage ratio, times insured value. The scenario loss is the sum. Nothing here is estimated by a model; it is arithmetic you can follow by hand.
+        For every building and every scenario: hazard value, to depth, to damage ratio, times insured value. The scenario loss is the sum. The insurance terms then turn that ground-up loss into the gross loss the insurer pays and the net loss it keeps. Nothing here is estimated by a model; it is arithmetic you can follow by hand.
       </StepHeader>
 
-      <Card title="Loss by scenario" aside={<Tag kind="synthetic">Synthetic portfolio</Tag>}>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-160 text-sm">
-            <thead className="text-xs text-muted">
-              <tr>
-                <th className="pb-2 text-left font-medium">Return period</th>
-                <th className="pb-2 text-left font-medium">Scenario</th>
-                <th className="pb-2 text-right font-medium">Buildings affected</th>
-                <th className="pb-2 text-right font-medium">Value in affected cells</th>
-                <th className="pb-2 text-right font-medium">Loss</th>
-                <th className="w-[26%] pb-2 pl-4 text-left font-medium">Share of total insured value</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line">
-              {r.scenarios.map((sc, i) => (
-                <tr key={sc.id}>
-                  <td className="tabular py-2.5 font-medium text-ink">1 in {sc.returnPeriod}</td>
-                  <td className="py-2.5 text-ink-2">{sc.id}</td>
-                  <td className="tabular py-2.5 text-right text-ink-2">{fmtInt(sc.affected)}</td>
-                  <td className="tabular py-2.5 text-right text-ink-2">{fmtKes(sc.tivExposedKes)}</td>
-                  <td className="tabular py-2.5 text-right font-semibold text-ink">{fmtKes(sc.lossKes, 2)}</td>
-                  <td className="py-2.5 pl-4">
-                    <div className="flex items-center gap-2">
-                      <div className="h-2 flex-1 rounded-r-full bg-surface-2">
-                        <motion.div className="h-2 rounded-r-full" style={{ background: "var(--accent)" }} initial={{ width: 0 }} animate={{ width: `${(sc.lossKes / maxLoss) * 100}%` }} transition={{ duration: 0.7, delay: 0.15 * i, ease: "easeOut" }} />
-                      </div>
-                      <span className="tabular w-14 text-right text-xs text-ink-2">{fmtPct(sc.lossKes / r.totalTivKes, 2)}</span>
-                    </div>
-                  </td>
+      {/* Each card takes the full width, in the order the arithmetic runs: ground-up loss, one building followed
+          through, the insurance terms, what they do to every event, then the checks. On a wide step the worked
+          building becomes one row of stages and the checks run down two columns. */}
+      <div className="grid gap-4">
+        <Card title="Ground-up loss by scenario" aside={<Tag kind="synthetic">Synthetic portfolio</Tag>}>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-160 text-sm">
+              <thead className="text-xs text-muted">
+                <tr>
+                  <th className="pb-2 text-left font-medium">Return period</th>
+                  <th className="pb-2 text-left font-medium">Scenario</th>
+                  <th className="pb-2 text-right font-medium">Buildings affected</th>
+                  <th className="pb-2 text-right font-medium">Value in affected cells</th>
+                  <th className="pb-2 text-right font-medium">Ground-up loss</th>
+                  <th className="w-[26%] pb-2 pl-4 text-left font-medium">Share of total insured value</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {r.scenarios.map((sc, i) => (
+                  <tr key={sc.id}>
+                    <td className="tabular py-2.5 font-medium text-ink">{rpLabel(sc.returnPeriod)}</td>
+                    <td className="py-2.5 text-ink-2">{sc.id}</td>
+                    <td className="tabular py-2.5 text-right text-ink-2">{fmtInt(sc.affected)}</td>
+                    <td className="tabular py-2.5 text-right text-ink-2">{fmtKes(sc.tivExposedKes)}</td>
+                    <td className="tabular py-2.5 text-right font-semibold text-ink">{fmtKes(sc.lossKes, 2)}</td>
+                    <td className="py-2.5 pl-4">
+                      <div className="flex items-center gap-2">
+                        <div className="h-2 flex-1 rounded-r-full bg-surface-2">
+                          <motion.div className="h-2 rounded-r-full" style={{ background: "var(--accent)" }} initial={{ width: 0 }} animate={{ width: `${(sc.lossKes / maxLoss) * 100}%` }} transition={{ duration: 0.7, delay: 0.15 * i, ease: "easeOut" }} />
+                        </div>
+                        <span className="tabular w-14 text-right text-xs text-ink-2">{fmtPct(sc.lossKes / r.totalTivKes, 2)}</span>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-[1.25fr_1fr]">
-        <Card title="Follow one building" aside={<Segmented label="Scenario" value={String(k)} onChange={(v) => setScenario(Number(v))} options={r.scenarios.map((sc, i) => ({ value: String(i), label: `1 in ${sc.returnPeriod}` }))} />}>
+        <Card title="Follow one building" aside={<Segmented label="Scenario" value={String(k)} onChange={(v) => setScenario(Number(v))} options={r.scenarios.map((sc, i) => ({ value: String(i), label: rpLabel(sc.returnPeriod) }))} />}>
           {ranked.length === 0 || !t ? (
             <p className="text-sm text-ink-2">No building takes a loss in this scenario.</p>
           ) : (
@@ -88,22 +130,23 @@ export function LossStep({ session, active, checks }: { session: Session; active
                 <span className="self-center pl-1 text-xs text-muted">largest losses in this scenario</span>
               </div>
 
-              <motion.ol key={`${b.locId}-${k}`} className="space-y-2" initial="hidden" animate="show" variants={{ show: { transition: { staggerChildren: 0.12 } } }}>
+              {/* A list down the card, or on a wide step a row of stages read left to right; the building's name gets the widest one. */}
+              <motion.ol key={`${b.locId}-${k}`} className="flex flex-col gap-2 @7xl:grid @7xl:auto-cols-[minmax(0,1fr)] @7xl:grid-flow-col @7xl:grid-cols-[minmax(0,1.35fr)]" initial="hidden" animate="show" variants={{ show: { transition: { staggerChildren: 0.12 } } }}>
                 {[
                   { label: "The building", value: `${b.locId} · ${HOUSING_LABELS[b.housingClass]}`, how: `Insured value ${fmtKes(b.tivKes, 2)}, at ${fmtNum(b.lat, 4)}, ${fmtNum(b.lon, 4)}`, tag: "synthetic" as const },
                   { label: isScore ? "Hazard score" : "Flood depth", value: isScore ? fmtNum(t.hazard, 3) : `${fmtNum(t.hazard)} m`, how: `Read from the "${s.id}" map at the building's coordinates`, tag: (isScore ? "proxy" : "real") as "proxy" | "real" },
                   ...(isScore ? [{ label: "Assumed depth", value: `${fmtNum(t.depthM)} m`, how: t.drainageM > 0 && t.drainageM >= t.depthM ? `Drainage ponding near a drain or in a settlement; the terrain gives ${fmtNum(t.hazard > 0 ? t.hazard * s.tierSlope * active.params.depthScaleM : 0)} m` : `${fmtNum(t.hazard, 3)} × tier slope ${fmtNum(s.tierSlope, 3)} × ${fmtNum(active.params.depthScaleM)} m`, tag: (active.source === "ai" ? "ai" : "assumption") as "ai" | "assumption" }] : []),
                   { label: "Depth on the curve", value: `${fmtNum(t.effectiveDepthM)} m`, how: `${fmtNum(t.depthM)} m × fragility ${fmtNum(active.params.fragility[b.housingClass])}`, tag: (active.source === "ai" ? "ai" : "assumption") as "ai" | "assumption" },
                   { label: "Damage ratio", value: fmtPct(t.damageRatio, 1), how: t.capped ? `JRC curve gives ${fmtPct(t.curveDamage, 1)}, limited by the ${fmtPct(active.params.cap[b.housingClass], 0)} cap` : `JRC curve at ${fmtNum(t.effectiveDepthM)} m; under the ${fmtPct(active.params.cap[b.housingClass], 0)} cap`, tag: "real" as const },
-                  { label: "Loss", value: fmtKes(t.lossKes, 2), how: `${fmtPct(t.damageRatio, 1)} × ${fmtKes(b.tivKes, 2)}`, tag: null },
+                  { label: "Ground-up loss", value: fmtKes(t.lossKes, 2), how: `${fmtPct(t.damageRatio, 1)} × ${fmtKes(b.tivKes, 2)}`, tag: null },
                 ].map((row, i, all) => (
                   // The figure sits beside its explanation where both fit, and drops to its own line where they do not.
-                  <motion.li key={row.label} variants={{ hidden: { opacity: 0, x: -8 }, show: { opacity: 1, x: 0 } }} className={`flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 rounded-xl px-3.5 py-2.5 ${i === all.length - 1 ? "bg-ink text-surface" : "bg-surface-2"}`}>
+                  <motion.li key={row.label} variants={{ hidden: { opacity: 0, x: -8 }, show: { opacity: 1, x: 0 } }} className={`flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 rounded-xl px-3.5 py-2.5 @7xl:flex-col @7xl:flex-nowrap @7xl:items-start @7xl:justify-start @7xl:gap-y-3 @7xl:py-3.5 ${i === all.length - 1 ? "bg-ink text-surface" : "bg-surface-2"}`}>
                     <div className="min-w-0">
                       <div className={`text-xs ${i === all.length - 1 ? "opacity-70" : "text-muted"}`}>{row.label}</div>
                       <div className={`text-sm ${i === all.length - 1 ? "opacity-80" : "text-ink-2"}`}>{row.how}</div>
                     </div>
-                    <div className="ml-auto flex flex-wrap items-center justify-end gap-x-2.5 gap-y-1 text-right">
+                    <div className="ml-auto flex flex-wrap items-center justify-end gap-x-2.5 gap-y-1 text-right @7xl:mt-auto @7xl:ml-0 @7xl:justify-start @7xl:text-left">
                       {row.tag && <Tag kind={row.tag}>{row.label === "Damage ratio" ? "JRC curve" : undefined}</Tag>}
                       <span className="tabular text-base font-semibold">{row.value}</span>
                     </div>
@@ -114,8 +157,72 @@ export function LossStep({ session, active, checks }: { session: Session; active
           )}
         </Card>
 
-        <Card title="Checks on the arithmetic" aside={<ChecksSummary checks={checks} />}>
-          <CheckList checks={checks} />
+        <TermsPanel terms={terms} onChange={onTermsChange} />
+
+        <Card title="How the terms act on each event">
+          <p className="-mt-2 mb-4 max-w-3xl text-sm leading-relaxed text-ink-2">
+            Read each row from left to right. Ground-up loss less the deductibles{anyOverLimit ? " and anything over the policy limits" : ""} is the gross loss. Gross less the quota share recovery is what the insurer retains. Retained less the excess of loss recovery is the net loss.
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-232 text-sm">
+              <thead className="text-xs text-muted">
+                <tr>
+                  <th className="pb-2 text-left font-medium">Event (chance in any year)</th>
+                  <th className="pb-2 pl-3 text-right font-medium">Ground-up</th>
+                  <th className="pb-2 pl-3 text-right font-medium">Deductibles</th>
+                  {anyOverLimit && <th className="pb-2 pl-3 text-right font-medium">Over limit</th>}
+                  <th className="pb-2 pl-3 text-right font-medium">Gross</th>
+                  <th className="pb-2 pl-3 text-right font-medium">Quota share recovery</th>
+                  <th className="pb-2 pl-3 text-right font-medium">Retained</th>
+                  <th className="pb-2 pl-3 text-right font-medium">Excess of loss recovery</th>
+                  <th className="pb-2 pl-3 text-right font-medium">Net</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {layers.map((row) => (
+                  <tr key={row.id}>
+                    <th scope="row" className="tabular py-2.5 text-left font-medium whitespace-nowrap text-ink">{rpWithChance(row.returnPeriod)}</th>
+                    <td className="tabular py-2.5 pl-3 text-right text-ink-2">{kes1(row.groundUpKes)}</td>
+                    <td className="tabular py-2.5 pl-3 text-right text-ink-2">{kes1(row.deductiblesKes)}</td>
+                    {anyOverLimit && <td className="tabular py-2.5 pl-3 text-right text-ink-2">{kes1(row.overLimitKes)}</td>}
+                    <td className="tabular py-2.5 pl-3 text-right font-semibold text-ink">{kes1(row.grossKes)}</td>
+                    <td className="tabular py-2.5 pl-3 text-right text-ink-2">{kes1(row.quotaShareKes)}</td>
+                    <td className="tabular py-2.5 pl-3 text-right text-ink-2">{kes1(row.retainedKes)}</td>
+                    <td className="tabular py-2.5 pl-3 text-right text-ink-2">{kes1(row.xolKes)}</td>
+                    <td className="tabular py-2.5 pl-3 text-right font-semibold text-ink">{kes1(row.netKes)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-3 text-xs leading-relaxed text-muted">
+            The excess of loss pays the part of the retained loss above {kes1(terms.xol.attachmentKes)}, up to {kes1(terms.xol.limitKes)} in one event.
+          </p>
+          <SourceLine sources={termsSources} className="mt-4 border-t border-line pt-3" />
+        </Card>
+
+        {layer && (
+          <ChartFrame
+            title={waterfallTitle}
+            subtitle={`Read from left to right. A solid bar is a loss measured from zero; a striped bar is what a deductible or a reinsurer takes off the bar before it. A loss this size or larger has about a ${annualChance(layer.returnPeriod).replace(" a year", "")} chance in any year.`}
+            sources={termsSources}
+            aside={layers.length > 1 ? <Segmented label="Event" value={layer.id} onChange={setEvent} options={layers.map((row) => ({ value: row.id, label: rpLabel(row.returnPeriod) }))} /> : undefined}
+          >
+            <Waterfall
+              title={waterfallTitle}
+              yLabel={`Loss in a ${rpLabel(layer.returnPeriod)} event, KES`}
+              steps={steps}
+              totalLabel="Loss at this stage"
+              decreaseLabel="Taken off by a deductible or a reinsurer"
+            />
+          </ChartFrame>
+        )}
+
+        <Card title="Checks on the arithmetic and the terms" aside={<ChecksSummary checks={checks} />}>
+          {/* Full width, the list runs down two columns so the right half of the card is not left empty. */}
+          <div className="@5xl:columns-2 @5xl:gap-10 @5xl:[&_li]:break-inside-avoid">
+            <CheckList checks={checks} />
+          </div>
         </Card>
       </div>
     </div>

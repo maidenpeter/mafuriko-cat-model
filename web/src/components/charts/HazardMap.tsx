@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fmtKes, fmtNum } from "@/lib/format";
 import type { HotspotHit } from "@/lib/model/hotspots";
-import { HOUSING_LABELS, type Dataset } from "@/lib/model/types";
+import { HOUSING_LABELS, type Dataset, type Raster } from "@/lib/model/types";
 import { useTheme } from "@/lib/useDisplay";
 
 const RAMP_VARS = ["--seq-1", "--seq-2", "--seq-3", "--seq-4", "--seq-5"];
@@ -20,6 +20,22 @@ interface Tip {
   lines: string[];
 }
 
+/** The area the map draws: the hazard grid's own, or the buildings with a small margin when there is no grid. */
+function mapBbox(raster: Raster | null, buildings: Dataset["buildings"]): Raster["bbox"] {
+  if (raster) return raster.bbox;
+  const lons = buildings.map((b) => b.lon);
+  const lats = buildings.map((b) => b.lat);
+  const pad = 0.01;
+  return [Math.min(...lons) - pad, Math.min(...lats) - pad, Math.max(...lons) + pad, Math.max(...lats) + pad];
+}
+
+/** Width of the drawn map divided by its height. The step uses it to give the map a column it fills without growing taller than the screen. */
+export function hazardMapRatio(dataset: Dataset, scenarioIndex: number): number {
+  const id = dataset.scenarios[scenarioIndex].id;
+  const bbox = mapBbox(dataset.rasters.find((r) => r.scenarioId === id) ?? null, dataset.buildings);
+  return (bbox[2] - bbox[0]) / (bbox[3] - bbox[1]);
+}
+
 export function HazardMap({ dataset, scenarioIndex, hits }: { dataset: Dataset; scenarioIndex: number; hits: HotspotHit[] }) {
   const wrap = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -31,13 +47,7 @@ export function HazardMap({ dataset, scenarioIndex, hits }: { dataset: Dataset; 
   const raster = dataset.rasters.find((r) => r.scenarioId === scenario.id) ?? null;
   const isScore = dataset.hazardKind === "score";
 
-  const bbox = useMemo<[number, number, number, number]>(() => {
-    if (raster) return raster.bbox;
-    const lons = dataset.buildings.map((b) => b.lon);
-    const lats = dataset.buildings.map((b) => b.lat);
-    const pad = 0.01;
-    return [Math.min(...lons) - pad, Math.min(...lats) - pad, Math.max(...lons) + pad, Math.max(...lats) + pad];
-  }, [raster, dataset.buildings]);
+  const bbox = useMemo(() => mapBbox(raster, dataset.buildings), [raster, dataset.buildings]);
 
   const height = Math.round(width * ((bbox[3] - bbox[1]) / (bbox[2] - bbox[0])));
   // Colour scale top: scores run 0 to 1; depths are scaled to the deepest cell, capped so one extreme cell does not wash out the map.

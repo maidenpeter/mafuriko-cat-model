@@ -15,8 +15,19 @@ import { CLASS_COLORS } from "./DataStep";
 
 const RiskMap = dynamic(() => import("../map/RiskMap").then((m) => m.RiskMap), {
   ssr: false,
-  loading: () => <div className="h-[520px] w-full rounded-xl border border-line bg-surface-2 lg:h-[660px]" />,
+  loading: () => <div className="h-full w-full rounded-xl border border-line bg-surface-2" />,
 });
+
+/**
+ * The map's height follows the window. On a wide screen it takes what is left under the page
+ * header once the step heading, the line under the map and the Back / Next bar have their room,
+ * so the whole map is on the first screen. On a short screen it is never taller than what can be
+ * seen at once between the header and that bar. The last term keeps a very tall window from
+ * making the map much taller than it is wide (21rem is the side panel and its gap).
+ * The placeholders fill the same box, so the page does not jump when the map arrives.
+ */
+const MAP_HEIGHT =
+  "h-[clamp(22rem,60dvh,min(36rem,150cqw))] lg:h-[clamp(20rem,max(100dvh_-_var(--header-height,9rem)_-_14rem,min(30rem,100dvh_-_var(--header-height,9rem)_-_7.25rem)),min(56rem,max(24rem,100cqw_-_21rem)))]";
 
 const FACILITY_GROUPS: { label: string; kinds: FacilityKind[] }[] = [
   { label: "Hospitals and clinics", kinds: ["hospital", "clinic"] },
@@ -24,6 +35,9 @@ const FACILITY_GROUPS: { label: string; kinds: FacilityKind[] }[] = [
   { label: "Police stations", kinds: ["police"] },
   { label: "Fire stations", kinds: ["fire_station"] },
 ];
+
+/** A side card: as wide as its row allows when the cards wrap, its own height when they are stacked. */
+const SIDE_CARD = "flex-[1_1_18rem] @3xl:flex-none";
 
 /** Water deeper than this at a facility is counted as serious flooding. */
 const DEEP_M = 0.5;
@@ -126,29 +140,35 @@ export function MapStep({ session, active }: { session: Session; active: Active 
         Every layer on one map of Nairobi: where water collects at each event, which insured buildings it reaches, how losses pile up by ward, and what else sits in the water&rsquo;s path. Pick an event or press play to watch the flood spread as events get rarer.
       </StepHeader>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="min-w-0">
-          {geo ? (
-            <RiskMap
-              key={theme}
-              session={session}
-              active={active}
-              geo={geo}
-              k={ki}
-              layers={layers}
-              threeD={threeD}
-              wardMetric={wardMetric}
-              wardRows={wardRows}
-              facilityDepth={facilityDepth}
-              selection={selection}
-              onSelect={setSelection}
-              focus={focus}
-              onStatus={setStatus}
-              viewRef={mapView}
-            />
-          ) : (
-            <div className="flex h-[520px] items-center justify-center rounded-xl border border-line bg-surface-2 text-sm text-ink-2 lg:h-[660px]">Loading map layers</div>
-          )}
+      {/* Columns follow the room the step has at the chosen text size, not the screen width alone.
+          With room for two columns the panel sits beside the map, the layers and the note on sources.
+          With room for three, that note moves up beside the layers it describes.
+          The layers row is the one that gives, so the map row is never stretched and nothing is left blank under either column. */}
+      <div className="grid gap-4 @3xl:grid-cols-[minmax(0,1fr)_20rem] @3xl:grid-rows-[auto_1fr] @6xl:grid-cols-[minmax(0,1fr)_22rem_22rem]">
+        <div className="min-w-0 @6xl:col-span-2">
+          <div className={MAP_HEIGHT}>
+            {geo ? (
+              <RiskMap
+                key={theme}
+                session={session}
+                active={active}
+                geo={geo}
+                k={ki}
+                layers={layers}
+                threeD={threeD}
+                wardMetric={wardMetric}
+                wardRows={wardRows}
+                facilityDepth={facilityDepth}
+                selection={selection}
+                onSelect={setSelection}
+                focus={focus}
+                onStatus={setStatus}
+                viewRef={mapView}
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center rounded-xl border border-line bg-surface-2 text-sm text-ink-2">Loading map layers</div>
+            )}
+          </div>
           <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
             <span>
               {status === "online" ? "Live basemap: OpenStreetMap data via OpenFreeMap, terrain from open elevation tiles." : status === "offline" ? "No connection to the basemap server: model layers shown on a plain background." : "Connecting to the basemap"}
@@ -157,8 +177,9 @@ export function MapStep({ session, active }: { session: Session; active: Active 
           </div>
         </div>
 
-        <div className="min-w-0 space-y-4">
-          <Card title="Event" aside={<Tag kind={isScore ? "assumption" : "real"}>{isScore ? "Return period assumed" : "From the data"}</Tag>}>
+        {/* Beside the map this is one column. Under the map, on a screen too narrow for two columns, the cards sit side by side where they fit. */}
+        <div className="flex min-w-0 flex-wrap gap-4 @3xl:col-start-2 @3xl:row-span-3 @3xl:row-start-1 @3xl:flex-col @3xl:flex-nowrap @6xl:col-start-3 @6xl:row-span-2">
+          <Card className={SIDE_CARD} title="Event" aside={<Tag kind={isScore ? "assumption" : "real"}>{isScore ? "Return period assumed" : "From the data"}</Tag>}>
             <div className="flex flex-wrap items-baseline justify-between gap-x-3">
               <span className="font-display text-3xl font-semibold tracking-tight text-ink">1 in {s.returnPeriod}</span>
               <span className="text-xs text-muted">{fmtPct(1 / s.returnPeriod, 1)} chance a year</span>
@@ -200,7 +221,7 @@ export function MapStep({ session, active }: { session: Session; active: Active 
             </div>
           </Card>
 
-          <Card title={`At the 1 in ${s.returnPeriod} event`}>
+          <Card className={SIDE_CARD} title={`At the 1 in ${s.returnPeriod} event`}>
             <dl className="grid grid-cols-2 gap-x-3 gap-y-3 text-sm">
               <div>
                 <dt className="text-xs text-muted">Buildings flooded</dt>
@@ -246,139 +267,145 @@ export function MapStep({ session, active }: { session: Session; active: Active 
             )}
           </Card>
 
-          <SelectionCard session={session} active={active} k={ki} geo={geo} wardOf={wardOf} wardRows={wardRows} selection={selection} onClear={() => setSelection(null)} />
+          {/* The last card takes up any height the map and the layers leave over. */}
+          <SelectionCard className="flex-[1_1_18rem] @3xl:flex-auto" session={session} active={active} k={ki} geo={geo} wardOf={wardOf} wardRows={wardRows} selection={selection} onClear={() => setSelection(null)} />
+        </div>
 
-          <Card title="Layers">
-            <div className="-mx-2 space-y-0.5">
-              <Toggle id="lyr-hazard" checked={layers.hazard} onChange={(v) => setLayer("hazard", v)}>
-                Flood depth {isScore && <span className="text-xs text-muted">(score converted to metres)</span>}
-                <span className="mt-1 flex flex-wrap gap-x-2 gap-y-1">
-                  {DEPTH_LABELS.map((l, i) => (
-                    <span key={l} className="inline-flex items-center gap-1 text-xs text-ink-2">
-                      <span className="inline-block h-2.5 w-3.5 shrink-0 rounded-sm" style={{ background: `var(--seq-${i + 1})` }} />
-                      {l}
-                    </span>
-                  ))}
-                </span>
-              </Toggle>
-              {drainage && (
-                <Toggle id="lyr-drainage" checked={layers.drainage} onChange={(v) => setLayer("drainage", v)}>
-                  <span className="inline-flex items-center gap-1.5"><Swatch shape="square" color={DRAINAGE_COLOR} /> Drainage zone</span>
-                  <span className="mt-0.5 block text-xs text-ink-2">Within {fmtInt(drainage.reachM)} m of a mapped drain or inside an informal settlement; darker means closer.</span>
-                </Toggle>
-              )}
-              <Toggle id="lyr-buildings" checked={layers.buildings} onChange={(v) => setLayer("buildings", v)}>
-                Insured buildings <span className="text-xs text-muted">(synthetic)</span>
-                <span className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-xs text-ink-2">
-                  {HOUSING_CLASSES.map((c) => (
-                    <span key={c} className="inline-flex items-center gap-1">
-                      <Swatch color={CLASS_COLORS[c]} />
-                      {HOUSING_LABELS[c]}
-                    </span>
-                  ))}
-                  <span className="inline-flex items-center gap-1">
-                    <Swatch color={WARD_COLOR} shape="ring" /> takes a loss
+        {/* The layers double as the map's legend, so they sit right under it, in as many columns as fit. */}
+        <Card title="Layers" className="@3xl:col-start-1 @3xl:row-start-2">
+          <div className="-mx-2 grid grid-cols-[repeat(auto-fit,minmax(min(13rem,100%),1fr))] content-start gap-x-2 gap-y-0.5">
+            <Toggle id="lyr-hazard" checked={layers.hazard} onChange={(v) => setLayer("hazard", v)}>
+              Flood depth {isScore && <span className="text-xs text-muted">(score converted to metres)</span>}
+              <span className="mt-1 flex flex-wrap gap-x-2 gap-y-1">
+                {DEPTH_LABELS.map((l, i) => (
+                  <span key={l} className="inline-flex items-center gap-1 text-xs text-ink-2">
+                    <span className="inline-block h-2.5 w-3.5 shrink-0 rounded-sm" style={{ background: `var(--seq-${i + 1})` }} />
+                    {l}
                   </span>
-                </span>
+                ))}
+              </span>
+            </Toggle>
+            {drainage && (
+              <Toggle id="lyr-drainage" checked={layers.drainage} onChange={(v) => setLayer("drainage", v)}>
+                <span className="inline-flex items-center gap-1.5"><Swatch shape="square" color={DRAINAGE_COLOR} /> Drainage zone</span>
+                <span className="mt-0.5 block text-xs text-ink-2">Within {fmtInt(drainage.reachM)} m of a mapped drain or inside an informal settlement; darker means closer.</span>
               </Toggle>
-              <Toggle id="lyr-wards" checked={layers.wards} onChange={(v) => setLayer("wards", v)}>
-                Wards shaded by
-                <select aria-label="Ward shading" value={wardMetric} onChange={(e) => setWardMetric(e.target.value as WardMetric)} className="ml-1.5 rounded-md border border-line bg-surface px-1.5 py-0.5 text-xs text-ink">
-                  {WARD_METRICS.map((m) => (
-                    <option key={m.value} value={m.value}>
-                      {m.label}
-                    </option>
+            )}
+            <Toggle id="lyr-buildings" checked={layers.buildings} onChange={(v) => setLayer("buildings", v)}>
+              Insured buildings <span className="text-xs text-muted">(synthetic)</span>
+              <span className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-xs text-ink-2">
+                {HOUSING_CLASSES.map((c) => (
+                  <span key={c} className="inline-flex items-center gap-1">
+                    <Swatch color={CLASS_COLORS[c]} />
+                    {HOUSING_LABELS[c]}
+                  </span>
+                ))}
+                <span className="inline-flex items-center gap-1">
+                  <Swatch color={WARD_COLOR} shape="ring" /> takes a loss
+                </span>
+              </span>
+            </Toggle>
+            <Toggle id="lyr-wards" checked={layers.wards} onChange={(v) => setLayer("wards", v)}>
+              Wards shaded by
+              <select aria-label="Ward shading" value={wardMetric} onChange={(e) => setWardMetric(e.target.value as WardMetric)} className="ml-1.5 rounded-md border border-line bg-surface px-1.5 py-0.5 text-xs text-ink">
+                {WARD_METRICS.map((m) => (
+                  <option key={m.value} value={m.value}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </Toggle>
+            <Toggle id="lyr-water" checked={layers.waterways} onChange={(v) => setLayer("waterways", v)}>
+              Rivers, streams and drains
+              <span className="mt-1 flex flex-wrap gap-x-2 text-xs text-ink-2">
+                <span className="inline-flex items-center gap-1"><Swatch shape="line" color={WATER_COLORS.river} /> river</span>
+                <span className="inline-flex items-center gap-1"><Swatch shape="line" color={WATER_COLORS.stream} /> stream</span>
+                <span className="inline-flex items-center gap-1"><Swatch shape="line" color={WATER_COLORS.drain} /> drain or ditch</span>
+              </span>
+            </Toggle>
+            <Toggle id="lyr-settlements" checked={layers.settlements} onChange={(v) => setLayer("settlements", v)}>
+              <span className="inline-flex items-center gap-1.5"><Swatch shape="square" color={SETTLEMENT_COLOR} /> Informal settlements</span>
+            </Toggle>
+            <Toggle id="lyr-facilities" checked={layers.facilities} onChange={(v) => setLayer("facilities", v)}>
+              Schools, health and emergency services <span className="text-xs text-muted">(zoom in to see)</span>
+            </Toggle>
+            <Toggle id="lyr-hotspots" checked={layers.hotspots} onChange={(v) => setLayer("hotspots", v)}>
+              County-named flood areas
+              <span className="mt-1 flex flex-wrap gap-x-2 text-xs text-ink-2">
+                <span className="inline-flex items-center gap-1"><Swatch color="var(--navy-line)" /> flagged by the proxy</span>
+                <span className="inline-flex items-center gap-1"><Swatch shape="ring" color={WARD_COLOR} /> missed</span>
+              </span>
+            </Toggle>
+          </div>
+        </Card>
+
+        <Card
+          className="@3xl:col-span-2 @3xl:row-start-4 @6xl:col-span-3 @6xl:row-start-3"
+          title={`Accumulation by ward at the 1 in ${s.returnPeriod} event`}
+          aside={<Segmented label="Rank wards by" value={wardMetric} onChange={setWardMetric} options={WARD_METRICS.map((m) => ({ value: m.value, label: m.label }))} />}
+        >
+          {!geo?.wards ? (
+            <p className="text-sm text-ink-2">Ward boundaries are not available, so losses cannot be grouped by ward.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-180 text-sm">
+                <thead>
+                  <tr className="border-b border-line text-left text-xs text-muted">
+                    <th className="py-2 pr-3 font-medium">Ward</th>
+                    <th className="py-2 pr-3 font-medium">Sub-county</th>
+                    <th className="py-2 pr-3 text-right font-medium">Buildings</th>
+                    <th className="py-2 pr-3 text-right font-medium">Insured value</th>
+                    <th className="py-2 pr-3 text-right font-medium">Flooded</th>
+                    <th className="py-2 pr-3 text-right font-medium">Loss</th>
+                    <th className="w-[28%] py-2 font-medium">Ranked by {WARD_METRICS.find((m) => m.value === wardMetric)?.label.toLowerCase()}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topWards.map((w) => (
+                    <tr
+                      key={`${w.index}-${w.name}`}
+                      onClick={() => w.index >= 0 && focusWard(w.index)}
+                      className={`border-b border-line/60 ${w.index >= 0 ? "cursor-pointer hover:bg-surface-2" : ""} ${selection?.type === "ward" && selection.index === w.index ? "bg-surface-2" : ""}`}
+                    >
+                      <td className="py-2 pr-3 font-medium text-ink">{w.name}</td>
+                      <td className="py-2 pr-3 text-ink-2">{w.subcounty}</td>
+                      <td className="tabular py-2 pr-3 text-right">{fmtInt(w.buildings)}</td>
+                      <td className="tabular py-2 pr-3 text-right">{fmtKes(w.tivKes)}</td>
+                      <td className="tabular py-2 pr-3 text-right">{fmtInt(w.flooded)}</td>
+                      <td className="tabular py-2 pr-3 text-right font-semibold text-ink">{fmtKes(w.lossKes)}</td>
+                      <td className="py-2">
+                        <div className="flex items-center gap-2">
+                          <span className="h-1.5 flex-1 rounded-full bg-surface-2">
+                            <span className="block h-1.5 rounded-full" style={{ width: `${(metricValue(w, wardMetric) / maxMetric) * 100}%`, background: WARD_COLOR }} />
+                          </span>
+                          <span className="tabular w-20 text-right text-xs text-ink-2">{metricText(w, wardMetric)}</span>
+                        </div>
+                      </td>
+                    </tr>
                   ))}
-                </select>
-              </Toggle>
-              <Toggle id="lyr-water" checked={layers.waterways} onChange={(v) => setLayer("waterways", v)}>
-                Rivers, streams and drains
-                <span className="mt-1 flex flex-wrap gap-x-2 text-xs text-ink-2">
-                  <span className="inline-flex items-center gap-1"><Swatch shape="line" color={WATER_COLORS.river} /> river</span>
-                  <span className="inline-flex items-center gap-1"><Swatch shape="line" color={WATER_COLORS.stream} /> stream</span>
-                  <span className="inline-flex items-center gap-1"><Swatch shape="line" color={WATER_COLORS.drain} /> drain or ditch</span>
-                </span>
-              </Toggle>
-              <Toggle id="lyr-settlements" checked={layers.settlements} onChange={(v) => setLayer("settlements", v)}>
-                <span className="inline-flex items-center gap-1.5"><Swatch shape="square" color={SETTLEMENT_COLOR} /> Informal settlements</span>
-              </Toggle>
-              <Toggle id="lyr-facilities" checked={layers.facilities} onChange={(v) => setLayer("facilities", v)}>
-                Schools, health and emergency services <span className="text-xs text-muted">(zoom in to see)</span>
-              </Toggle>
-              <Toggle id="lyr-hotspots" checked={layers.hotspots} onChange={(v) => setLayer("hotspots", v)}>
-                County-named flood areas
-                <span className="mt-1 flex flex-wrap gap-x-2 text-xs text-ink-2">
-                  <span className="inline-flex items-center gap-1"><Swatch color="var(--navy-line)" /> flagged by the proxy</span>
-                  <span className="inline-flex items-center gap-1"><Swatch shape="ring" color={WARD_COLOR} /> missed</span>
-                </span>
-              </Toggle>
+                </tbody>
+              </table>
+              <p className="mt-3 text-xs leading-relaxed text-muted">
+                Top {topWards.length} of {ranked.length} wards holding insured buildings. Click a ward to zoom to it. The top three wards carry {fmtPct(ranked.slice(0, 3).reduce((t, w) => t + w.lossKes, 0) / (s.lossKes || 1), 0)} of the loss at this event.
+                {outside && ` ${fmtInt(outside.buildings)} buildings (${fmtKes(outside.tivKes)} insured, ${fmtKes(outside.lossKes)} loss at this event) sit inside the hazard maps but outside Nairobi County's wards, so they are left out of this table.`}
+              </p>
             </div>
-          </Card>
+          )}
+        </Card>
+
+        {/* A grid, so the note is as tall as the layers card when the two share a row. */}
+        <div className="grid @3xl:col-start-1 @3xl:row-start-3 @6xl:col-start-2 @6xl:row-start-2">
+          <Note>
+            <strong className="font-semibold text-ink">What is real here.</strong> Ward boundaries are the 85 Nairobi wards (Omare &amp; Omare 2017, CC BY 4.0). Rivers, drains, informal settlements, schools and health facilities are from OpenStreetMap (data from February and May 2025); informal settlement outlines are incomplete there, Kibera for instance is mapped only as a point. The flood layer is the hazard proxy converted to depth with the assumptions in force{dataset.drainage ? ", plus drainage ponding near OpenStreetMap drains and inside informal settlements, which is our own assumption" : ""}. The buildings are synthetic and placed at random, so ward totals show how accumulation would be read, not a real concentration of risk.
+          </Note>
         </div>
       </div>
-
-      <Card
-        className="mt-4"
-        title={`Accumulation by ward at the 1 in ${s.returnPeriod} event`}
-        aside={<Segmented label="Rank wards by" value={wardMetric} onChange={setWardMetric} options={WARD_METRICS.map((m) => ({ value: m.value, label: m.label }))} />}
-      >
-        {!geo?.wards ? (
-          <p className="text-sm text-ink-2">Ward boundaries are not available, so losses cannot be grouped by ward.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-180 text-sm">
-              <thead>
-                <tr className="border-b border-line text-left text-xs text-muted">
-                  <th className="py-2 pr-3 font-medium">Ward</th>
-                  <th className="py-2 pr-3 font-medium">Sub-county</th>
-                  <th className="py-2 pr-3 text-right font-medium">Buildings</th>
-                  <th className="py-2 pr-3 text-right font-medium">Insured value</th>
-                  <th className="py-2 pr-3 text-right font-medium">Flooded</th>
-                  <th className="py-2 pr-3 text-right font-medium">Loss</th>
-                  <th className="w-[28%] py-2 font-medium">Ranked by {WARD_METRICS.find((m) => m.value === wardMetric)?.label.toLowerCase()}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {topWards.map((w) => (
-                  <tr
-                    key={`${w.index}-${w.name}`}
-                    onClick={() => w.index >= 0 && focusWard(w.index)}
-                    className={`border-b border-line/60 ${w.index >= 0 ? "cursor-pointer hover:bg-surface-2" : ""} ${selection?.type === "ward" && selection.index === w.index ? "bg-surface-2" : ""}`}
-                  >
-                    <td className="py-2 pr-3 font-medium text-ink">{w.name}</td>
-                    <td className="py-2 pr-3 text-ink-2">{w.subcounty}</td>
-                    <td className="tabular py-2 pr-3 text-right">{fmtInt(w.buildings)}</td>
-                    <td className="tabular py-2 pr-3 text-right">{fmtKes(w.tivKes)}</td>
-                    <td className="tabular py-2 pr-3 text-right">{fmtInt(w.flooded)}</td>
-                    <td className="tabular py-2 pr-3 text-right font-semibold text-ink">{fmtKes(w.lossKes)}</td>
-                    <td className="py-2">
-                      <div className="flex items-center gap-2">
-                        <span className="h-1.5 flex-1 rounded-full bg-surface-2">
-                          <span className="block h-1.5 rounded-full" style={{ width: `${(metricValue(w, wardMetric) / maxMetric) * 100}%`, background: WARD_COLOR }} />
-                        </span>
-                        <span className="tabular w-20 text-right text-xs text-ink-2">{metricText(w, wardMetric)}</span>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="mt-3 text-xs leading-relaxed text-muted">
-              Top {topWards.length} of {ranked.length} wards holding insured buildings. Click a ward to zoom to it. The top three wards carry {fmtPct(ranked.slice(0, 3).reduce((t, w) => t + w.lossKes, 0) / (s.lossKes || 1), 0)} of the loss at this event.
-              {outside && ` ${fmtInt(outside.buildings)} buildings (${fmtKes(outside.tivKes)} insured, ${fmtKes(outside.lossKes)} loss at this event) sit inside the hazard maps but outside Nairobi County's wards, so they are left out of this table.`}
-            </p>
-          </div>
-        )}
-      </Card>
-
-      <Note>
-        <strong className="font-semibold text-ink">What is real here.</strong> Ward boundaries are the 85 Nairobi wards (Omare &amp; Omare 2017, CC BY 4.0). Rivers, drains, informal settlements, schools and health facilities are from OpenStreetMap (data from February and May 2025); informal settlement outlines are incomplete there, Kibera for instance is mapped only as a point. The flood layer is the hazard proxy converted to depth with the assumptions in force{dataset.drainage ? ", plus drainage ponding near OpenStreetMap drains and inside informal settlements, which is our own assumption" : ""}. The buildings are synthetic and placed at random, so ward totals show how accumulation would be read, not a real concentration of risk.
-      </Note>
     </div>
   );
 }
 
 function SelectionCard({
+  className,
   session,
   active,
   k,
@@ -388,6 +415,7 @@ function SelectionCard({
   selection,
   onClear,
 }: {
+  className: string;
   session: Session;
   active: Active;
   k: number;
@@ -401,8 +429,9 @@ function SelectionCard({
   const isScore = session.dataset.hazardKind === "score";
   if (!selection) {
     return (
-      <Card title="Details">
-        <p className="text-sm leading-relaxed text-ink-2">Click a building to trace its loss, or a ward to see what it holds.</p>
+      <Card className={`flex flex-col ${className}`} title="Details">
+        {/* This card can be much taller than its one line, so the line sits in a marked-out space that shows where the details will go. */}
+        <p className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-line px-4 py-3 text-center text-sm leading-relaxed text-ink-2">Click a building to trace its loss, or a ward to see what it holds.</p>
       </Card>
     );
   }
@@ -422,7 +451,7 @@ function SelectionCard({
       ["Loss", fmtKes(t.lossKes, 2)],
     ];
     return (
-      <Card title={`${b.locId}`} aside={<button onClick={onClear} className="text-xs text-ink-2 underline-offset-2 hover:underline">Clear</button>}>
+      <Card className={className} title={`${b.locId}`} aside={<button onClick={onClear} className="text-xs text-ink-2 underline-offset-2 hover:underline">Clear</button>}>
         <div className="mb-2 flex flex-wrap items-center gap-2 text-sm text-ink-2">
           <Swatch color={CLASS_COLORS[b.housingClass]} /> {HOUSING_LABELS[b.housingClass]}
           {ward && <span>· {ward.name}, {ward.subcounty}</span>}
@@ -454,7 +483,7 @@ function SelectionCard({
   const top = inWard.map(({ b, i }) => ({ b, loss: r.buildings[i].perScenario[k].lossKes })).filter((x) => x.loss > 0).sort((a, b) => b.loss - a.loss).slice(0, 3);
   const portfolioLoss = r.scenarios[k].lossKes || 1;
   return (
-    <Card title={`${row.name} ward`} aside={<button onClick={onClear} className="text-xs text-ink-2 underline-offset-2 hover:underline">Clear</button>}>
+    <Card className={className} title={`${row.name} ward`} aside={<button onClick={onClear} className="text-xs text-ink-2 underline-offset-2 hover:underline">Clear</button>}>
       <div className="mb-2 text-sm text-ink-2">{row.subcounty} sub-county</div>
       <dl className="space-y-1 text-sm">
         {(

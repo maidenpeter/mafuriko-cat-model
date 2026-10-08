@@ -89,42 +89,46 @@ export function OasisCheck({ session }: { session: Session }) {
         </span>
       }
     >
-      <p className="text-sm leading-relaxed text-ink-2">
-        Oasis is the open-source loss modelling framework used across the insurance industry. We wrote this portfolio as an Oasis exposure file and our hazard and damage assumptions as Oasis model files, then let the Oasis engine compute the losses and the loss curve on its own. {agrees ? "It agrees with this app to within half a percent at every event." : "The two engines disagree by more than half a percent; see the notes below."}
-      </p>
-      <div className="mt-4 overflow-x-auto">
-        <table className="w-full min-w-140 text-sm">
-          <thead className="text-xs text-muted">
-            <tr>
-              <th className="pb-2 text-left font-medium">Event</th>
-              <th className="pb-2 text-right font-medium">This app</th>
-              <th className="pb-2 text-right font-medium">Oasis LMF</th>
-              <th className="pb-2 text-right font-medium">Difference</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-line">
-            {rows.map((x) => (
-              <tr key={x.tier}>
-                <td className="py-2 text-ink">
-                  1 in {x.returnPeriod} <span className="text-xs text-muted">({x.tier})</span>
-                </td>
-                <td className="tabular py-2 text-right text-ink">{fmtKes(x.live, 2)}</td>
-                <td className="tabular py-2 text-right text-ink">{fmtKes(x.oasisLossKes, 2)}</td>
-                <td className="tabular py-2 text-right text-ink-2">{signedPct(x.d)}</td>
+      {/* Where the step has the room, the explanation and the notes sit in a column beside the table,
+          which keeps their lines short enough to read. Below that the order is explanation, table, notes. */}
+      <div className="grid gap-x-10 gap-y-4 @6xl:grid-cols-[minmax(0,1fr)_minmax(35rem,1.2fr)] @6xl:grid-rows-[auto_1fr]">
+        <p className="max-w-3xl text-sm leading-relaxed text-ink-2">
+          Oasis is the open-source loss modelling framework used across the insurance industry. We wrote this portfolio as an Oasis exposure file and our hazard and damage assumptions as Oasis model files, then let the Oasis engine compute the losses and the loss curve on its own. {agrees ? "It agrees with this app to within half a percent at every event." : "The two engines disagree by more than half a percent; see the notes below."}
+        </p>
+        <div className="min-w-0 overflow-x-auto @6xl:col-start-2 @6xl:row-span-2 @6xl:row-start-1">
+          <table className="w-full min-w-140 text-sm">
+            <thead className="text-xs text-muted">
+              <tr>
+                <th className="pb-2 text-left font-medium">Event</th>
+                <th className="pb-2 text-right font-medium">This app</th>
+                <th className="pb-2 text-right font-medium">Oasis LMF</th>
+                <th className="pb-2 text-right font-medium">Difference</th>
               </tr>
-            ))}
-            <tr>
-              <td className="py-2 text-ink">Average annual loss, step method</td>
-              <td className="tabular py-2 text-right text-ink">{fmtKes(liveBanded, 2)}</td>
-              <td className="tabular py-2 text-right text-ink">{fmtKes(run.aal.oasisKes, 2)}</td>
-              <td className="tabular py-2 text-right text-ink-2">{signedPct(diff(liveBanded, run.aal.oasisKes))}</td>
-            </tr>
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="divide-y divide-line">
+              {rows.map((x) => (
+                <tr key={x.tier}>
+                  <td className="py-2 text-ink">
+                    1 in {x.returnPeriod} <span className="text-xs text-muted">({x.tier})</span>
+                  </td>
+                  <td className="tabular py-2 text-right text-ink">{fmtKes(x.live, 2)}</td>
+                  <td className="tabular py-2 text-right text-ink">{fmtKes(x.oasisLossKes, 2)}</td>
+                  <td className="tabular py-2 text-right text-ink-2">{signedPct(x.d)}</td>
+                </tr>
+              ))}
+              <tr>
+                <td className="py-2 text-ink">Average annual loss, step method</td>
+                <td className="tabular py-2 text-right text-ink">{fmtKes(liveBanded, 2)}</td>
+                <td className="tabular py-2 text-right text-ink">{fmtKes(run.aal.oasisKes, 2)}</td>
+                <td className="tabular py-2 text-right text-ink-2">{signedPct(diff(liveBanded, run.aal.oasisKes))}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p className="max-w-3xl text-xs leading-relaxed text-muted @6xl:col-start-1 @6xl:row-start-2">
+          The small differences come from Oasis storing depth in 1 mm steps and damage in 0.1% steps. Oasis counts each event only for its own band of annual probability, which gives the step value above. The average annual loss shown elsewhere in this app ({fmtKes(ref.aalKes, 2)} on reference assumptions) draws a straight line between events instead, so it sits {fmtPct(ref.aalKes / liveBanded - 1, 0)} higher. Both treat events more frequent than 1 in {ref.scenarios[0]?.returnPeriod} as causing no loss. Run on {run.generatedAt.slice(0, 10)}, {run.samples} samples, {run.periods.toLocaleString("en-KE")} simulated years, insured values as in the file.
+        </p>
       </div>
-      <p className="mt-3 text-xs leading-relaxed text-muted">
-        The small differences come from Oasis storing depth in 1 mm steps and damage in 0.1% steps. Oasis counts each event only for its own band of annual probability, which gives the step value above. The average annual loss shown elsewhere in this app ({fmtKes(ref.aalKes, 2)} on reference assumptions) draws a straight line between events instead, so it sits {fmtPct(ref.aalKes / liveBanded - 1, 0)} higher. Both treat events more frequent than 1 in {ref.scenarios[0]?.returnPeriod} as causing no loss. Run on {run.generatedAt.slice(0, 10)}, {run.samples} samples, {run.periods.toLocaleString("en-KE")} simulated years, insured values as in the file.
-      </p>
     </Card>
   );
 }

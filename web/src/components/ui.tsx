@@ -87,9 +87,9 @@ export function Card({ title, aside, children, className = "" }: { title?: React
   );
 }
 
-export function Stat({ label, value, note, hero = false }: { label: string; value: ReactNode; note?: ReactNode; hero?: boolean }) {
+export function Stat({ label, value, note, hero = false, className = "" }: { label: string; value: ReactNode; note?: ReactNode; hero?: boolean; className?: string }) {
   return (
-    <div className="rounded-2xl border border-line bg-surface p-5">
+    <div className={`rounded-2xl border border-line bg-surface p-5 ${className}`}>
       <div className="text-sm text-ink-2">{label}</div>
       <div className={`mt-1 font-semibold tracking-tight text-ink ${hero ? "text-5xl" : "text-2xl"}`}>{value}</div>
       {note && <div className="mt-1.5 text-xs leading-relaxed text-muted">{note}</div>}

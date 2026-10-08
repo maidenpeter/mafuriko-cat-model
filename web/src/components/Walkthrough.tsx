@@ -6,6 +6,7 @@ import { aiChecks, deliberate, replay, type Deliberation } from "@/lib/agents/or
 import { buildProfile } from "@/lib/agents/profile";
 import { ROLE_LABELS, ROLES, type Role } from "@/lib/agents/schema";
 import { dataChecks, financialChecks, hazardChecks, summarise, vulnerabilityChecks } from "@/lib/checks";
+import { termsChecks } from "@/lib/checks/terms";
 import { fmtInt, fmtKes } from "@/lib/format";
 import { prepareDrainage, withDrainage, type DrainageState } from "@/lib/geo/drainageView";
 import { detectDatasets, loadDataset, type DatasetCandidate, type FileInfo } from "@/lib/ingest";
@@ -13,6 +14,7 @@ import { filesFromUpload } from "@/lib/ingest/zip";
 import { hotspotHits } from "@/lib/model/hotspots";
 import { REFERENCE_PARAMS } from "@/lib/model/params";
 import { runModel } from "@/lib/model/pipeline";
+import { applyTerms, DEFAULT_TERMS, type InsuranceTerms } from "@/lib/model/terms";
 import type { Dataset } from "@/lib/model/types";
 import { loadRun, saveRun, type Active, type LogEntry, type Session } from "@/lib/session";
 import { DisplayControls } from "./DisplayControls";
@@ -22,12 +24,13 @@ import { DataStep } from "./steps/DataStep";
 import { HazardStep } from "./steps/HazardStep";
 import { LossStep } from "./steps/LossStep";
 import { MapStep } from "./steps/MapStep";
+import { OfferStep, type OfferState } from "./steps/OfferStep";
 import { ResultsStep } from "./steps/ResultsStep";
 import { UploadStep } from "./steps/UploadStep";
 import { VulnerabilityStep } from "./steps/VulnerabilityStep";
 import { Button, Segmented, StatusIcon, Tag } from "./ui";
 
-const STEPS = ["Upload", "Read the data", "Hazard", "Agents", "Vulnerability", "Loss engine", "Risk map", "Results", "Audit"];
+const STEPS = ["Upload", "Read the data", "Hazard", "Agents", "Vulnerability", "Loss engine", "Risk map", "Results", "Price an offer", "Audit"];
 
 type AgentStatus = { model: string; configured: Record<Role, boolean> };
 
@@ -35,6 +38,8 @@ type AgentStatus = { model: string; configured: Record<Role, boolean> };
 // so their edges line up. Backgrounds run the full width of the screen; only the contents take the gutters.
 // The cap is for very wide monitors, and is in rem so it widens with the text size.
 const GUTTER = "mx-auto w-full max-w-[120rem] px-4 sm:px-6 2xl:px-10";
+/** The small word in front of a group of controls on the navy bar, so nobody has to guess what a switch is for. */
+const CAPTION = "text-xs font-medium uppercase tracking-wide text-white/65";
 
 export function Walkthrough() {
   const [step, setStep] = useState(0);
@@ -53,6 +58,10 @@ export function Walkthrough() {
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [hasSaved, setHasSaved] = useState(false);
   const [log, setLog] = useState<LogEntry[]>([]);
+  // The offer being priced in step 8. Kept here so it is still there after a look at another step.
+  const [offer, setOffer] = useState<OfferState | null>(null);
+  // The insurance terms applied after the damage model: example terms until someone edits them in step 5.
+  const [terms, setTerms] = useState<InsuranceTerms>(DEFAULT_TERMS);
 
   const note = useCallback((stepName: string, message: string) => setLog((l) => [...l, { at: new Date().toISOString(), step: stepName, message }]), []);
 
@@ -130,6 +139,7 @@ export function Walkthrough() {
           .catch(() => setDrainage(null));
         setDeliberation(null);
         setReplayed(false);
+        setOffer(null);
         setHasSaved(loadRun(next) !== null);
         setBusy(null);
         setStep(1);
@@ -252,15 +262,18 @@ export function Walkthrough() {
     return active.source === "ai" && deliberation?.final ? deliberation.final.result : session.reference;
   }, [session, active, drainageOn, deliberation]);
 
+  // Ground-up losses taken through the policy terms and the reinsurance: gross and net for every event.
+  const termsResult = useMemo(() => (view && active ? applyTerms(view.dataset, active.result, terms) : null), [view, active, terms]);
+
   const checks = useMemo(() => {
-    if (!session || !view || !active) return { ai: [], vulnerability: [], financial: [], all: [] };
+    if (!session || !view || !active || !termsResult) return { ai: [], vulnerability: [], financial: [], all: [] };
     // The agents are checked on the data they decided on. Their saved fingerprint belongs to that
     // run, so re-running the engine on the drainage view would never match it.
     const ai = deliberation && !agentsBusy ? aiChecks(session.dataset, deliberation) : [];
     const vulnerability = vulnerabilityChecks(active.params);
-    const financial = financialChecks(view.dataset, active.result);
+    const financial = [...financialChecks(view.dataset, active.result), ...termsChecks(termsResult)];
     return { ai, vulnerability, financial, all: [...view.dataChecks, ...view.hazardChecks, ...ai, ...vulnerability, ...financial] };
-  }, [session, view, active, deliberation, agentsBusy]);
+  }, [session, view, active, termsResult, deliberation, agentsBusy]);
 
   const reset = () => {
     setStep(0);
@@ -269,6 +282,8 @@ export function Walkthrough() {
     setUpload(null);
     setDeliberation(null);
     setDrainage(null);
+    setOffer(null);
+    setTerms(DEFAULT_TERMS);
     setError(null);
     setLog([]);
   };
@@ -296,7 +311,7 @@ export function Walkthrough() {
               </span>
               <div className="min-w-0 leading-tight">
                 <div className="font-display text-lg font-semibold tracking-tight">Mafuriko</div>
-                <div className="hidden text-xs text-white/70 sm:block">Nairobi flood catastrophe model, built for the Kenya Re hackathon</div>
+                <div className="text-xs text-white/75">A Nairobi centered CAT model</div>
               </div>
             </div>
             <DisplayControls className="ml-auto @min-[104rem]:order-last" />
@@ -305,14 +320,20 @@ export function Walkthrough() {
                 on the first row, after the brand: a new switch is added at their right end and nothing moves. */}
             {session && (
               <div className="flex basis-full flex-wrap items-center gap-2 border-white/20 @min-[104rem]:ml-4 @min-[104rem]:min-w-0 @min-[104rem]:flex-1 @min-[104rem]:basis-0 @min-[104rem]:border-l @min-[104rem]:pl-6">
-                <span className="min-w-0 wrap-break-word text-sm text-white/80">{session.dataset.name}</span>
+                <span className={CAPTION}>Data</span>
                 <Tag kind="synthetic">Synthetic portfolio</Tag>
                 <Tag kind={isScore ? "proxy" : "real"}>{isScore ? "Proxy hazard, not measured" : "Published depth maps"}</Tag>
                 {drainage && drainage.dataset === session.dataset && (
-                  <Segmented label="Hazard" value={useDrainage ? "on" : "off"} onChange={(v) => setUseDrainage(v === "on")} options={[{ value: "off", label: "Terrain only" }, { value: "on", label: "+ Drainage" }]} />
+                  <span className="inline-flex flex-wrap items-center gap-2">
+                    <span className={CAPTION}>Flood source</span>
+                    <Segmented label="Flood source" value={useDrainage ? "on" : "off"} onChange={(v) => setUseDrainage(v === "on")} options={[{ value: "off", label: "Terrain only" }, { value: "on", label: "Terrain + drainage" }]} />
+                  </span>
                 )}
                 {deliberation?.final && (
-                  <Segmented label="Assumptions" value={useAi ? "ai" : "reference"} onChange={(v) => setUseAi(v === "ai")} options={[{ value: "ai", label: "Agreed by agents" }, { value: "reference", label: "Without AI" }]} />
+                  <span className="inline-flex flex-wrap items-center gap-2">
+                    <span className={CAPTION}>Assumptions</span>
+                    <Segmented label="Assumptions" value={useAi ? "ai" : "reference"} onChange={(v) => setUseAi(v === "ai")} options={[{ value: "ai", label: "Agreed by agents" }, { value: "reference", label: "Reference, no AI" }]} />
+                  </span>
                 )}
               </div>
             )}
@@ -366,7 +387,7 @@ export function Walkthrough() {
               {step === 0 && (
                 <UploadStep busy={busy} error={error} candidates={upload?.candidates ?? null} onFiles={handleFiles} onSample={handleSample} onPick={(c) => upload && load(c, upload.name, upload.files)} />
               )}
-              {session && view && active && (
+              {session && view && active && termsResult && (
                 <>
                   {step === 1 && <DataStep session={view} />}
                   {step === 2 && (
@@ -396,10 +417,22 @@ export function Walkthrough() {
                     />
                   )}
                   {step === 4 && <VulnerabilityStep session={view} active={active} checks={checks.vulnerability} />}
-                  {step === 5 && <LossStep session={view} active={active} checks={checks.financial} />}
+                  {step === 5 && <LossStep session={view} active={active} checks={checks.financial} terms={termsResult} onTermsChange={setTerms} />}
                   {step === 6 && <MapStep session={view} active={active} />}
-                  {step === 7 && <ResultsStep session={view} active={active} deliberation={viewDeliberation} engineSession={session} terrainResult={terrainResult} />}
-                  {step === 8 && <AuditStep session={view} active={active} deliberation={viewDeliberation} checks={checks.all} log={log} />}
+                  {step === 7 && <ResultsStep session={view} active={active} deliberation={viewDeliberation} engineSession={session} terrainResult={terrainResult} terms={termsResult} />}
+                  {step === 8 && (
+                    <OfferStep
+                      session={view}
+                      active={active}
+                      drainage={drainageOn && drainage ? drainage.state : null}
+                      modelReady={status ? status.configured.chair : null}
+                      offer={offer}
+                      onOffer={setOffer}
+                      policyDefaults={terms}
+                      onLog={(message) => note("Price an offer", message)}
+                    />
+                  )}
+                  {step === 9 && <AuditStep session={view} active={active} deliberation={viewDeliberation} checks={checks.all} log={log} terms={termsResult} />}
                 </>
               )}
             </motion.div>
@@ -430,18 +463,18 @@ export function Walkthrough() {
   );
 }
 
-/** The figures an underwriter looks for first, kept in view on every step. */
+/** The figures an underwriter looks for first, kept in view on every step. The losses are ground-up: before any insurance terms. */
 function KeyFigures({ active, hazard }: { active: Active; hazard: string }) {
   const r = active.result;
   const at = (rp: number) => r.standardLosses.find((l) => l.returnPeriod === rp)?.lossKes ?? null;
   const loss100 = at(100);
   const loss250 = at(250);
   const items: { label: string; value: string; strong?: boolean }[] = [
-    { label: "Insured value", value: fmtKes(r.totalTivKes) },
-    { label: "1 in 100 loss", value: loss100 != null ? fmtKes(loss100, 2) : "not modelled", strong: true },
-    { label: "1 in 250 loss", value: loss250 != null ? fmtKes(loss250, 2) : "not modelled" },
-    { label: "Average annual loss", value: fmtKes(r.aalKes, 2) },
-    { label: "Hazard", value: hazard },
+    { label: "Total insured value", value: fmtKes(r.totalTivKes) },
+    { label: "1-in-100 ground-up loss · 1% a year", value: loss100 != null ? fmtKes(loss100, 2) : "not modelled", strong: true },
+    { label: "1-in-250 ground-up loss · 0.4% a year", value: loss250 != null ? fmtKes(loss250, 2) : "not modelled" },
+    { label: "Ground-up average annual loss", value: fmtKes(r.aalKes, 2) },
+    { label: "Flood source", value: hazard },
     { label: "Assumptions", value: active.source === "ai" ? "Agreed by agents" : "Reference, no AI" },
   ];
   return (

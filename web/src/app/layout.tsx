@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "@fontsource-variable/archivo";
 import "@fontsource-variable/roboto";
 import "./globals.css";
+import { InlineScript } from "@/components/InlineScript";
 import { BOOT_SCRIPT } from "@/lib/display";
 
 export const metadata: Metadata = {
@@ -17,7 +18,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className="h-full antialiased" suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: BOOT_SCRIPT }} />
+        <InlineScript html={BOOT_SCRIPT} />
       </head>
       <body className="min-h-full" suppressHydrationWarning>{children}</body>
     </html>

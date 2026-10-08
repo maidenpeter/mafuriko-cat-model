@@ -7,7 +7,7 @@ Nairobi Urban Flood Challenge · Kenya Re catastrophe modelling hackathon
 A web app that takes the hackathon data as a zip upload and walks the viewer
 through a complete flood catastrophe model, one animated step at a time:
 
-**Upload → Read the data → Hazard → Agents set the assumptions → Vulnerability → Loss engine → Results → Audit**
+**Upload → Read the data → Hazard → Agents set the assumptions → Vulnerability → Loss engine → Risk map → Results → Price an offer → Audit**
 
 Each step shows its output, the checks that ran on it, and where every number
 came from. The viewer should be able to understand the result in under two
@@ -36,12 +36,13 @@ side-by-side of the loss curve **without AI** (reference assumptions) and
 | Topic | Decision |
 |---|---|
 | Hazard layer | Used as given, plus an optional drainage layer from open map data (on by default, one switch turns it off). |
-| Insured values | Used as they are in the file. The file's values are 10× floor area × cost per m² (portfolio total KES 63.6bn; the data dictionary says 6.36bn). The app detects this and shows it on screen. |
+| Insured values | The model uses the insured values (`tiv_kes`) exactly as written in the exposure file. Team decision, 8 October 2026. The file's values are 10× floor area × cost per m² (portfolio total KES 63.6bn; the data dictionary says 6.36bn). The app detects this and shows it on screen. |
+| Insurance terms | Example terms, not from any real policy or treaty, all editable in one "Insurance terms" panel. Per building: a deductible of 2% of insured value with a minimum of KES 50,000, and a limit of 100% of insured value. Portfolio: a 25% quota share, then a catastrophe excess of loss on the retained share, attaching at the retained 1-in-10 loss and running out at the retained 1-in-250 loss. |
 | Agents | Optimist, Cautious, Critic, running in parallel, plus a Chair that combines them. |
 | AI provider | OpenAI (one key for all four agents) or Gemini (free keys, one per agent), chosen by one setting. The model call sits behind one function, so nothing else in the app knows which is in use. |
 | Front end | Next.js, modern and simple, animated walkthrough, tests running on screen. |
 | Input | A zip shaped like `data/data/`. The app must not depend on exact file names. |
-| Second AI feature | Decided later (free-text portfolio entry, text-to-speech or speech-to-speech are candidates). |
+| Second AI feature | Chosen: offer pricing. An offer in plain words (a broker's memo as Word or text, or a typed sentence) becomes exposure rows by the model, every value is checked against its quote by code, and the rows are priced by code. With no key, or if the call fails, fixed rules do the reading and nothing leaves the browser. |
 
 ## 3. The model
 
@@ -108,7 +109,17 @@ Four stages, as in the brief. Everything in this section is code.
 - Average annual loss is the area under the curve of loss against annual
   probability. Stated assumption: events more frequent than the shortest
   return period cause no loss, and the loss stays flat beyond the longest.
-- Out of scope, as the brief says: treaty structures, layers, net-of-reinsurance.
+- Insurance terms are applied by code after the damage model, and three
+  figures are kept apart everywhere: **ground-up** (before any terms),
+  **gross** (ground-up less the policy deductible, capped at the policy
+  limit, building by building) and **net** (gross less the quota share
+  recovery and the excess of loss recovery, on the portfolio total of each
+  event). The loss curve shows all three, with an average annual loss for
+  each and a table at every return period.
+- The terms are example terms, not from any real policy or treaty.
+- An offer is priced ground-up and gross. It uses the deductible and limit
+  its document states, and the example terms otherwise, and says which.
+  Net is a portfolio figure and is not worked out for a single offer.
 
 ### 3.5 Parameters the agents decide
 
@@ -213,6 +224,11 @@ Each check shows pass, warning or fail, with the numbers behind it.
 - No building loses more than its insured value.
 - Loss rises as the event gets rarer.
 - Average annual loss is below the largest scenario loss.
+- Gross loss is never above ground-up loss.
+- Net loss is never above gross loss.
+- Reinsurance recoveries reconcile: gross less quota share less excess of
+  loss equals net.
+- Average annual loss falls from ground-up to gross to net.
 
 **AI**
 - Every agent reply matches the schema.
@@ -220,6 +236,19 @@ Each check shows pass, warning or fail, with the numbers behind it.
 - Every parameter has a reason.
 - The Chair answered every challenge from the Critic.
 - Re-running the engine on the saved parameters reproduces the same result.
+
+**Offer**
+- Every value read from the document is found in its words: the quoted
+  sentence is in the document and the number is in the sentence. A value
+  that fails is shown, and nothing is priced until it is confirmed, edited
+  or cleared.
+- The location is inside the hazard maps loaded. Outside them the answer is
+  "Outside the hazard maps loaded: flood cannot be priced here", with no
+  loss figures.
+- Stated river distance against the map, value per m² against the
+  portfolio's range, basements, reported flood history against the maps,
+  and a non-residential building on the residential curve. A limit of the
+  model is a warning, never a failure.
 
 ## 7. The walkthrough
 
@@ -230,10 +259,11 @@ Each check shows pass, warning or fail, with the numbers behind it.
 | 2. Hazard | Buildings drawn over the susceptibility map; switch between tiers; hotspots marked hit or missed. |
 | 3. Agents | Three columns working in parallel, then the Chair's decision and the assumption ledger. |
 | 4. Vulnerability | Damage curves per construction class under the agreed parameters. |
-| 5. Loss engine | Loss building up tier by tier; click a building for its trace. |
+| 5. Loss engine | Loss building up tier by tier; click a building for its trace. The Insurance terms panel, and each event from ground-up to gross to net. |
 | 6. Risk map | Interactive map of Nairobi: flood depth for each event on a slider that can play, insured buildings with a click-through loss trace, wards shaded by loss or value, rivers and drains, informal settlements, schools and health facilities in the water, the county hotspots, and a 3D view with loss columns. Works without internet on a plain background. |
-| 7. Results | Total exposure, loss at key return periods, average annual loss; the loss curve with its band; breakdown by class; largest contributors; with and without AI; the Oasis check. |
-| 8. Audit | All checks, the ledger, the run log, and the export buttons. |
+| 7. Results | Total exposure, loss at key return periods, average annual loss; the loss curve with its band and its ground-up, gross and net lines; breakdown by class; largest contributors; with and without AI; the Oasis check. |
+| 8. Price an offer | Give a broker's memo or type a sentence. What was sent to the model with contact details removed; each value with its source sentence and whether code verified it; the building on the maps; ground-up and gross loss per return period with where the deductible and limit came from; the effect on the portfolio; checks on the offer; the rows as a CSV. |
+| 9. Audit | All checks, the ledger, the run log, and the export buttons. |
 
 ## 8. Technical design
 
@@ -249,11 +279,12 @@ Each check shows pass, warning or fail, with the numbers behind it.
 PLAN.md
 data/                     hackathon starter kit
 web/
-  src/app/                the walkthrough page; api/agents/[role] routes
+  src/app/                the walkthrough page; api/agents/[role] and api/offer/extract routes
   src/lib/model/          parameters, hazard, vulnerability, financial, pipeline
   src/lib/ingest/         zip, csv, raster, dataset detection
   src/lib/checks/         the on-screen checks
   src/lib/agents/         prompts, schemas, model client
+  src/lib/offer/          reading an offer, checking it against its words, locating and pricing it
   src/components/         steps, charts, shared UI
   tests/                  unit tests, plus a test against the starter kit
 ```
@@ -292,13 +323,17 @@ Each phase ends with something that works, so there is always a demo.
    engine and checks, with unit tests and a test against the starter kit.
 2. **Reading the zip.** File detection, CSV parsing, raster lookup, and the
    cross-check against the pre-attached hazard columns.
-3. **Walkthrough on reference values.** All eight steps, end to end, no AI.
+3. **Walkthrough on reference values.** Every step, end to end, no AI.
    *This is the safety net.*
 4. **Agents.** Three parallel calls, the Chair, the ledger, the band, the
    with-and-without comparison, saved runs.
 5. **Audit and export.** Run log, audit file, written note.
 6. **Polish.** Animation, map detail, wording, a rehearsed demo path.
-7. **Second AI feature.** Chosen once the above is solid.
+7. **Second AI feature.** Offer pricing: the model turns an offer in plain
+   words into exposure rows, code checks every value against its quote, and
+   code prices the rows on the loaded maps and assumptions.
+8. **Insurance terms.** Deductible and limit per building, quota share and
+   excess of loss on the portfolio, ground-up, gross and net throughout.
 
 ## 10. Honest limits to state in the demo
 
@@ -320,10 +355,28 @@ Each phase ends with something that works, so there is always a demo.
   built from synthetic data. A deployment with real cedant data would need a
   data agreement with the provider, or a locally hosted model; the provider
   sits behind one function.
+- Offer pricing is the one place where a document's own text leaves the
+  browser: the text of the offer goes to the hosted model, with contact
+  details removed first (email addresses, phone numbers, and contact and
+  signature blocks). Names written inside ordinary sentences are not
+  removed. The screen shows exactly what was sent, and "Fixed rules only"
+  sends nothing.
+- A value marked verified was found written in the document. That shows it
+  was written, not that it was understood, so the source sentence sits
+  beside every value.
+- The fixed rules read one building per document. An offer with several
+  buildings needs the model, or the underwriter's own entries.
+- The insurance terms are example terms, not from any real policy or treaty.
+  Gross and net figures move with them.
+- An offer is priced on the residential damage curve whatever it is used
+  for, and water entering basements is not modelled. Both are flagged on
+  screen when they apply.
 
 ## 11. Open items
 
-- [ ] Ask the organisers which insured values are intended (file or dictionary).
+- [x] Decide which insured values to use: the file's values, exactly as
+      written (team decision, 8 October 2026). Asking the organisers which
+      were intended is still worth doing, but no longer blocks anything.
 - [ ] Check the Africa residential curve against the original JRC spreadsheet
       (currently confirmed against a secondary source only).
 - [x] Confirm the Gemini model name: `gemini-3.8-flash` is listed as stable
@@ -333,7 +386,9 @@ Each phase ends with something that works, so there is always a demo.
       and listed for our key (checked 8 October 2026).
 - [ ] Complete one live agent run and save it, so a run can ship with the app.
 - [ ] Get the marking rubric and check this plan against it.
-- [ ] Choose the second AI feature.
+- [x] Choose the second AI feature: offer pricing.
+- [ ] Run one offer end to end with the hosted model on localhost (the rules
+      path is covered by tests against the two test offers).
 
 ## 12. Sources
 

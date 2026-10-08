@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "motion/react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { buildLedger, type AgentRun, type Deliberation, type Scored } from "@/lib/agents/orchestrate";
 import { BASIS_LABELS, reasonAt, ROLE_LABELS, type Basis, type Proposal, type Role } from "@/lib/agents/schema";
 import type { Check } from "@/lib/checks";
@@ -20,6 +20,43 @@ const ROLE_BLURB: Record<Role, string> = {
 
 const SEVERITY = { high: "High", medium: "Medium", low: "Low" } as const;
 const VERDICT = { accepted: "Accepted", partly: "Partly accepted", rejected: "Rejected" } as const;
+
+const ROUND_1 = "Round 1 · in parallel";
+const ROUND_2 = "Round 2 · decision";
+
+function RoundLabel({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <div className={`mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-muted ${className}`}>{children}</div>;
+}
+
+function RoleHeading({ role }: { role: Role }) {
+  return (
+    <div className="min-w-0">
+      <h3 className="text-base font-semibold text-ink">{ROLE_LABELS[role]}</h3>
+      <p className="mt-0.5 text-sm leading-relaxed text-ink-2">{ROLE_BLURB[role]}</p>
+    </div>
+  );
+}
+
+/** Who takes part, shown before a run so the reader knows what the button starts. */
+function RoleCard({ role, className = "" }: { role: Role; className?: string }) {
+  return (
+    <section className={`min-w-0 rounded-2xl border border-line bg-surface p-5 ${className}`}>
+      <RoleHeading role={role} />
+    </section>
+  );
+}
+
+/**
+ * Boxes side by side where the card has the room, three to a row at most. The rows are kept even (four boxes
+ * sit two and two, not three and one) and a short last row stretches, so no hole is left beside it.
+ */
+function BoxRow({ count, children }: { count: number; children: ReactNode }) {
+  const perRow = Math.ceil(count / Math.ceil(count / 3)) || 1;
+  return <ul className="mt-4 flex flex-wrap gap-3" style={{ "--per-row": perRow } as CSSProperties}>{children}</ul>;
+}
+
+const BOX = "min-w-0 grow basis-full rounded-xl bg-surface-2 p-3 @3xl:basis-[calc(100%/var(--per-row)_-_0.75rem)]";
+const TILE = "flex min-w-0 grow basis-44 flex-col justify-center rounded-xl bg-surface-2 p-3";
 
 function Thinking() {
   return (
@@ -56,17 +93,15 @@ function RunMeta({ run }: { run: AgentRun }) {
   );
 }
 
-function AgentCard({ run, children }: { run: AgentRun; children?: ReactNode }) {
+function AgentCard({ run, className = "", children }: { run: AgentRun; className?: string; children?: ReactNode }) {
   return (
-    <motion.section layout className="flex min-w-0 flex-col rounded-2xl border border-line bg-surface p-5">
+    <motion.section layout className={`flex min-w-0 flex-col rounded-2xl border border-line bg-surface p-5 ${className}`}>
       <header className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="text-base font-semibold text-ink">{ROLE_LABELS[run.role]}</h3>
-          <p className="mt-0.5 text-sm leading-relaxed text-ink-2">{ROLE_BLURB[run.role]}</p>
-        </div>
+        <RoleHeading role={run.role} />
         <StatusIcon status={run.status === "done" ? "pass" : run.status === "error" ? "fail" : run.status === "running" ? "running" : "idle"} />
       </header>
-      <div className="mt-3 flex-1">
+      {/* A container, so the body lays itself out by the width of this card and not of the screen. */}
+      <div className="@container mt-3 flex-1">
         {run.status === "running" && <Thinking />}
         {run.status === "idle" && <p className="text-sm text-muted">Waiting for the first round.</p>}
         {run.status === "error" && <p className="text-sm leading-relaxed text-ink-2"><strong className="font-semibold text-ink">No valid reply.</strong> {run.error}</p>}
@@ -159,7 +194,7 @@ export function AgentsStep({ session, deliberation: d, busy, checks, status, has
       </div>
 
       {missingKeys.length > 0 && !d && (
-        <div className="mb-5">
+        <div className="mb-5 max-w-3xl">
           <Note tone="warn">
             {missingKeys.length === 4 ? "No API keys are configured, so the agents cannot run." : `No API key for: ${missingKeys.map((r) => ROLE_LABELS[r]).join(", ")}.`} Add them to <code className="font-mono text-sm">web/.env.local</code> and restart the server. You can continue without the agents; the model then uses its reference assumptions and says so.
           </Note>
@@ -168,17 +203,19 @@ export function AgentsStep({ session, deliberation: d, busy, checks, status, has
 
       {d && (
         <>
-          <div className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-muted">Round 1 · in parallel</div>
-          <div className="grid gap-4 lg:grid-cols-3">
+          <RoundLabel>{ROUND_1}</RoundLabel>
+          {/* The two proposals sit side by side to be compared. The Critic takes the full width below them, so its
+              challenges can sit in a row and no card is left with a tall blank under a short reply. */}
+          <div className="grid gap-4 @3xl:grid-cols-2">
             <AgentCard run={d.runs.optimist}>{d.runs.optimist.output && <ProposalBody proposal={d.runs.optimist.output} scored={d.optimist} session={session} />}</AgentCard>
             <AgentCard run={d.runs.cautious}>{d.runs.cautious.output && <ProposalBody proposal={d.runs.cautious.output} scored={d.cautious} session={session} />}</AgentCard>
-            <AgentCard run={d.runs.critic}>
+            <AgentCard run={d.runs.critic} className="@3xl:col-span-2">
               {critic && (
                 <div>
-                  <p className="text-sm leading-relaxed text-ink">{critic.summary}</p>
-                  <ul className="mt-3 space-y-3">
+                  <p className="max-w-3xl text-sm leading-relaxed text-ink">{critic.summary}</p>
+                  <BoxRow count={critic.challenges.length}>
                     {critic.challenges.map((c) => (
-                      <li key={c.id} className="rounded-xl bg-surface-2 p-3">
+                      <li key={c.id} className={BOX}>
                         <div className="flex flex-wrap items-baseline justify-between gap-x-2 text-sm">
                           <span className="font-semibold text-ink">{c.id} · {c.title}</span>
                           <span className="ml-auto whitespace-nowrap text-xs text-muted">{SEVERITY[c.severity]} severity</span>
@@ -187,37 +224,41 @@ export function AgentsStep({ session, deliberation: d, busy, checks, status, has
                         <p className="mt-1 text-sm leading-relaxed text-ink-2"><span className="text-muted">Recommends:</span> {c.recommendation}</p>
                       </li>
                     ))}
-                  </ul>
+                  </BoxRow>
                 </div>
               )}
             </AgentCard>
           </div>
 
-          <div className="mb-2 mt-6 text-xs font-semibold uppercase tracking-[0.14em] text-muted">Round 2 · decision</div>
+          <RoundLabel className="mt-6">{ROUND_2}</RoundLabel>
           <AgentCard run={d.runs.chair}>
             {chair && (
               <div>
-                <p className="text-base leading-relaxed text-ink">{chair.summary}</p>
-                {finalRarest && (
-                  <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                    <div className="rounded-xl bg-surface-2 p-3"><div className="text-xs text-muted">1 in {refRarest.returnPeriod}, reference values</div><div className="tabular mt-0.5 text-lg font-semibold text-ink">{fmtKes(refRarest.lossKes, 2)}</div></div>
-                    <div className="rounded-xl bg-surface-2 p-3"><div className="text-xs text-muted">1 in {finalRarest.returnPeriod}, agreed values</div><div className="tabular mt-0.5 text-lg font-semibold text-ink">{fmtKes(finalRarest.lossKes, 2)}</div></div>
-                    <div className="rounded-xl bg-surface-2 p-3"><div className="text-xs text-muted">Change in average annual loss</div><div className="tabular mt-0.5 text-lg font-semibold text-ink">{fmtPct(d.final!.result.aalKes / session.reference.aalKes - 1, 0).replace(/^(?!-)/, "+")}</div></div>
-                  </div>
-                )}
+                {/* On a wide card the three figures sit beside the summary, which keeps its reading width. */}
+                <div className="grid gap-x-6 gap-y-4 @6xl:grid-cols-[minmax(0,65ch)_minmax(0,1fr)]">
+                  <p className="max-w-3xl text-base leading-relaxed text-ink">{chair.summary}</p>
+                  {finalRarest && (
+                    <div className="flex flex-wrap gap-3">
+                      <div className={TILE}><div className="text-xs text-muted">1 in {refRarest.returnPeriod}, reference values</div><div className="tabular mt-0.5 text-lg font-semibold text-ink">{fmtKes(refRarest.lossKes, 2)}</div></div>
+                      <div className={TILE}><div className="text-xs text-muted">1 in {finalRarest.returnPeriod}, agreed values</div><div className="tabular mt-0.5 text-lg font-semibold text-ink">{fmtKes(finalRarest.lossKes, 2)}</div></div>
+                      <div className={TILE}><div className="text-xs text-muted">Change in average annual loss</div><div className="tabular mt-0.5 text-lg font-semibold text-ink">{fmtPct(d.final!.result.aalKes / session.reference.aalKes - 1, 0).replace(/^(?!-)/, "+")}</div></div>
+                    </div>
+                  )}
+                </div>
+                {/* One box per challenge, in the same columns as the Critic's card, so an answer sits under its challenge. */}
                 {critic && (
-                  <ul className="mt-4 divide-y divide-line">
+                  <BoxRow count={critic.challenges.length}>
                     {critic.challenges.map((c) => {
                       const a = chair.responses.find((r) => r.challengeId === c.id);
                       return (
-                        <li key={c.id} className="py-2.5 text-sm leading-relaxed">
+                        <li key={c.id} className={`${BOX} text-sm leading-relaxed`}>
                           <span className="font-semibold text-ink">{c.id} · {c.title}</span>
                           <span className="ml-2 text-xs font-semibold uppercase tracking-wide text-muted">{a ? VERDICT[a.verdict] : "Not answered"}</span>
                           {a && <div className="text-ink-2">{a.response}</div>}
                         </li>
                       );
                     })}
-                  </ul>
+                  </BoxRow>
                 )}
               </div>
             )}
@@ -240,7 +281,7 @@ export function AgentsStep({ session, deliberation: d, busy, checks, status, has
                   <tbody className="divide-y divide-line align-top">
                     {ledger.map((row) => (
                       <tr key={row.path}>
-                        <td className="py-2 pr-3 text-ink">{PARAM_LABELS[row.path]}</td>
+                        <td className="py-2 pr-3 text-ink @6xl:whitespace-nowrap">{PARAM_LABELS[row.path]}</td>
                         <td className="tabular py-2 text-right text-ink-2">{fmtNum(row.reference)}</td>
                         <td className="tabular py-2 text-right text-ink-2">{row.optimist === null ? "-" : fmtNum(row.optimist)}</td>
                         <td className="tabular py-2 text-right text-ink-2">{row.cautious === null ? "-" : fmtNum(row.cautious)}</td>
@@ -257,21 +298,41 @@ export function AgentsStep({ session, deliberation: d, busy, checks, status, has
 
           {checks.length > 0 && !busy && (
             <Card title="Checks on the agents" aside={<ChecksSummary checks={checks} />} className="mt-4">
-              <CheckList checks={checks} />
+              {/* Two lists side by side where there is room: the lines are short, and one list leaves most of a wide card blank. */}
+              <div className="grid gap-x-10 @4xl:grid-cols-2">
+                <CheckList checks={checks.slice(0, Math.ceil(checks.length / 2))} />
+                {checks.length > 1 && <div className="border-t border-line @4xl:border-t-0"><CheckList checks={checks.slice(Math.ceil(checks.length / 2))} /></div>}
+              </div>
             </Card>
           )}
         </>
       )}
 
       {!d && (
-        <Card title="Reference assumptions" aside={<Tag kind="assumption" />}>
+        <>
+          <Card title="Reference assumptions" aside={<Tag kind="assumption" />}>
           <p className="mb-3 text-sm leading-relaxed text-ink-2">These are in force until the agents have run. They are also the &ldquo;without AI&rdquo; side of the comparison in the results.</p>
-          <div className="grid gap-x-8 gap-y-1.5 text-sm sm:grid-cols-2">
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(min(20rem,100%),1fr))] gap-x-8 gap-y-1.5 text-sm">
             {flattenParams(REFERENCE_PARAMS).filter((p) => isScore || !unusedForDepth(p.path)).map((p) => (
               <div key={p.path} className="flex justify-between gap-3 border-b border-line py-1"><span className="text-ink-2">{PARAM_LABELS[p.path]}</span><span className="tabular font-medium text-ink">{fmtNum(p.value)}</span></div>
             ))}
           </div>
-        </Card>
+          </Card>
+          <div className="mt-5 grid gap-x-4 gap-y-5 @5xl:grid-cols-4">
+            <div className="flex flex-col @5xl:col-span-3">
+              <RoundLabel>{ROUND_1}</RoundLabel>
+              <div className="grid flex-1 gap-4 @3xl:grid-cols-3">
+                <RoleCard role="optimist" />
+                <RoleCard role="cautious" />
+                <RoleCard role="critic" />
+              </div>
+            </div>
+            <div className="flex flex-col">
+              <RoundLabel>{ROUND_2}</RoundLabel>
+              <RoleCard role="chair" className="flex-1" />
+            </div>
+          </div>
+        </>
       )}
     </div>
   );

@@ -2,8 +2,10 @@ import { buildLedger, type Deliberation } from "./agents/orchestrate";
 import { ROLE_LABELS, ROLES } from "./agents/schema";
 import type { Check } from "./checks";
 import { fmtInt, fmtKes, fmtNum, fmtPct } from "./format";
+import { kes1, rpLabel, rpWithChance } from "./labels";
 import { hotspotHits } from "./model/hotspots";
 import { REFERENCE_PARAMS } from "./model/params";
+import { XOL_DEFAULT_ATTACHMENT_RP, XOL_DEFAULT_EXHAUSTION_RP, type TermsResult } from "./model/terms";
 import { HOUSING_CLASSES, HOUSING_LABELS, SCORE_TIERS, type ModelParams } from "./model/types";
 import { JRC_AFRICA_RESIDENTIAL } from "./model/vulnerability";
 import { slim, type Active, type LogEntry, type Session } from "./session";
@@ -25,11 +27,26 @@ export const LIMITS = [
   "The return periods attached to the tiers are assumed.",
   "The portfolio is synthetic and randomly placed. It is not a real client's holdings.",
   "The scenarios are nested cuts of one map, not independent events.",
+  "The deductible, limit, quota share and excess of loss are example terms, not taken from any real policy or treaty. Gross and net figures change with them.",
   "Average annual loss assumes no loss from events more frequent than the shortest return period, and a flat loss beyond the longest.",
 ];
 
+export const TERMS_NOTICE = "Example terms, not from any real policy or treaty";
+
+/** One insurance term as a reader sees it: its name and its value in words. Used on the Audit step and in the written note. */
+export function termRows(t: TermsResult): { term: string; value: string }[] {
+  const { terms, xol } = t;
+  return [
+    { term: "Deductible, each building", value: `${fmtNum(terms.deductibleShare * 100)}% of insured value, and never less than ${fmtKes(terms.deductibleMinKes)}` },
+    { term: "Limit, each building", value: `${fmtNum(terms.limitShare * 100)}% of insured value` },
+    { term: "Quota share ceded", value: `${fmtNum(terms.quotaShareCeded * 100)}% of every gross loss` },
+    { term: "Excess of loss attachment", value: `${kes1(xol.attachmentKes)} (${xol.attachmentIsDefault ? `default: the retained ${rpLabel(XOL_DEFAULT_ATTACHMENT_RP)} loss` : "typed in"})` },
+    { term: "Excess of loss limit", value: `${kes1(xol.limitKes)} (${xol.limitIsDefault ? `default: the retained ${rpLabel(XOL_DEFAULT_EXHAUSTION_RP)} loss less the attachment` : "typed in"})` },
+  ];
+}
+
 /** The complete record of a run: inputs, assumptions, prompts, replies, results and checks. */
-export function buildAudit(session: Session, active: Active, deliberation: Deliberation | null, checks: Check[], log: LogEntry[]) {
+export function buildAudit(session: Session, active: Active, deliberation: Deliberation | null, checks: Check[], log: LogEntry[], terms: TermsResult) {
   return {
     generatedAt: new Date().toISOString(),
     notice: "Synthetic portfolio. Hazard is a proxy unless the dataset carries measured depths. Not a real client's holdings.",
@@ -44,6 +61,21 @@ export function buildAudit(session: Session, active: Active, deliberation: Delib
       referenceScenarios: session.reference.scenarios.map((s) => ({ id: s.id, returnPeriod: s.returnPeriod, lossKes: s.lossKes })),
       buildings: active.result.buildings,
     },
+    insuranceTerms: {
+      notice: TERMS_NOTICE,
+      source: "example term",
+      // xolAttachmentKes and xolLimitKes are null here when the default is in force; excessOfLossApplied has the figures used.
+      terms: terms.terms,
+      excessOfLossApplied: {
+        ...terms.xol,
+        defaultAttachment: `retained loss at ${rpLabel(XOL_DEFAULT_ATTACHMENT_RP)}`,
+        defaultLimit: `retained loss at ${rpLabel(XOL_DEFAULT_EXHAUSTION_RP)} less the attachment`,
+      },
+      // One row per modelled event: ground-up, deductibles, over limit, gross, quota share recovery, retained, excess of loss recovery, net.
+      layers: terms.scenarios,
+      standardLosses: terms.standard,
+      averageAnnualLossKes: terms.aal,
+    },
     checks,
     agents: deliberation ? slim(deliberation) : null,
     limits: LIMITS,
@@ -52,7 +84,7 @@ export function buildAudit(session: Session, active: Active, deliberation: Delib
 }
 
 /** The short written note the hackathon asks for: data sources, assumptions, AI feature. */
-export function buildNote(session: Session, active: Active, deliberation: Deliberation | null, checks: Check[]): string {
+export function buildNote(session: Session, active: Active, deliberation: Deliberation | null, checks: Check[], terms: TermsResult): string {
   const { dataset, report, reference } = session;
   const r = active.result;
   const p: ModelParams = active.params;
@@ -94,9 +126,16 @@ export function buildNote(session: Session, active: Active, deliberation: Delibe
 
   lines.push(`## 3. Results`, ``, `| Return period | Scenario | Buildings affected | Loss | Share of insured value |`, `|---|---|---|---|---|`);
   for (const s of r.scenarios) lines.push(`| 1 in ${s.returnPeriod} | ${s.id} | ${fmtInt(s.affected)} of ${fmtInt(r.buildingCount)} | ${fmtKes(s.lossKes, 2)} | ${fmtPct(s.lossKes / r.totalTivKes, 2)} |`);
-  lines.push(``, `Total insured value ${fmtKes(r.totalTivKes)} · average annual loss ${fmtKes(r.aalKes, 2)}.`, ``);
+  lines.push(``, `Total insured value ${fmtKes(r.totalTivKes)} · average annual loss ${fmtKes(r.aalKes, 2)}. These are ground-up losses, before any insurance terms.`, ``);
 
-  lines.push(`## 4. AI feature`, ``);
+  lines.push(`## 4. Insurance terms`, ``, `**${TERMS_NOTICE}.** Ground-up loss less the deductible, capped at the limit, is the gross loss. Net loss is gross less the quota share recovery and the excess of loss recovery.`, ``);
+  for (const row of termRows(terms)) lines.push(`- ${row.term}: ${row.value}`);
+  const at100 = terms.standard.find((l) => l.returnPeriod === 100);
+  lines.push(``, `| | Ground-up | Gross | Net |`, `|---|---|---|---|`);
+  if (at100) lines.push(`| ${rpWithChance(100)} loss${at100.extrapolated ? ", held flat beyond the rarest modelled event" : ""} | ${at100.groundUpKes === null ? "not modelled" : kes1(at100.groundUpKes)} | ${at100.grossKes === null ? "not modelled" : kes1(at100.grossKes)} | ${at100.netKes === null ? "not modelled" : kes1(at100.netKes)} |`);
+  lines.push(`| Average annual loss | ${kes1(terms.aal.groundUpKes)} | ${kes1(terms.aal.grossKes)} | ${kes1(terms.aal.netKes)} |`, ``);
+
+  lines.push(`## 5. AI feature`, ``);
   if (deliberation?.final) {
     lines.push(
       `Three agents ran in parallel (${deliberation.runs.optimist.model ?? "model"}): an Optimist and a Cautious voice each proposed a full set of assumptions with a reason per value, and a Critic challenged the data and the reference assumptions. Code ran the loss engine on both proposals. A Chair then settled the final set and answered each challenge. No agent produced a loss figure; all arithmetic is code.`,
@@ -124,9 +163,9 @@ export function buildNote(session: Session, active: Active, deliberation: Delibe
     lines.push(`The agent panel was not run for this result. The figures above use reference values only, so the rarest scenario loss is ${fmtKes(rarest.lossKes, 2)}.`, ``);
   }
 
-  lines.push(`## 5. Checks`, ``, `${counts.pass} passed, ${counts.warn} warnings, ${counts.fail} failed.`, ``);
+  lines.push(`## 6. Checks`, ``, `${counts.pass} passed, ${counts.warn} warnings, ${counts.fail} failed.`, ``);
   for (const c of checks.filter((c) => c.status !== "pass")) lines.push(`- **${c.status === "warn" ? "Warning" : "Fail"}: ${c.title}.** ${c.detail}`);
-  lines.push(``, `## 6. Limits`, ``);
+  lines.push(``, `## 7. Limits`, ``);
   for (const l of LIMITS.filter((l) => isScore || !/score|tiers are assumed|proxy/.test(l))) lines.push(`- ${l}`);
   lines.push(``);
   return lines.join("\n");

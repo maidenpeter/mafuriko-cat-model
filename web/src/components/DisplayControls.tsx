@@ -44,6 +44,8 @@ export function DisplayControls({ className = "" }: { className?: string }) {
 
   return (
     <div className={`flex shrink-0 items-center gap-1.5 ${className}`}>
+      {/* The words are for readers who do not know the icons; on a phone there is only room for the controls. */}
+      <span aria-hidden className="hidden text-xs font-medium uppercase tracking-wide text-white/65 md:inline">Text size</span>
       <div role="radiogroup" aria-label="Text size" onKeyDown={onArrow} className="inline-flex rounded-full border border-white/30">
         {TEXT_SIZES.map((s) => {
           const checked = s.value === size;
@@ -69,7 +71,7 @@ export function DisplayControls({ className = "" }: { className?: string }) {
         onClick={() => setTheme(other)}
         aria-label={`Switch to ${other} mode`}
         title={`Switch to ${other} mode`}
-        className={`flex h-9 w-9 items-center justify-center rounded-full border border-white/30 text-white/80 transition hover:bg-white/15 hover:text-white ${FOCUS}`}
+        className={`flex h-9 min-w-9 items-center justify-center gap-1.5 rounded-full border border-white/30 px-2 text-white/80 transition hover:bg-white/15 hover:text-white md:ml-1.5 md:px-3 ${FOCUS}`}
       >
         {/* The icon shows what the button gives: a moon while the page is light, a sun while it is dark. */}
         <svg aria-hidden viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
@@ -82,6 +84,7 @@ export function DisplayControls({ className = "" }: { className?: string }) {
             </>
           )}
         </svg>
+        <span aria-hidden className="hidden text-sm md:inline">{other === "dark" ? "Dark mode" : "Light mode"}</span>
       </button>
     </div>
   );

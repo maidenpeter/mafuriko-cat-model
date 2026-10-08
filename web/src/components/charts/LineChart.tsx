@@ -8,6 +8,9 @@ export interface Point {
   y: number;
 }
 
+/** The shape drawn at each point of a line, so lines can be told apart without colour. */
+export type MarkerShape = "circle" | "square" | "triangle" | "diamond";
+
 export interface Series {
   id: string;
   label: string;
@@ -16,7 +19,14 @@ export interface Series {
   points: Point[];
   /** De-emphasised context line: thinner, no markers. */
   quiet?: boolean;
+  /** Round markers at each point. Use `marker` to choose another shape. */
   markers?: boolean;
+  /** A marker of this shape at each point. */
+  marker?: MarkerShape;
+  /** SVG dash pattern such as "9 6". Left out, the line is solid. */
+  dash?: string;
+  /** A short name written at the right-hand end of the line, when the chart is asked for end labels and has the room. */
+  endLabel?: string;
 }
 
 interface Props {
@@ -28,10 +38,22 @@ interface Props {
   xFormat: (x: number) => string;
   yFormat: (y: number) => string;
   xLabel: string;
+  /** A second line under each x tick label, for example the annual chance under a return period. */
+  xSubFormat?: (x: number) => string;
+  /** The y axis title with its units, for example "Loss (KES)". */
+  yLabel?: string;
+  /** The heading of the tooltip. Left out, it is the x tick label. */
+  tooltipTitle?: (x: number) => string;
+  /** Writes each series' `endLabel` beside the end of its line where the chart is wide enough. */
+  endLabels?: boolean;
+  /** The chart's accessible name. Left out, it is made from the x axis title. */
+  ariaLabel?: string;
   /** X positions the crosshair snaps to. */
   hoverXs: number[];
   /** Height at the Standard text size. The plot keeps its area; the room for labels grows with the text. */
   height?: number;
+  /** Lets the plot grow past that height to fill a taller box. The caller's box must be a column flex container. */
+  fill?: boolean;
   yMax?: number;
 }
 
@@ -61,17 +83,43 @@ export function valueAt(points: Point[], x: number, scale: "log" | "linear"): nu
   return points[0].y;
 }
 
-export function LineChart({ series, band, xScale, xTicks, xFormat, yFormat, xLabel, hoverXs, height = 320, yMax }: Props) {
-  const wrap = useRef<HTMLDivElement>(null);
+const markerOf = (s: Series): MarkerShape | undefined => s.marker ?? (s.markers ? "circle" : undefined);
+
+/** One marker, centred on (x, y). The surface-coloured edge keeps it clear of the line it sits on. */
+function Marker({ shape, x, y, r, color }: { shape: MarkerShape; x: number; y: number; r: number; color: string }) {
+  const edge = { fill: color, stroke: "var(--surface)", strokeWidth: 2, strokeLinejoin: "round" as const };
+  if (shape === "square") return <rect x={x - r * 0.9} y={y - r * 0.9} width={r * 1.8} height={r * 1.8} rx={1} {...edge} />;
+  if (shape === "triangle") return <path d={`M${x},${y - r * 1.2}L${x + r * 1.15},${y + r * 0.85}L${x - r * 1.15},${y + r * 0.85}Z`} {...edge} />;
+  if (shape === "diamond") return <path d={`M${x},${y - r * 1.25}L${x + r * 1.25},${y}L${x},${y + r * 1.25}L${x - r * 1.25},${y}Z`} {...edge} />;
+  return <circle cx={x} cy={y} r={r} {...edge} />;
+}
+
+/** The series as it is drawn, in small: its dash pattern and its marker. Sized in rem, so it grows with the text. */
+function Swatch({ s }: { s: Series }) {
+  const shape = markerOf(s);
+  return (
+    <svg viewBox="0 0 30 12" aria-hidden className="shrink-0" style={{ width: "1.875rem", height: "0.75rem" }}>
+      <line x1={1} x2={29} y1={6} y2={6} stroke={s.color} strokeWidth={s.quiet ? 1.5 : 2.5} strokeDasharray={s.dash} strokeLinecap="round" />
+      {shape && <Marker shape={shape} x={15} y={6} r={3.5} color={s.color} />}
+    </svg>
+  );
+}
+
+export function LineChart({ series, band, xScale, xTicks, xFormat, xSubFormat, yFormat, xLabel, yLabel, tooltipTitle, endLabels = false, ariaLabel, hoverXs, height = 320, fill = false, yMax }: Props) {
+  const plot = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(720);
+  const [room, setRoom] = useState(0);
   const [hover, setHover] = useState<number | null>(null);
   const scale = useTextScale();
 
   useEffect(() => {
-    if (!wrap.current) return;
+    if (!plot.current) return;
     // The chart is as wide as its card, so it never pushes the page sideways. The floor only covers a card too narrow to draw in.
-    const ro = new ResizeObserver(([e]) => setWidth(Math.max(240, e.contentRect.width)));
-    ro.observe(wrap.current);
+    const ro = new ResizeObserver(([e]) => {
+      setWidth(Math.max(240, e.contentRect.width));
+      setRoom(e.contentRect.height);
+    });
+    ro.observe(plot.current);
     return () => ro.disconnect();
   }, []);
 
@@ -86,9 +134,16 @@ export function LineChart({ series, band, xScale, xTicks, xFormat, yFormat, xLab
   const charWidth = fontSize * 0.55;
   // The left margin holds the widest y label, so a long figure is not clipped at the edge.
   const yLabelWidth = Math.max(...yTicks.map((t) => yFormat(t).length)) * charWidth;
-  const m = { top: 12, right: 28 * scale, bottom: 28 * scale, left: Math.max(76 * scale, yLabelWidth + 10 * scale) };
+  const left = Math.max(76 * scale, yLabelWidth + 10 * scale);
+  // End labels need a margin of their own. On a chart too narrow to spare it they are left out; the legend still names every line.
+  const labelled = endLabels ? series.filter((s) => s.endLabel && s.points.length > 0) : [];
+  const endLabelWidth = labelled.length ? Math.max(...labelled.map((s) => s.endLabel!.length)) * charWidth + 20 * scale : 0;
+  const showEndLabels = labelled.length > 0 && width - left - endLabelWidth >= 320 * scale;
+  const m = { top: 12, right: showEndLabels ? endLabelWidth : 28 * scale, bottom: (xSubFormat ? 44 : 28) * scale, left };
   const w = Math.max(width - m.left - m.right, 0);
-  const h = height - 56;
+  // A filling chart is drawn over its box and not inside it, so the box's height never depends on the drawing.
+  const hMin = height - 56;
+  const h = fill ? Math.max(hMin, room - m.top - m.bottom) : hMin;
 
   const yTop = yTicks[yTicks.length - 1];
   const sx = (v: number) => (x1 === x0 ? w / 2 : ((axisValue(v, xScale) - x0) / (x1 - x0)) * w);
@@ -98,7 +153,7 @@ export function LineChart({ series, band, xScale, xTicks, xFormat, yFormat, xLab
   const xLabelled: number[] = [];
   let edge = -Infinity;
   for (const t of xTicks) {
-    const half = (xFormat(t).length * charWidth) / 2;
+    const half = (Math.max(xFormat(t).length, xSubFormat ? xSubFormat(t).length : 0) * charWidth) / 2;
     if (sx(t) - half < edge) continue;
     xLabelled.push(t);
     edge = sx(t) + half + fontSize / 2;
@@ -106,6 +161,15 @@ export function LineChart({ series, band, xScale, xTicks, xFormat, yFormat, xLab
 
   const path = (pts: Point[]) => pts.map((p, i) => `${i ? "L" : "M"}${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)}`).join("");
   const bandPath = band && band.lower.length > 1 ? `${path(band.upper)}${[...band.lower].reverse().map((p) => `L${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)}`).join("")}Z` : null;
+
+  // End labels sit level with the end of their line, moved apart just enough that they never overlap.
+  const ends = showEndLabels ? labelled.map((s) => ({ s, y: sy(s.points[s.points.length - 1].y) })).sort((a, b) => a.y - b.y) : [];
+  const gap = fontSize * 1.25;
+  for (let i = 1; i < ends.length; i++) ends[i].y = Math.max(ends[i].y, ends[i - 1].y + gap);
+  if (ends.length && ends[ends.length - 1].y > h) {
+    ends[ends.length - 1].y = h;
+    for (let i = ends.length - 2; i >= 0; i--) ends[i].y = Math.min(ends[i].y, ends[i + 1].y - gap);
+  }
 
   const onMove = (e: React.PointerEvent<SVGRectElement>) => {
     const px = e.clientX - e.currentTarget.getBoundingClientRect().left;
@@ -118,11 +182,11 @@ export function LineChart({ series, band, xScale, xTicks, xFormat, yFormat, xLab
   const bandAt = hover !== null && band ? { lo: valueAt(band.lower, hover, xScale), hi: valueAt(band.upper, hover, xScale) } : null;
 
   return (
-    <div ref={wrap} className="relative w-full">
+    <div className={`relative w-full ${fill ? "flex grow flex-col" : ""}`}>
       <div className="mb-2 flex flex-wrap gap-x-5 gap-y-1 text-sm text-ink-2">
         {series.map((s) => (
           <span key={s.id} className="inline-flex items-center gap-2">
-            <span className="inline-block h-0.5 w-5 shrink-0 rounded-full" style={{ background: s.color, height: s.quiet ? 1.5 : 2.5 }} />
+            <Swatch s={s} />
             {s.label}
           </span>
         ))}
@@ -134,38 +198,48 @@ export function LineChart({ series, band, xScale, xTicks, xFormat, yFormat, xLab
         )}
       </div>
 
-      <svg width={width} height={m.top + h + m.bottom} role="img" aria-label={`${xLabel} chart`} className="block">
-        <g transform={`translate(${m.left},${m.top})`}>
-          {yTicks.map((t) => (
-            <g key={t}>
-              <line x1={0} x2={w} y1={sy(t)} y2={sy(t)} stroke={t === 0 ? "var(--axis)" : "var(--line)"} strokeWidth={1} />
-              <text x={-10 * scale} y={sy(t)} dy="0.32em" textAnchor="end" fontSize={fontSize} fill="var(--muted)" className="tabular">{yFormat(t)}</text>
-            </g>
-          ))}
-          {xTicks.map((t) => (
-            <g key={t} transform={`translate(${sx(t)},${h})`}>
-              <line y2={5} stroke="var(--axis)" />
-              {xLabelled.includes(t) && <text y={20 * scale} textAnchor="middle" fontSize={fontSize} fill="var(--muted)" className="tabular">{xFormat(t)}</text>}
-            </g>
-          ))}
+      {yLabel && <div className="mb-1 text-xs text-ink-2">{yLabel}</div>}
+      <div ref={plot} className={fill ? "relative grow" : undefined} style={fill ? { minHeight: m.top + hMin + m.bottom } : undefined}>
+        <svg width={width} height={m.top + h + m.bottom} role="img" aria-label={ariaLabel ?? `${xLabel} chart`} className={fill ? "absolute left-0 top-0 block" : "block"}>
+          <g transform={`translate(${m.left},${m.top})`}>
+            {yTicks.map((t) => (
+              <g key={t}>
+                <line x1={0} x2={w} y1={sy(t)} y2={sy(t)} stroke={t === 0 ? "var(--axis)" : "var(--line)"} strokeWidth={1} />
+                <text x={-10 * scale} y={sy(t)} dy="0.32em" textAnchor="end" fontSize={fontSize} fill="var(--muted)" className="tabular">{yFormat(t)}</text>
+              </g>
+            ))}
+            {xTicks.map((t) => (
+              <g key={t} transform={`translate(${sx(t)},${h})`}>
+                <line y2={5} stroke="var(--axis)" />
+                {xLabelled.includes(t) && <text y={20 * scale} textAnchor="middle" fontSize={fontSize} fill="var(--muted)" className="tabular">{xFormat(t)}</text>}
+                {xSubFormat && xLabelled.includes(t) && <text y={36 * scale} textAnchor="middle" fontSize={fontSize} fill="var(--muted)" className="tabular">{xSubFormat(t)}</text>}
+              </g>
+            ))}
 
-          {bandPath && <path d={bandPath} fill="var(--accent-wash)" />}
-          {series.map((s) => (
-            <g key={s.id}>
-              <path d={path(s.points)} fill="none" stroke={s.color} strokeWidth={s.quiet ? 1.5 : 2} strokeLinejoin="round" strokeLinecap="round" />
-              {s.markers && s.points.map((p) => <circle key={p.x} cx={sx(p.x)} cy={sy(p.y)} r={4.5} fill={s.color} stroke="var(--surface)" strokeWidth={2} />)}
-            </g>
-          ))}
+            {bandPath && <path d={bandPath} fill="var(--accent-wash)" />}
+            {series.map((s) => {
+              const shape = markerOf(s);
+              return (
+                <g key={s.id}>
+                  <path d={path(s.points)} fill="none" stroke={s.color} strokeWidth={s.quiet ? 1.5 : 2} strokeDasharray={s.dash} strokeLinejoin="round" strokeLinecap="round" />
+                  {shape && s.points.map((p) => <Marker key={p.x} shape={shape} x={sx(p.x)} y={sy(p.y)} r={4.5} color={s.color} />)}
+                </g>
+              );
+            })}
+            {ends.map(({ s, y }) => (
+              <text key={s.id} x={w + 12 * scale} y={y} dy="0.32em" fontSize={fontSize} fontWeight={600} fill="var(--ink-2)">{s.endLabel}</text>
+            ))}
 
-          {hover !== null && (
-            <g pointerEvents="none">
-              <line x1={sx(hover)} x2={sx(hover)} y1={0} y2={h} stroke="var(--axis)" strokeWidth={1} />
-              {readout.map(({ s, v }) => <circle key={s.id} cx={sx(hover)} cy={sy(v!)} r={5} fill={s.color} stroke="var(--surface)" strokeWidth={2} />)}
-            </g>
-          )}
-          <rect x={0} y={0} width={w} height={h} fill="transparent" onPointerMove={onMove} onPointerLeave={() => setHover(null)} />
-        </g>
-      </svg>
+            {hover !== null && (
+              <g pointerEvents="none">
+                <line x1={sx(hover)} x2={sx(hover)} y1={0} y2={h} stroke="var(--axis)" strokeWidth={1} />
+                {readout.map(({ s, v }) => <Marker key={s.id} shape={markerOf(s) ?? "circle"} x={sx(hover)} y={sy(v!)} r={5} color={s.color} />)}
+              </g>
+            )}
+            <rect x={0} y={0} width={w} height={h} fill="transparent" onPointerMove={onMove} onPointerLeave={() => setHover(null)} />
+          </g>
+        </svg>
+      </div>
       {/* The axis title is page text, not SVG text, so it wraps under a narrow plot instead of being clipped. */}
       <div className="mt-1 text-center text-xs text-ink-2" style={{ paddingLeft: m.left, paddingRight: m.right }}>{xLabel}</div>
 
@@ -175,10 +249,10 @@ export function LineChart({ series, band, xScale, xTicks, xFormat, yFormat, xLab
           className="pointer-events-none absolute top-10 z-10 w-60 max-w-full rounded-xl border border-line bg-surface p-3 text-sm shadow-lg"
           style={{ left: `clamp(0px, ${(m.left + sx(hover) + 14).toFixed(1)}px, calc(100% - 15.625rem))` }}
         >
-          <div className="mb-1.5 font-semibold text-ink">{xFormat(hover)}</div>
+          <div className="mb-1.5 font-semibold text-ink">{(tooltipTitle ?? xFormat)(hover)}</div>
           {readout.map(({ s, v }) => (
             <div key={s.id} className="flex items-center justify-between gap-3 py-0.5 text-ink-2">
-              <span className="inline-flex items-center gap-2"><span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: s.color }} />{s.label}</span>
+              <span className="inline-flex min-w-0 items-center gap-2"><Swatch s={s} />{s.label}</span>
               <span className="tabular whitespace-nowrap font-medium text-ink">{yFormat(v!)}</span>
             </div>
           ))}

@@ -435,8 +435,9 @@ export function RiskMap(props: Props) {
     el.style.transform = `translate(${left}px, ${top}px)`;
   }, [tip]);
 
+  // The frame fills the box the map step gives it; that box sets the height.
   return (
-    <div ref={frame} className="relative h-[520px] w-full overflow-hidden rounded-xl border border-line bg-surface-2 lg:h-[660px]">
+    <div ref={frame} className="relative h-full w-full overflow-hidden rounded-xl border border-line bg-surface-2">
       <div ref={box} className="h-full w-full" />
       {/* The notice fades in after a moment, so a quick rebuild for a theme change does not flash it. */}
       {!ready && (

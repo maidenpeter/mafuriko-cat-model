@@ -8,15 +8,15 @@ A web app for an underwriter. It loads the hackathon data by itself, takes a
 broker's offer for one building, and walks through a complete flood
 catastrophe model with that building at the centre of every step:
 
-**Dashboard → Read the offer → Read the data → Hazard map → Agents → Vulnerability → Loss engine → Results → Audit**
+**Dashboard → Price an offer → Read the data → Agents → Hazard map → Vulnerability → Loss engine → Results → Audit**
 
 Once an offer has been read and priced the app is in **Offer mode**, and every
 step answers one question: should we take this business, and on what terms?
 The model data is not set aside. The synthetic portfolio is the offer's
 context on every step (the other insured buildings around it on the map, the
-range of its construction class, what it adds to the book), and each step
-keeps the full portfolio view as a second view. An **Offer / Portfolio**
-switch in the header returns to the portfolio alone.
+range of its construction class, what it adds to the book), and the full
+portfolio view of every step is one switch away: **View** (Offer or
+Portfolio) in the header. No step has a switch of its own.
 
 Each step shows its output, the checks that ran on it, and where every number
 came from. The viewer should be able to understand the result in under two
@@ -53,9 +53,11 @@ the reference, optimistic, cautious and agreed assumptions.
 | AI provider | OpenAI (one key for all four agents) or Gemini (free keys, one per agent), chosen by one setting. The model call sits behind one function, so nothing else in the app knows which is in use. |
 | Front end | Next.js, modern and simple, animated walkthrough, tests running on screen. |
 | Model data | Read in place from the model data folder: `data/data` beside `web`, or `MODEL_DATA_DIR` in `web/.env.local`. The app opens on the Dashboard with the model loaded; with no folder it falls back to a built-in sample and says so. "Replace model data" takes a zip or loose files for another data set. The app must not depend on exact file names. |
-| Second AI feature | Chosen: offer pricing. An offer in plain words (a broker's memo as Word, PDF or text, or a typed sentence) becomes exposure rows by the model, every value is checked against its quote by code, and the rows are priced by code. With no key, or if the call fails, fixed rules do the reading and nothing leaves the browser. An old `.doc` file is refused with "Old Word format, please save as .docx". |
-| The offer at the centre | Once an offer is priced, every step follows that building, with the portfolio as its context and as a second view on the same step. One picture of the offer is built once by code and handed to every step, so no step prices anything itself. |
-| One home for each fact | Each figure, table and explanation lives in one step; another step that needs it gives one line and points there. The header strip carries the offer's headline figures on every step. |
+| Second AI feature | Chosen: offer pricing. An offer in plain words (a broker's memo, always a file: Word, PDF or text) becomes exposure rows by the model, every value is checked against its quote by code, and the rows are priced by code. With no key, or if the call fails, fixed rules do the reading and nothing leaves the browser. An old `.doc` file is refused with "Old Word format, please save as .docx". |
+| The offer at the centre | Once an offer is priced, every step follows that building, with the portfolio as its context and as the other side of the header's View switch. One picture of the offer is built once by code and handed to every step, so no step prices anything itself. |
+| One home for each fact | Each figure, table and explanation lives in one step; another step that needs it gives one line and points there. The row of four figures in the header carries the offer's headline figures on every step. |
+| Losses beyond flood depth | A building's loss is the sum of six loss drivers, then the deductible and the limit: surrounding flooding, drainage ponding, drain overload, basement ingress, business interruption and an uncertainty loading (section 3.5). A header switch, "Losses from", chooses "Depth only" or "All loss drivers"; All loss drivers is the default. Depth only is the model as it was, to the last decimal, and tests hold it there. This replaces an earlier, half-built method (an average over a radius, percentage loadings and a blend with the loss history), which is removed. |
+| Not stated means asked, not guessed | A value the drivers need and the offer does not state is listed as a question for the broker. The price uses a marked assumption until it is answered. |
 | The decision | The tool does not accept or decline. Results sets out the figures, the flags with their evidence and suggested conditions; the underwriter records Accept, Accept with conditions, Refer or Decline with a note, and can download a one-page decision note. |
 
 ## 3. The model
@@ -135,7 +137,86 @@ Four stages, as in the brief. Everything in this section is code.
   its document states, and the example terms otherwise, and says which.
   Net is a portfolio figure and is not worked out for a single offer.
 
-### 3.5 Parameters the agents decide
+### 3.5 Losses beyond flood depth
+
+Read at one point, a dry building prices at zero, even when the ground around
+it floods in heavy rain, its drains are overloaded and its plant sits in a
+basement. So with "All loss drivers" the loss of a building at each return
+period is the sum of six drivers, then the deductible and the limit:
+
+| # | Loss driver | How it is worked out | Source |
+|---|---|---|---|
+| 1 | Surrounding flooding | The hazard map is read as the highest depth within a buffer around the building (its footprint plus the error in a stated coordinate), not only at the point. Both depths are shown side by side: "at the point" and "within the buffer". | Hazard maps; the buffer is an assumption. |
+| 2 | Drainage ponding | As in 3.1. | Open map data; reach and depths are assumptions. |
+| 3 | Drain overload | When the event's return period is greater than the drain design return period, the site holds at least a shallow depth of water, even where the maps are dry. | The design return period from the offer when it states one and code verified it; otherwise an assumption. The depth is an assumption. |
+| 4 | Basement ingress | When water at the site (driver 1, 2 or 3) reaches the ingress threshold and the building has basements: value below ground × the basement damage ratio for that event. The value below ground never loses a smaller share than the damage curve gives the structure at the same water. | Basements and value below ground from the offer; a share of the insured value when the offer states no value. Threshold and ratios are assumptions. |
+| 5 | Business interruption | Only when the offer says it is covered, and only at return periods where water reaches the site: outage days for that event × a day's rent or revenue. | A year's rent or revenue from the offer ÷ 365; otherwise a share of the insured value. The days are assumptions. |
+| 6 | Uncertainty loading | A stated share of drivers 1 to 5, for causes not modelled (seepage, blocked drains, pump failure). Always its own line, never mixed into the others. | An assumption. |
+
+- **No double counting.** Drivers 1 to 3 all put water at the same building,
+  so the structure's loss is read once on the damage curve, at the deepest of
+  the three. Each driver is credited with what it adds beyond the ones before
+  it, in this order: the depth at the point, what the surroundings add,
+  ponding, drain overload. The four parts add up to the structure's loss. The
+  "Surrounding flooding" line is the first two together.
+- **No value counted twice.** The structure's value is the insured value less
+  the value below ground.
+- **Never below Depth only.** Because the value below ground loses at least
+  what the curve gives at the same water, taking it off the curve cannot make
+  a building cheaper than Depth only prices it.
+- **Terms.** The deductible and the limit act on the sum of all six. Gross is
+  after them.
+- **Depth only.** The depth is the deeper of the terrain depth at the point
+  and the drainage ponding, nothing else: the model exactly as it was. Every
+  earlier figure, the checks in section 6 and the Oasis comparison refer to
+  it. Tests pin its results.
+- **The portfolio.** Drivers 1 to 3 apply to every building of the synthetic
+  portfolio, with one drain design return period for all of them. The
+  portfolio has no basement or rent data, so drivers 4 and 5 are not modelled
+  for it. One sentence says so: on the Loss engine's portfolio view, and in
+  the records.
+- **The reference run.** The portfolio's "without AI" run uses the reference
+  values and anything the underwriter typed, never a figure the agents set.
+  The buffer the agents agree is therefore part of what the AI changes.
+- **An offer outside the maps** is not priced in either mode: "Outside the
+  hazard maps loaded: flood cannot be priced here", and no figure.
+
+The assumptions behind the drivers (`web/src/lib/offer/judgement.ts`). Code
+keeps each inside its range, and each ladder never falls as events get rarer:
+
+| Assumption | Reference value | Allowed range | Argued by the agents |
+|---|---|---|---|
+| Buffer around the building (m) | 250 | 0 to 500 | Yes |
+| Surface water at which a basement takes water (m) | 0.10 | 0 to 0.5 | Yes |
+| Basement damage ratio: rung 1 (most frequent flood) to rung 5 (rarest flood) | 0.15 / 0.25 / 0.40 / 0.55 / 0.70 | 0 to 1, never falling | Yes |
+| Share of insured value below ground, when the offer does not state it | 0.08 | 0 to 0.5 | Yes |
+| Outage days: rung 1 (most frequent flood) to rung 5 (rarest flood) | 2 / 5 / 10 / 20 / 40 | 0 to 365, never falling | Yes |
+| Uncertainty loading (share of drivers 1 to 5) | 0.10 | 0 to 0.5 | Yes |
+| Drain design return period, when the offer does not state it (years) | 25 | 2 to 200 | No, set on screen |
+| Surface water when the drains are overloaded (m) | 0.10 | 0 to 0.5 | No, set on screen |
+| A year's rent or revenue, when the offer does not state it (share of insured value) | 0.08 | 0 to 0.3 | No, set on screen |
+| Cost of capital (share per year) | 0.08 | 0 to 0.3 | No, set on screen |
+| Minimum flood rate (per mille of insured value) | 0.1 | 0 to 2 | No, set on screen |
+
+That is 19 figures, 14 of them argued by the agents. Each one in force is
+marked with who set it: the **offer** (read from the document, with its
+sentence), the **agents** (the agreed set, when they ran on this offer and
+"Agreed by agents" is on), **typed** (the underwriter typed over it) or
+**reference**. "Reference, no AI" uses the reference value for everything the
+agents would set.
+
+**Premium build-up** (an offer, on Results). Modelled average annual loss by
+driver, gross; the uncertainty loading as its own line; a capital load of the
+cost of capital × what the offer adds to the portfolio's 1-in-100 gross loss
+(gross like every other line, so no capital is charged on the deductible or
+on anything above the limit); then the minimum rate × insured value as a
+floor. The result is the
+flood premium and a flood rate per mille, shown beside the offer's stated
+premium and all-risks rate when it states a premium. The document's own flood
+loss history is shown beside the modelled average annual loss as a sense
+check, and is not blended in.
+
+### 3.6 Parameters the agents decide
 
 | Parameter | Reference value (no AI) | Allowed range |
 |---|---|---|
@@ -143,6 +224,9 @@ Four stages, as in the brief. Everything in this section is code.
 | Fragility: informal / semi-permanent / masonry / concrete | 1.5 / 1.2 / 1.0 / 0.7 | 0.4 to 2.5 |
 | Cap: informal / semi-permanent / masonry / concrete | 0.95 / 0.90 / 0.85 / 0.80 | 0.60 to 1.00 |
 | Return period: extreme / severe / moderate / occasional / common | 10 / 25 / 50 / 100 / 250 years | 2 to 1000, strictly rising |
+
+With an offer loaded the agents also decide the 14 assumptions marked "Yes"
+in 3.5, in the same reply: 28 entries in all.
 
 Code enforces the ranges. A value outside its range is clamped and flagged on
 screen. The reference column is what the app uses if the AI is unavailable,
@@ -161,6 +245,15 @@ agents read.
 | **Cautious** | Round 1, parallel | Argue for the most severe assumptions that are still defensible | Same shape |
 | **Critic** | Round 1, parallel | Challenge the data and the reference assumptions: the 10× values, the concentration in concrete buildings, the hotspots the proxy misses, the unused top of the score range | A list of challenges, each with severity and the parameter it affects |
 | **Chair** | Round 2 | Read both proposals, the losses each one produces, and the Critic's challenges; settle on a final parameter set | Final parameters, a reason for each choice, and an answer to every challenge |
+
+With an offer loaded, the agents are also given a short brief of it (what it
+states about basements, drains, pumps, barriers and cover, and the depths at
+the building per tier: at the point, within the buffer, ponding, drains
+overloaded). The Optimist and the Cautious voice then each propose the 14
+beyond-depth assumptions of section 3.5 as well, within their ranges and with
+a reason for each; the two ladders are argued as ladders. The Critic raises at
+least three challenges about the offer, and the Chair settles the agreed set.
+This is part of what the AI changes: the same offer is priced under each set.
 
 Between the rounds, code runs the engine on the Optimist's and the Cautious
 agent's parameters. That gives three loss curves in the end: optimistic,
@@ -213,9 +306,9 @@ This is the part we lost on last year, so it is a feature in its own right.
 - **Run log.** Every step with its timing, inputs and outputs.
 - **With and without AI.** Reference curve next to the agreed curve, with the
   difference in shillings and percent.
-- **Quotes in the document.** Read the offer shows the document with the
-  sentence behind each extracted value highlighted, and each value marked
-  "AI, verified", "AI, unverified" or "rules".
+- **Quotes in the document.** Price an offer marks each extracted value
+  "AI, verified", "AI, unverified" or "rules", and "View the document" opens
+  the document with the sentence behind each value marked.
 - **Flags with evidence.** Every point raised on an offer carries a quote
   from the document or a figure from the model, and is sorted by severity.
   The thresholds behind the severities are stated assumptions.
@@ -225,6 +318,11 @@ This is the part we lost on last year, so it is a feature in its own right.
   the AI features and what each changed, drainage, the insurance terms, the
   Oasis check, limits), which is also a required deliverable. When an offer
   is priced the note opens with it. From Results: the one-page decision note.
+- **Losses beyond flood depth on the record.** Audit lists every one of the
+  19 assumptions with its value in force, its allowed range, its source and
+  who set it, and says which mode is in force. The note and the audit file
+  carry the same table, the offer's loss by driver per return period, the
+  premium build-up, the broker questions and the portfolio's loss by driver.
 
 ## 6. Checks that run on screen
 
@@ -262,6 +360,10 @@ Each check shows pass, warning or fail, with the numbers behind it.
 - Reinsurance recoveries reconcile: gross less quota share less excess of
   loss equals net.
 - Average annual loss falls from ground-up to gross to net.
+- With all loss drivers, for the portfolio and for the offer: the drivers add
+  up to each loss; the depth within the buffer is never below the depth at
+  the point; Depth only never gives more than All loss drivers, and for the
+  offer it reproduces the point reading.
 
 **AI**
 - Every agent reply matches the schema.
@@ -282,24 +384,47 @@ Each check shows pass, warning or fail, with the numbers behind it.
   portfolio's range, basements, reported flood history against the maps,
   and a non-residential building on the residential curve. A limit of the
   model is a warning, never a failure.
+- The values the loss drivers read (basement depth, drain design return
+  period, value below ground, rent, cover, premium) pass the same check as
+  every other value. A drain design must be written as a return period. With
+  All loss drivers, one that switches a driver on or sets its size (basement
+  levels, value below ground, drain design, interruption cover, rent) and
+  fails its check holds the price until it is confirmed, edited or cleared.
+  With Depth only none of them is read.
+- The three checks on the offer's loss drivers (the drivers add up to its
+  loss; its depth within the buffer is never below its depth at the point;
+  Depth only reproduces the point reading) are part of the offer's own list
+  of checks, built once with the picture of the offer. Audit and both exports
+  read that one list, and "Checks so far" beside the steps counts it.
 
 ## 7. The walkthrough
 
 The steps are listed once, in `web/src/lib/steps.ts`. In Offer mode each step
-is about the offer's building; the last column is the second view on the same
-step, and what the step shows when the header switch is on Portfolio.
+is about the offer's building; the last column is what the same step shows
+when the header's View switch is on Portfolio.
 
 | Step | In Offer mode | Portfolio view |
 |---|---|---|
-| 0. Dashboard | The offer's headline figures and the way into each step. | The portfolio, its losses, the model data source, and a card to drop an offer on. |
-| 1. Read the offer | The document with each value's sentence highlighted; the rows in the exposure file's shape, each field marked "AI, verified", "AI, unverified" or "rules" and editable; what was sent and received, collapsed. | The same. |
-| 2. Read the data | Where the offer sits in the portfolio. | Files found, each tagged real or synthetic; data checks; the 10× notice. |
-| 3. Hazard map | The map zoomed to the building, its outline from the nearest OpenStreetMap building within 30 m (a marker, and a line saying so, when none is found); a return period slider; depth at the building per return period, terrain and ponding apart; distance to the nearest wet cell, river and drain. Portfolio layers are toggles, off by default. | The interactive map of Nairobi with insured buildings, wards, waterways, settlements and facilities. The hotspot test and the drainage sensitivity sit under "Model validation". |
-| 4. Agents | Three columns working in parallel, then the Chair's decision in a panel that scrolls inside a fixed height; the assumption ledger; the offer priced under each set of assumptions; usage per agent. | The portfolio's loss under each set. |
-| 5. Vulnerability | The building's points on its class curve, one per return period, and a "This building" row in the matrix. | Damage curves and ratios per construction class. |
-| 6. Loss engine | The single-building trace per return period: depth, damage ratio, ground-up, deductible, limit, gross, each line naming its source. | The portfolio engine, the Insurance terms panel, and each event from ground-up to gross to net. |
-| 7. Results | The underwriter's decision page: the offer in one line; 1-in-100 gross, average annual loss, pure rate per mille, change to the portfolio's 1-in-100; the loss chart; flags with evidence, sorted by severity; suggested conditions; the decision and its note; "Download decision note". | Total exposure, losses at key return periods, the loss curve with its band, breakdowns, with and without AI, the Oasis check. |
-| 8. Audit | Every check, the extraction record, agent usage, the model data source, and the exports, including the audit report as a PDF. | The same, without the offer. |
+| 0. Dashboard | A call-out with the offer's headline figures, its 1-in-100 loss by driver and the decision recorded on it, then the portfolio. The page has no View switch. | With no offer read, the call-out is "Price an offer" with one button that opens step 1. Then the portfolio's figures and charts, what the agents changed and the model chain with its checks. |
+| 1. Price an offer | The one upload: a Word, PDF or text file. Once it is read, first where the building is (its class and ward, the terms, the checks) with the way on to the hazard map; then the extracted values as compact rows, each marked "AI, verified", "AI, unverified" or "rules", editable, and confirmed by a person where code could not check it; among them the values the loss drivers read (number and depth of basements, equipment below ground, drain design return period, sump pump capacity and backup power, flood barriers and non-return valves, value split, rent, business interruption cover, premium); the document behind "View the document"; the broker questions, folded. What was sent and received is in Audit. | The same: the page has no View switch. |
+| 2. Read the data | Where the offer sits in the portfolio; the value split with the source of each figure (offer quote or assumption); under-insurance, from the value per m² against the class range. | Files found, each tagged real or synthetic; data checks; the 10× notice. |
+| 3. Agents | Three columns working in parallel, then the Chair's decision in a panel that scrolls inside a fixed height; the assumption ledger, the model's parameters and the beyond-depth assumptions, with who set each; the offer priced under each set of assumptions; usage per agent. | The portfolio's loss under each set. |
+| 4. Hazard map | The map zoomed to the building, its outline from the nearest OpenStreetMap building within 30 m (a marker, and a line saying so, when none is found) and the buffer ring around it; a return period slider; per return period the depth at the point, the depth within the buffer, ponding and "drains overloaded: yes or no"; distance to the nearest wet cell, river and drain. Portfolio layers are toggles, off by default. | The interactive map of Nairobi with insured buildings, wards, waterways, settlements and facilities. The hotspot test and the drainage sensitivity sit under "Model validation". |
+| 5. Vulnerability | The building as components: structure (JRC curve), basement machinery and contents (basement ladder), business interruption (outage days), each with its value and damage per return period. | Damage curves and ratios per construction class. |
+| 6. Loss engine | The stack for one return period, line by line: surrounding flooding, drainage ponding, drain overload, basement ingress, business interruption, uncertainty loading, then deductible and limit, each line naming its source; and the same figures for every return period in one table. | The portfolio engine with drivers 1 to 3, the Insurance terms panel, and each event from ground-up to gross to net. |
+| 7. Results | The underwriter's decision page: the "Loss by driver" chart; the premium build-up and the flood rate beside the all-risks rate; broker questions; points for the underwriter with evidence, sorted by severity; suggested conditions; the decision and its note; "Download decision note". The headline figures are in the row of figures in the header. | Total exposure, losses at key return periods, the loss curve with its band, the portfolio's loss by driver, breakdowns, with and without AI, the Oasis check. |
+| 8. Audit | The offer on record with its decision and the count of broker questions; every check, the model's and the offer's; the extraction record; the assumptions beyond flood depth with value, range, source and who set each; agent usage; the model data source; and the exports, including the audit report as a PDF, which lists the questions. | The same, without the offer. |
+
+The header has three rows. A slim top bar holds the brand, "Step N of 8"
+with the step's name, and the two display settings (theme and text size). A
+lighter control bar holds the switches: "View" (Offer or Portfolio, on the
+steps that differ between the two), "Losses from" (Depth only, or All loss
+drivers), "Flood source" (terrain only, or terrain and drainage, once the
+drainage layer is ready) and, once the agents have agreed a set,
+"Assumptions" (Agreed by agents, or Reference, no AI), with a "Model data"
+button whose panel names the data, its origin and "Replace model data". Under
+them one row of four figures stays in view on every step: the offer's in
+Offer mode, the portfolio's otherwise.
 
 An offer for a building outside the maps stops with "Outside the hazard maps
 loaded: flood cannot be priced here"; the steps then show the portfolio view.
@@ -316,9 +441,11 @@ loaded: flood cannot be priced here"; the steps then show the portfolio view.
 - **One picture of the offer.** `src/lib/offer/focus.ts` turns the offer, the
   loaded model and the assumptions in force into one object: the document
   and its fields, the building, depth, damage and loss per return period,
-  the terms used, the effect on the portfolio, the price under each set of
+  the terms used, the mode, the loss drivers with their sources and the
+  premium build-up, the assumptions beyond depth and who set each, the broker
+  questions, the effect on the portfolio, the price under each set of
   assumptions, the checks, the flags and the suggested conditions. Every
-  step reads it.
+  step reads it, and no step works out a figure of its own.
 - **The building outline** comes from the public OpenStreetMap Overpass
   service, asked from the browser with the building's coordinates.
 - **Motion** for animation, hand-written SVG charts (no chart library),
@@ -331,12 +458,14 @@ data/                     hackathon starter kit: data/data is the model data fol
 oasis/                    the independent check with Oasis LMF
 web/
   src/app/                the walkthrough page; api/agents/[role], api/offer/extract and api/model-data routes
-  src/lib/model/          parameters, hazard, vulnerability, financial, insurance terms, pipeline
+  src/lib/model/          parameters, hazard, vulnerability, financial, insurance terms, pipeline; drivers.ts for loss drivers 1 to 3
   src/lib/modelData/      reading the model data folder in place
   src/lib/ingest/         zip, csv, raster, dataset detection
   src/lib/checks/         the on-screen checks
   src/lib/agents/         prompts, schemas, model client, usage and cost
-  src/lib/offer/          reading an offer, checking it against its words, locating and pricing it; focus.ts
+  src/lib/offer/          reading an offer, checking it against its words, locating and pricing it; focus.ts;
+                          judgement.ts (the assumptions beyond depth), drivers.ts (the six drivers and the
+                          premium build-up), questions.ts (the broker questions)
   src/lib/offerFiles/     file kinds and PDF text
   src/lib/decision.ts     flags, suggested conditions, the decision record; decisionNote.ts prints it
   src/lib/export.ts       the written note and the audit file
@@ -365,8 +494,10 @@ against being handed something unexpected on the day.
 hazard and damage assumptions as Oasis model files, runs them through the
 open-source Oasis engine (oasislmf 2.5.8), and saves a summary to
 `web/public/oasis/reference.json`. The Results step compares it with the live
-engine. On reference assumptions every event loss agrees within 0.05%, and the
-step-method average annual loss agrees within 0.01%. The app's own average
+engine. The comparison refers to Depth only on reference assumptions: the
+loss drivers beyond depth are not in the Oasis run. On reference assumptions
+every event loss agrees within 0.05%, and the step-method average annual loss
+agrees within 0.01%. The app's own average
 annual loss draws a straight line between events, so it sits above the Oasis
 step value; both readings are shown.
 
@@ -396,6 +527,10 @@ Each phase ends with something that works, so there is always a demo.
     building outline; the single-building trace; the decision page and its
     note; Audit with the extraction record, usage and the PDF.
 11. **Deliverables.** The written note, the root README, this plan.
+12. **Losses beyond flood depth.** The six loss drivers through every step,
+    the "Losses from" switch, the extra values read from the offer, the
+    broker questions, the agents arguing the beyond-depth assumptions, the
+    premium build-up, and the record of all of it on Audit.
 
 ## 10. Honest limits to state in the demo
 
@@ -436,8 +571,35 @@ Each phase ends with something that works, so there is always a demo.
 - The insurance terms are example terms, not from any real policy or treaty.
   Gross and net figures move with them.
 - An offer is priced on the residential damage curve whatever it is used
-  for, and water entering basements is not modelled. Both are flagged on
-  screen when they apply.
+  for. That is flagged on screen when it applies.
+- The buffer takes the **highest** depth nearby, not an average, so it reads
+  high: one deep cell within 250 m sets the depth for the whole building. On
+  the starter kit at reference values with drainage on, All loss drivers
+  lifts the portfolio's average annual loss from about KES 174m to about
+  KES 613m, and almost all of that is the buffer. The radius is the lever
+  and is editable; with Depth only it is not read at all.
+- Drain overload is an assumption applied to every building alike. Beyond the
+  design return period (1-in-25 unless the offer states one) every site is
+  taken to hold 0.1 m of water, whether or not its own drains would cope. So
+  with all loss drivers every portfolio building counts as affected from the
+  1-in-50 event upwards.
+- The basement damage ladder, the outage days, the value below ground and the
+  rent when the offer does not state them, the uncertainty loading, the cost
+  of capital and the minimum rate are assumptions, not measurements. Each is
+  shown with the Assumption badge, its range and who set it.
+- Sump pumps, backup power, flood barriers and non-return valves are read
+  from the offer, given to the agents and asked about, and change no figure
+  by themselves: there is no formula for them.
+- Drivers 4 and 5 (basement ingress and business interruption) are not
+  modelled for the synthetic portfolio, which has no basement or rent data.
+  What an offer adds to the portfolio is therefore the offer's six drivers on
+  top of a portfolio measured on three.
+- The capital load rests on what the offer adds to the portfolio's 1-in-100
+  gross loss, and at the reference cost of capital it can be the largest line
+  of the premium build-up. It can never exceed the cost of capital × the
+  flood limit.
+- The Oasis comparison refers to Depth only on reference assumptions. It
+  does not test the loss drivers beyond depth.
 - An offer has a ground-up and a gross loss. Net is a portfolio figure.
 - The flags on an offer rest on thresholds we chose (water at the building at
   1-in-25 or more frequent is high; 1% and 5% added to the portfolio's
@@ -445,9 +607,10 @@ Each phase ends with something that works, so there is always a demo.
   loss of 3% and 10% of the sum insured). They are listed in the written
   note. The "poor drainage" flag is a word test on the document's own
   sentence, which is always shown.
-- A point that the maps show as dry gives a loss of zero. That is a statement
-  about the maps at those coordinates, not a finding that the building
-  cannot flood; the flags say what the maps cannot see.
+- With Depth only, a point that the maps show as dry gives a loss of zero.
+  That is a statement about the maps at those coordinates, not a finding
+  that the building cannot flood; the flags say what the maps cannot see,
+  and All loss drivers prices what it can of it.
 
 ## 11. Open items
 
@@ -477,6 +640,12 @@ Each phase ends with something that works, so there is always a demo.
 - [x] PDF offers, and the message for old Word files.
 - [x] Decision page, decision record and the one-page decision note.
 - [x] Written note, root README and this plan brought in line.
+- [x] Losses beyond flood depth: six loss drivers, the "Losses from" switch,
+      the premium build-up, broker questions, and the record on Audit.
+- [ ] Decide whether a 250 m buffer is the right reference value: it more
+      than triples the portfolio's average annual loss.
+- [ ] Look at the "Losses from" switch and the new tables in a browser, light
+      and dark, at 390 px and 1920 px.
 - [ ] Look at every step in a browser in Offer mode, light and dark, at
       390 px and 1920 px, with the Nairobi test offer.
 - [ ] Check the building outline lookup once against the live Overpass

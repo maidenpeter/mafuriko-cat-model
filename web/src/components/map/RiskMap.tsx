@@ -1,9 +1,10 @@
 "use client";
 
-import { FullscreenControl, Map as MapLibre, NavigationControl, ScaleControl, setWorkerUrl } from "maplibre-gl";
+import { FullscreenControl, LngLat, Map as MapLibre, NavigationControl, ScaleControl, setWorkerUrl } from "maplibre-gl";
 import type { ExpressionSpecification, FilterSpecification, GeoJSONSource, MapMouseEvent, StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { currentTheme } from "@/lib/display";
 import { fmtInt, fmtKes, fmtNum, fmtPct } from "@/lib/format";
 import { cssColor, hazardImageUrl, rasterCorners, rgbCss, stressImageUrl, type RGB } from "@/lib/geo/hazardImage";
 import { GEO_ATTRIBUTION, type GeoLayers } from "@/lib/geo/layers";
@@ -11,7 +12,7 @@ import { geometryBBox, type AreaRow, type BBox } from "@/lib/geo/spatial";
 import { hazardToDepth } from "@/lib/model/pipeline";
 import { HOUSING_LABELS, type HousingClass } from "@/lib/model/types";
 import type { Active, Session } from "@/lib/session";
-import { DRAINAGE_RGB, FACILITY_COLORS, SETTLEMENT_COLOR, WARD_COLOR, WATER_COLORS, type BasemapStatus, type LayerKey, type LayerState, type Selection, type WardMetric } from "./mapTheme";
+import { DRAINAGE_RGB, FACILITY_COLORS, SETTLEMENT_COLOR, WARD_COLOR, WATER_COLORS, type BasemapStatus, type LayerKey, type LayerState, type MapCamera, type MapView, type Selection, type WardMetric } from "./mapTheme";
 
 setWorkerUrl(new URL("maplibre-gl/dist/maplibre-gl-worker.mjs", import.meta.url).toString());
 
@@ -70,8 +71,11 @@ interface Props {
   onSelect: (s: Selection | null) => void;
   focus: { bbox: BBox; seq: number } | null;
   onStatus: (s: BasemapStatus) => void;
+  /** Kept up to date here and read when the map is created, so a map rebuilt for a theme change opens on the same view. */
+  viewRef: { current: MapView };
 }
 
+/** A hover tooltip. x and y are where the pointer is; the tooltip is fitted inside the map when it is drawn. */
 interface Tip {
   x: number;
   y: number;
@@ -83,12 +87,16 @@ type FC = { type: "FeatureCollection"; features: { type: "Feature"; properties: 
 const fc = (features: FC["features"]): FC => ({ type: "FeatureCollection", features });
 type SetDataArg = Parameters<GeoJSONSource["setData"]>[0];
 
-function prefersDark(): boolean {
-  const theme = document.documentElement.dataset.theme;
-  if (theme === "dark") return true;
-  if (theme === "light") return false;
-  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+function cameraOf(map: MapLibre): MapCamera {
+  const c = map.getCenter();
+  return { center: [c.lng, c.lat], zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing() };
 }
+
+/**
+ * Where a camera move that has just started will end. This is saved straight away: if the map
+ * is rebuilt while the move is still running, the new map opens at the end point and not half way.
+ */
+const heading = (map: MapLibre, to: Partial<MapCamera>): MapCamera => ({ ...cameraOf(map), ...to });
 
 /** Fetches the open basemap style; falls back to a plain background when there is no connection. */
 async function loadStyle(dark: boolean, plane: string): Promise<{ style: StyleSpecification; online: boolean }> {
@@ -106,9 +114,10 @@ async function loadStyle(dark: boolean, plane: string): Promise<{ style: StyleSp
 }
 
 export function RiskMap(props: Props) {
-  const { session, active, geo, k, layers, threeD, wardMetric, wardRows, facilityDepth, selection, focus } = props;
+  const { session, active, geo, k, layers, threeD, wardMetric, wardRows, facilityDepth, selection, focus, viewRef } = props;
   const box = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLDivElement>(null);
+  const tipBox = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibre | null>(null);
   const onlineRef = useRef(false);
   const latest = useRef(props);
@@ -128,22 +137,25 @@ export function RiskMap(props: Props) {
     let disposed = false;
     let map: MapLibre | null = null;
     (async () => {
-      const dark = prefersDark();
       const plane = rgbCss(cssColor("--plane", [236, 240, 244]));
-      const { style, online } = await loadStyle(dark, plane);
+      const { style, online } = await loadStyle(currentTheme() === "dark", plane);
       if (disposed || !box.current) return;
       onlineRef.current = online;
       latest.current.onStatus(online ? "online" : "offline");
 
+      // A map rebuilt for a theme change opens where the last one was looking; the first map opens on the county.
+      const saved = viewRef.current.camera;
       const start = geo.county?.features[0] ? geometryBBox(geo.county.features[0].geometry) : rasterBox(session);
       map = new MapLibre({
         container: box.current,
         style,
-        bounds: [
-          [start[0], start[1]],
-          [start[2], start[3]],
-        ],
-        fitBoundsOptions: { padding: 24 },
+        ...(saved ?? {
+          bounds: [
+            [start[0], start[1]],
+            [start[2], start[3]],
+          ],
+          fitBoundsOptions: { padding: 24 },
+        }),
         maxPitch: 75,
         attributionControl: { compact: true, customAttribution: GEO_ATTRIBUTION },
         cooperativeGestures: false,
@@ -154,10 +166,15 @@ export function RiskMap(props: Props) {
       map.addControl(new FullscreenButton({ container: frame.current ?? undefined }), "top-right");
       map.addControl(new ScaleControl({ unit: "metric" }), "bottom-left");
 
+      const keepCamera = () => {
+        if (map && !disposed) viewRef.current.camera = cameraOf(map);
+      };
+      map.on("moveend", keepCamera);
       map.on("load", () => {
         if (!map || disposed) return;
         addStaticLayers(map, latest.current, online);
         bindInteractions(map, latest, setTip);
+        keepCamera();
         setReady(true);
       });
       map.on("error", (e) => {
@@ -198,8 +215,10 @@ export function RiskMap(props: Props) {
         const src = dataset.scenarios.findIndex((x) => x.id === s.id);
         const ponding = d && d.grid.width === raster.width && d.grid.height === raster.height ? (d.depthM[src] ?? 0) : 0;
         const url = await hazardImageUrl(raster, dataset.hazardKind, (v, cell) => Math.max(hazardToDepth(v, dataset, r.params, s.tierSlope), ponding > 0 ? d!.grid.stress[cell] * ponding : 0), ramp);
+        // The map was rebuilt or the assumptions changed while this image was being painted.
+        // The map may be gone, so it is not touched again, and nothing from this pass is kept.
         if (cancelled) {
-          URL.revokeObjectURL(url);
+          [...urls, url].forEach((u) => URL.revokeObjectURL(u));
           return;
         }
         urls.push(url);
@@ -239,8 +258,10 @@ export function RiskMap(props: Props) {
     let cancelled = false;
     let url: string | null = null;
     (async () => {
-      url = await stressImageUrl(d.grid, DRAINAGE_RGB);
-      if (cancelled) return;
+      const painted = await stressImageUrl(d.grid, DRAINAGE_RGB);
+      // Painted too late: the map was rebuilt or the data changed in the meantime.
+      if (cancelled) return URL.revokeObjectURL(painted);
+      url = painted;
       map.addSource(id, { type: "image", url, coordinates: rasterCorners(d.grid.bbox) });
       map.addLayer(
         { id, type: "raster", source: id, layout: { visibility: latest.current.layers.drainage ? "visible" : "none" }, paint: { "raster-opacity": 0.8, "raster-fade-duration": 0, "raster-resampling": "nearest" } },
@@ -328,23 +349,40 @@ export function RiskMap(props: Props) {
     const none: FilterSpecification = ["==", ["get", "i"], -1];
     map.setFilter("buildings-selected", selection?.type === "building" ? ["==", ["get", "i"], selection.index] : none);
     if (map.getLayer("wards-selected")) map.setFilter("wards-selected", selection?.type === "ward" ? ["==", ["get", "i"], selection.index] : none);
-    if (selection?.type === "building") {
+    // The camera goes to a building once, when it is picked. A rebuilt map shows the same
+    // selection again and opens where the camera already was, so it stays highlighted without a move.
+    const view = viewRef.current;
+    const moved = view.selection === selection;
+    view.selection = selection;
+    if (selection?.type === "building" && !moved) {
       const b = dataset.buildings[selection.index];
-      if (b) map.easeTo({ center: [b.lon, b.lat], zoom: Math.max(map.getZoom(), 13.2), duration: 900 });
+      if (b) {
+        const to = { center: [b.lon, b.lat] as [number, number], zoom: Math.max(map.getZoom(), 13.2) };
+        map.easeTo({ ...to, duration: 900 });
+        view.camera = heading(map, to);
+      }
     }
-  }, [ready, selection, dataset]);
+  }, [ready, selection, dataset, viewRef]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map || !focus) return;
-    map.fitBounds(
-      [
-        [focus.bbox[0], focus.bbox[1]],
-        [focus.bbox[2], focus.bbox[3]],
-      ],
-      { padding: 70, duration: 1100, maxZoom: 14.5 },
-    );
-  }, [ready, focus]);
+    // Each ward pick is fitted once, so a rebuilt map does not fly back to a ward picked earlier.
+    const view = viewRef.current;
+    if (view.focusSeq === focus.seq) return;
+    view.focusSeq = focus.seq;
+    const bounds: [[number, number], [number, number]] = [
+      [focus.bbox[0], focus.bbox[1]],
+      [focus.bbox[2], focus.bbox[3]],
+    ];
+    const fit = { padding: 70, maxZoom: 14.5 };
+    const end = map.cameraForBounds(bounds, fit);
+    map.fitBounds(bounds, { ...fit, duration: 1100 });
+    if (end?.center) {
+      const c = LngLat.convert(end.center);
+      view.camera = heading(map, { center: [c.lng, c.lat], zoom: end.zoom ?? map.getZoom(), bearing: end.bearing ?? 0 });
+    }
+  }, [ready, focus, viewRef]);
 
   // ---- layer switches -------------------------------------------------------------------------
   useEffect(() => {
@@ -371,25 +409,43 @@ export function RiskMap(props: Props) {
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map) return;
-    if (threeD) {
-      if (onlineRef.current && map.getSource("dem")) map.setTerrain({ source: "dem", exaggeration: 1.8 });
-      map.easeTo({ pitch: 62, bearing: -18, zoom: Math.max(map.getZoom(), 11), duration: 1400 });
-    } else {
-      map.setTerrain(null);
-      map.easeTo({ pitch: 0, bearing: 0, duration: 900 });
-    }
-  }, [ready, threeD]);
+    // The camera tilts or flattens only when the 3D switch changes. A rebuilt map opens with the
+    // tilt and turn it had, so it gets its terrain back and is otherwise left alone.
+    const view = viewRef.current;
+    const moved = view.threeD === threeD;
+    view.threeD = threeD;
+    if (!threeD) map.setTerrain(null);
+    else if (onlineRef.current && map.getSource("dem")) map.setTerrain({ source: "dem", exaggeration: 1.8 });
+    if (moved) return;
+    const to = threeD ? { pitch: 62, bearing: -18, zoom: Math.max(map.getZoom(), 11) } : { pitch: 0, bearing: 0 };
+    map.easeTo({ ...to, duration: threeD ? 1400 : 900 });
+    view.camera = heading(map, to);
+  }, [ready, threeD, viewRef]);
+
+  // The tooltip is measured as drawn and kept inside the map, so it is not cut off at the right
+  // or bottom edge at any text size, in the page or in fullscreen.
+  useLayoutEffect(() => {
+    const el = tipBox.current;
+    const host = frame.current;
+    if (!tip || !el || !host) return;
+    const left = Math.max(4, Math.min(tip.x + 14, host.clientWidth - el.offsetWidth - 4));
+    const below = tip.y + 14;
+    // With no room under the pointer the tooltip opens above it.
+    const top = below + el.offsetHeight > host.clientHeight - 4 ? Math.max(4, tip.y - 10 - el.offsetHeight) : below;
+    el.style.transform = `translate(${left}px, ${top}px)`;
+  }, [tip]);
 
   return (
     <div ref={frame} className="relative h-[520px] w-full overflow-hidden rounded-xl border border-line bg-surface-2 lg:h-[660px]">
       <div ref={box} className="h-full w-full" />
+      {/* The notice fades in after a moment, so a quick rebuild for a theme change does not flash it. */}
       {!ready && (
-        <div className="absolute inset-0 flex items-center justify-center text-sm text-ink-2">
-          <span className="spinner mr-2 inline-block h-4 w-4 rounded-full border-2 border-line border-t-ink" /> Loading the map
+        <div className="absolute inset-0 flex items-center justify-center text-sm text-ink-2 transition-opacity delay-300 duration-200 starting:opacity-0">
+          <span className="spinner mr-2 inline-block h-4 w-4 shrink-0 rounded-full border-2 border-line border-t-ink" /> Loading the map
         </div>
       )}
       {tip && (
-        <div className="pointer-events-none absolute z-10 max-w-[260px] rounded-lg border border-line bg-surface px-3 py-2 text-xs shadow-lg" style={{ left: tip.x, top: tip.y }}>
+        <div ref={tipBox} className="pointer-events-none absolute left-0 top-0 z-10 max-w-[min(16.25rem,calc(100%-0.5rem))] wrap-break-word rounded-lg border border-line bg-surface px-3 py-2 text-xs shadow-lg">
           <div className="font-semibold text-ink">{tip.title}</div>
           {tip.lines.map((l) => (
             <div key={l} className="tabular text-ink-2">
@@ -420,13 +476,13 @@ function addStaticLayers(map: MapLibre, p: Props, online: boolean) {
   const before = firstSymbolId(map);
   const ink = rgbCss(cssColor("--ink", [13, 27, 46]));
   const surface = rgbCss(cssColor("--surface", [255, 255, 255]));
-  const navyLine = prefersDark() ? "#9fb4cf" : "#041d3b";
+  const navyLine = rgbCss(cssColor("--navy-line"));
   const series = ["--series-1", "--series-2", "--series-3", "--series-4"].map((v) => rgbCss(cssColor(v)));
   const classColor = ["match", ["get", "cls"], "informal_iron_sheet", series[0], "semi_permanent", series[1], "permanent_masonry", series[2], "concrete_rcc", series[3], "#888888"] as unknown as ExpressionSpecification;
 
   if (online) {
     map.addSource("dem", { type: "raster-dem", tiles: [TERRAIN_TILES], tileSize: 256, encoding: "terrarium", maxzoom: 15, attribution: "Terrain: Mapzen Terrain Tiles on AWS" });
-    map.addLayer({ id: "hillshade", type: "hillshade", source: "dem", paint: { "hillshade-exaggeration": 0.28, "hillshade-shadow-color": prefersDark() ? "#000814" : "#33475f" } }, before);
+    map.addLayer({ id: "hillshade", type: "hillshade", source: "dem", paint: { "hillshade-exaggeration": 0.28, "hillshade-shadow-color": currentTheme() === "dark" ? "#000814" : "#33475f" } }, before);
   } else if (p.geo.county) {
     map.addSource("county-fill-src", { type: "geojson", data: p.geo.county as unknown as SetDataArg });
     map.addLayer({ id: "county-fill", type: "fill", source: "county-fill-src", paint: { "fill-color": surface } });
@@ -551,7 +607,7 @@ const INTERACTIVE = ["buildings", "columns", "hotspots", "facilities", "settleme
 function bindInteractions(map: MapLibre, latest: { current: Props }, setTip: (t: Tip | null) => void) {
   const layersPresent = () => INTERACTIVE.filter((id) => map.getLayer(id) && map.getLayoutProperty(id, "visibility") !== "none");
 
-  const place = (e: MapMouseEvent) => ({ x: Math.max(4, Math.min(e.point.x + 14, map.getContainer().clientWidth - 270)), y: e.point.y + 14 });
+  const place = (e: MapMouseEvent) => ({ x: e.point.x, y: e.point.y });
 
   map.on("mousemove", (e: MapMouseEvent) => {
     const p = latest.current;

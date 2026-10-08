@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { fmtKes, fmtNum } from "@/lib/format";
 import type { HotspotHit } from "@/lib/model/hotspots";
 import { HOUSING_LABELS, type Dataset } from "@/lib/model/types";
+import { useTheme } from "@/lib/useDisplay";
 
 const RAMP_VARS = ["--seq-1", "--seq-2", "--seq-3", "--seq-4", "--seq-5"];
 
@@ -24,6 +25,7 @@ export function HazardMap({ dataset, scenarioIndex, hits }: { dataset: Dataset; 
   const canvas = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(720);
   const [tip, setTip] = useState<Tip | null>(null);
+  const theme = useTheme();
 
   const scenario = dataset.scenarios[scenarioIndex];
   const raster = dataset.rasters.find((r) => r.scenarioId === scenario.id) ?? null;
@@ -51,7 +53,8 @@ export function HazardMap({ dataset, scenarioIndex, hits }: { dataset: Dataset; 
 
   useEffect(() => {
     if (!wrap.current) return;
-    const ro = new ResizeObserver(([e]) => setWidth(Math.round(Math.max(320, e.contentRect.width))));
+    // The map is as wide as its card, so nothing at its right edge is hidden on a narrow screen.
+    const ro = new ResizeObserver(([e]) => setWidth(Math.round(Math.max(240, e.contentRect.width))));
     ro.observe(wrap.current);
     return () => ro.disconnect();
   }, []);
@@ -90,7 +93,8 @@ export function HazardMap({ dataset, scenarioIndex, hits }: { dataset: Dataset; 
       img.data[i * 4 + 3] = 255;
     }
     ctx.putImageData(img, 0, 0);
-  }, [raster, width, height, scaleMax]);
+    // The ramp colours are read from the page, so the canvas is painted again when the theme changes.
+  }, [raster, width, height, scaleMax, theme]);
 
   const px = (lon: number) => ((lon - bbox[0]) / (bbox[2] - bbox[0])) * width;
   const py = (lat: number) => ((bbox[3] - lat) / (bbox[3] - bbox[1])) * height;
@@ -142,9 +146,14 @@ export function HazardMap({ dataset, scenarioIndex, hits }: { dataset: Dataset; 
           ))}
         </svg>
         {tip && (
+          // Offsets are in rem so they follow the text size: 14.5rem is the tooltip's width (w-56) plus a small gap.
+          // In the lower half it is placed from the bottom, so a tall tooltip is not cut off by the map's edge.
           <div
-            className="pointer-events-none absolute z-10 w-56 rounded-xl border border-line bg-surface p-2.5 text-[13px] shadow-lg"
-            style={{ left: Math.min(Math.max(tip.x + 12, 4), width - 232), top: Math.max(tip.y - 70, 4) }}
+            className="pointer-events-none absolute z-10 w-56 max-w-[calc(100%-0.5rem)] rounded-xl border border-line bg-surface p-2.5 text-sm shadow-lg"
+            style={{
+              left: `clamp(0.25rem, ${(tip.x + 12).toFixed(1)}px, calc(100% - 14.5rem))`,
+              ...(tip.y > height / 2 ? { bottom: `max(0.25rem, calc(${(height - tip.y).toFixed(1)}px - 2rem))` } : { top: `max(0.25rem, calc(${tip.y.toFixed(1)}px - 4.375rem))` }),
+            }}
           >
             <div className="font-semibold text-ink">{tip.title}</div>
             {tip.lines.map((l) => <div key={l} className="text-ink-2">{l}</div>)}
@@ -152,20 +161,20 @@ export function HazardMap({ dataset, scenarioIndex, hits }: { dataset: Dataset; 
         )}
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-[13px] text-ink-2">
+      <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-ink-2">
         {raster && (
           <span className="inline-flex items-center gap-2">
             <span className="tabular">0</span>
-            <span className="inline-block h-2.5 w-24 rounded-full" style={{ background: `linear-gradient(to right, ${RAMP_VARS.map((v) => `var(${v})`).join(",")})` }} />
+            <span className="inline-block h-2.5 w-24 shrink-0 rounded-full" style={{ background: `linear-gradient(to right, ${RAMP_VARS.map((v) => `var(${v})`).join(",")})` }} />
             <span className="tabular">{isScore ? "1.0 score" : `${fmtNum(scaleMax, 1)} m or deeper`}</span>
           </span>
         )}
-        <span className="inline-flex items-center gap-2"><span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: "var(--series-2)" }} />Building affected ({wet.length})</span>
-        <span className="inline-flex items-center gap-2"><span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--muted)" }} />Not affected ({dry.length})</span>
+        <span className="inline-flex items-center gap-2"><span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: "var(--series-2)" }} />Building affected ({wet.length})</span>
+        <span className="inline-flex items-center gap-2"><span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: "var(--muted)" }} />Not affected ({dry.length})</span>
         {hits.length > 0 && (
           <>
-            <span className="inline-flex items-center gap-2"><span className="inline-block h-3 w-3 rounded-full" style={{ background: "var(--good)" }} />Known flood area, flagged ({hits.filter((h) => h.hit).length})</span>
-            <span className="inline-flex items-center gap-2"><span className="inline-block h-3 w-3 rounded-full" style={{ background: "var(--critical)" }} />Known flood area, missed ({hits.filter((h) => !h.hit).length})</span>
+            <span className="inline-flex items-center gap-2"><span className="inline-block h-3 w-3 shrink-0 rounded-full" style={{ background: "var(--good)" }} />Known flood area, flagged ({hits.filter((h) => h.hit).length})</span>
+            <span className="inline-flex items-center gap-2"><span className="inline-block h-3 w-3 shrink-0 rounded-full" style={{ background: "var(--critical)" }} />Known flood area, missed ({hits.filter((h) => !h.hit).length})</span>
           </>
         )}
       </div>

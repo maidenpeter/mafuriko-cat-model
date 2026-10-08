@@ -1,14 +1,15 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fmtInt, fmtKes, fmtNum, fmtPct } from "@/lib/format";
 import { DEPTH_LABELS } from "@/lib/geo/hazardImage";
 import { loadGeo, type FacilityKind, type GeoLayers } from "@/lib/geo/layers";
 import { assignPoints, facilityDepths, geometryBBox, wardAccumulation, type AreaRow, type BBox } from "@/lib/geo/spatial";
 import { HOUSING_CLASSES, HOUSING_LABELS } from "@/lib/model/types";
 import type { Active, Session } from "@/lib/session";
-import { DRAINAGE_COLOR, FACILITY_COLORS, SETTLEMENT_COLOR, WARD_COLOR, WARD_METRICS, WATER_COLORS, type BasemapStatus, type LayerKey, type LayerState, type Selection, type WardMetric } from "../map/mapTheme";
+import { useTheme } from "@/lib/useDisplay";
+import { DRAINAGE_COLOR, FACILITY_COLORS, SETTLEMENT_COLOR, WARD_COLOR, WARD_METRICS, WATER_COLORS, type BasemapStatus, type LayerKey, type LayerState, type MapView, type Selection, type WardMetric } from "../map/mapTheme";
 import { Button, Card, Note, Segmented, StepHeader, Tag } from "../ui";
 import { CLASS_COLORS } from "./DataStep";
 
@@ -31,16 +32,16 @@ const metricValue = (row: AreaRow, m: WardMetric) => (m === "loss" ? row.lossKes
 const metricText = (row: AreaRow, m: WardMetric) => (m === "loss" ? fmtKes(row.lossKes) : m === "tiv" ? fmtKes(row.tivKes) : m === "flooded" ? fmtInt(row.flooded) : fmtPct(metricValue(row, m), 1));
 
 function Swatch({ color, shape = "dot" }: { color: string; shape?: "dot" | "line" | "square" | "ring" }) {
-  if (shape === "line") return <span aria-hidden className="inline-block h-[3px] w-4 rounded-full" style={{ background: color }} />;
-  if (shape === "square") return <span aria-hidden className="inline-block h-3 w-3 rounded-[3px]" style={{ background: color }} />;
-  if (shape === "ring") return <span aria-hidden className="inline-block h-3 w-3 rounded-full border-2 bg-surface" style={{ borderColor: color }} />;
-  return <span aria-hidden className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: color }} />;
+  if (shape === "line") return <span aria-hidden className="inline-block h-[3px] w-4 shrink-0 rounded-full" style={{ background: color }} />;
+  if (shape === "square") return <span aria-hidden className="inline-block h-3 w-3 shrink-0 rounded-[3px]" style={{ background: color }} />;
+  if (shape === "ring") return <span aria-hidden className="inline-block h-3 w-3 shrink-0 rounded-full border-2 bg-surface" style={{ borderColor: color }} />;
+  return <span aria-hidden className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: color }} />;
 }
 
 function Toggle({ id, checked, onChange, children }: { id: string; checked: boolean; onChange: (v: boolean) => void; children: React.ReactNode }) {
   return (
     <label htmlFor={id} className="flex cursor-pointer items-start gap-2.5 rounded-lg px-2 py-1.5 text-sm text-ink hover:bg-surface-2">
-      <input id={id} type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[var(--brand)]" />
+      <input id={id} type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--brand)]" />
       <span className="min-w-0 flex-1">{children}</span>
     </label>
   );
@@ -62,6 +63,10 @@ export function MapStep({ session, active }: { session: Session; active: Active 
   const [selection, setSelection] = useState<Selection | null>(null);
   const [focus, setFocus] = useState<{ bbox: BBox; seq: number } | null>(null);
   const [status, setStatus] = useState<BasemapStatus>("loading");
+  // The map takes its basemap and colours when it is created, so a theme change builds a new one.
+  // Everything above lives here and carries over; the camera carries over through this record.
+  const theme = useTheme();
+  const mapView = useRef<MapView>({ camera: null, threeD: null, selection: null, focusSeq: 0 });
 
   useEffect(() => {
     loadGeo().then(setGeo);
@@ -125,6 +130,7 @@ export function MapStep({ session, active }: { session: Session; active: Active 
         <div className="min-w-0">
           {geo ? (
             <RiskMap
+              key={theme}
               session={session}
               active={active}
               geo={geo}
@@ -138,6 +144,7 @@ export function MapStep({ session, active }: { session: Session; active: Active 
               onSelect={setSelection}
               focus={focus}
               onStatus={setStatus}
+              viewRef={mapView}
             />
           ) : (
             <div className="flex h-[520px] items-center justify-center rounded-xl border border-line bg-surface-2 text-sm text-ink-2 lg:h-[660px]">Loading map layers</div>
@@ -150,9 +157,9 @@ export function MapStep({ session, active }: { session: Session; active: Active 
           </div>
         </div>
 
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <Card title="Event" aside={<Tag kind={isScore ? "assumption" : "real"}>{isScore ? "Return period assumed" : "From the data"}</Tag>}>
-            <div className="flex items-baseline justify-between">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3">
               <span className="font-display text-3xl font-semibold tracking-tight text-ink">1 in {s.returnPeriod}</span>
               <span className="text-xs text-muted">{fmtPct(1 / s.returnPeriod, 1)} chance a year</span>
             </div>
@@ -169,7 +176,7 @@ export function MapStep({ session, active }: { session: Session; active: Active 
               }}
               className="mt-3 w-full accent-[var(--brand)]"
             />
-            <div className="mt-1 flex justify-between text-[11px] text-muted tabular">
+            <div className="mt-1 flex justify-between text-xs text-muted tabular">
               {r.scenarios.map((x, i) => (
                 <button key={x.id} onClick={() => setK(i)} className={i === ki ? "font-semibold text-ink" : "hover:text-ink"}>
                   {x.returnPeriod}
@@ -177,7 +184,7 @@ export function MapStep({ session, active }: { session: Session; active: Active 
               ))}
             </div>
             <p className="mt-2 text-xs leading-relaxed text-ink-2">Showing {tierNote}.</p>
-            <div className="mt-3 flex gap-2">
+            <div className="mt-3 flex flex-wrap gap-2">
               <Button
                 variant="secondary"
                 onClick={() => {
@@ -218,7 +225,7 @@ export function MapStep({ session, active }: { session: Session; active: Active 
               <div className="mt-4 border-t border-line pt-3">
                 <div className="mb-1.5 flex items-baseline justify-between gap-2 text-xs">
                   <span className="font-semibold text-ink">Public facilities in the flood area</span>
-                  <span className="text-muted">deeper than {fmtNum(DEEP_M, 1)} m</span>
+                  <span className="shrink-0 text-muted">deeper than {fmtNum(DEEP_M, 1)} m</span>
                 </div>
                 <ul className="space-y-1 text-sm">
                   {facilitiesWet.map((g) => (
@@ -227,14 +234,14 @@ export function MapStep({ session, active }: { session: Session; active: Active 
                         <Swatch color={FACILITY_COLORS[g.kinds[0]]} />
                         {g.label}
                       </span>
-                      <span className="tabular text-ink">
+                      <span className="tabular shrink-0 whitespace-nowrap text-ink">
                         {fmtInt(g.wet)} <span className="text-muted">of {fmtInt(g.total)}</span>
                         <strong className="ml-3 inline-block w-10 text-right font-semibold">{fmtInt(g.deep)}</strong>
                       </span>
                     </li>
                   ))}
                 </ul>
-                <p className="mt-2 text-[11px] leading-relaxed text-muted">The proxy marks shallow water widely, so the second count is the one to quote.</p>
+                <p className="mt-2 text-xs leading-relaxed text-muted">The proxy marks shallow water widely, so the second count is the one to quote.</p>
               </div>
             )}
           </Card>
@@ -247,8 +254,8 @@ export function MapStep({ session, active }: { session: Session; active: Active 
                 Flood depth {isScore && <span className="text-xs text-muted">(score converted to metres)</span>}
                 <span className="mt-1 flex flex-wrap gap-x-2 gap-y-1">
                   {DEPTH_LABELS.map((l, i) => (
-                    <span key={l} className="inline-flex items-center gap-1 text-[11px] text-ink-2">
-                      <span className="inline-block h-2.5 w-3.5 rounded-sm" style={{ background: `var(--seq-${i + 1})` }} />
+                    <span key={l} className="inline-flex items-center gap-1 text-xs text-ink-2">
+                      <span className="inline-block h-2.5 w-3.5 shrink-0 rounded-sm" style={{ background: `var(--seq-${i + 1})` }} />
                       {l}
                     </span>
                   ))}
@@ -257,12 +264,12 @@ export function MapStep({ session, active }: { session: Session; active: Active 
               {drainage && (
                 <Toggle id="lyr-drainage" checked={layers.drainage} onChange={(v) => setLayer("drainage", v)}>
                   <span className="inline-flex items-center gap-1.5"><Swatch shape="square" color={DRAINAGE_COLOR} /> Drainage zone</span>
-                  <span className="mt-0.5 block text-[11px] text-ink-2">Within {fmtInt(drainage.reachM)} m of a mapped drain or inside an informal settlement; darker means closer.</span>
+                  <span className="mt-0.5 block text-xs text-ink-2">Within {fmtInt(drainage.reachM)} m of a mapped drain or inside an informal settlement; darker means closer.</span>
                 </Toggle>
               )}
               <Toggle id="lyr-buildings" checked={layers.buildings} onChange={(v) => setLayer("buildings", v)}>
                 Insured buildings <span className="text-xs text-muted">(synthetic)</span>
-                <span className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-ink-2">
+                <span className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-xs text-ink-2">
                   {HOUSING_CLASSES.map((c) => (
                     <span key={c} className="inline-flex items-center gap-1">
                       <Swatch color={CLASS_COLORS[c]} />
@@ -286,7 +293,7 @@ export function MapStep({ session, active }: { session: Session; active: Active 
               </Toggle>
               <Toggle id="lyr-water" checked={layers.waterways} onChange={(v) => setLayer("waterways", v)}>
                 Rivers, streams and drains
-                <span className="mt-1 flex flex-wrap gap-x-2 text-[11px] text-ink-2">
+                <span className="mt-1 flex flex-wrap gap-x-2 text-xs text-ink-2">
                   <span className="inline-flex items-center gap-1"><Swatch shape="line" color={WATER_COLORS.river} /> river</span>
                   <span className="inline-flex items-center gap-1"><Swatch shape="line" color={WATER_COLORS.stream} /> stream</span>
                   <span className="inline-flex items-center gap-1"><Swatch shape="line" color={WATER_COLORS.drain} /> drain or ditch</span>
@@ -300,7 +307,7 @@ export function MapStep({ session, active }: { session: Session; active: Active 
               </Toggle>
               <Toggle id="lyr-hotspots" checked={layers.hotspots} onChange={(v) => setLayer("hotspots", v)}>
                 County-named flood areas
-                <span className="mt-1 flex flex-wrap gap-x-2 text-[11px] text-ink-2">
+                <span className="mt-1 flex flex-wrap gap-x-2 text-xs text-ink-2">
                   <span className="inline-flex items-center gap-1"><Swatch color="var(--navy-line)" /> flagged by the proxy</span>
                   <span className="inline-flex items-center gap-1"><Swatch shape="ring" color={WARD_COLOR} /> missed</span>
                 </span>
@@ -319,7 +326,7 @@ export function MapStep({ session, active }: { session: Session; active: Active 
           <p className="text-sm text-ink-2">Ward boundaries are not available, so losses cannot be grouped by ward.</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px] text-[13px]">
+            <table className="w-full min-w-180 text-sm">
               <thead>
                 <tr className="border-b border-line text-left text-xs text-muted">
                   <th className="py-2 pr-3 font-medium">Ward</th>
@@ -420,16 +427,17 @@ function SelectionCard({
           <Swatch color={CLASS_COLORS[b.housingClass]} /> {HOUSING_LABELS[b.housingClass]}
           {ward && <span>· {ward.name}, {ward.subcounty}</span>}
         </div>
-        <dl className="space-y-1 text-[13px]">
+        <dl className="space-y-1 text-sm">
           {rows.map(([label, value]) => (
-            <div key={label} className="flex justify-between gap-3">
+            <div key={label} className="flex flex-wrap justify-between gap-x-3">
               <dt className="text-muted">{label}</dt>
-              <dd className="tabular text-right text-ink">{value}</dd>
+              <dd className="tabular ml-auto min-w-0 wrap-break-word text-right text-ink">{value}</dd>
             </div>
           ))}
         </dl>
         <div className="mt-3 border-t border-line pt-2 text-xs text-muted">Loss at every event</div>
-        <div className="mt-1 grid grid-cols-5 gap-1 text-center text-[11px]">
+        {/* As many events to a row as the text size leaves room for, so no figure is squeezed out of its cell. */}
+        <div className="mt-1 grid grid-cols-[repeat(auto-fit,minmax(3.5rem,1fr))] gap-1 text-center text-xs">
           {per.map((p, i) => (
             <div key={r.scenarios[i].id} className={`rounded-md px-1 py-1 ${i === k ? "bg-surface-2 font-semibold text-ink" : "text-ink-2"}`}>
               <div className="text-muted">1:{r.scenarios[i].returnPeriod}</div>
@@ -448,7 +456,7 @@ function SelectionCard({
   return (
     <Card title={`${row.name} ward`} aside={<button onClick={onClear} className="text-xs text-ink-2 underline-offset-2 hover:underline">Clear</button>}>
       <div className="mb-2 text-sm text-ink-2">{row.subcounty} sub-county</div>
-      <dl className="space-y-1 text-[13px]">
+      <dl className="space-y-1 text-sm">
         {(
           [
             ["Insured buildings", fmtInt(row.buildings)],
@@ -458,9 +466,9 @@ function SelectionCard({
             ["Share of portfolio loss", fmtPct(row.lossKes / portfolioLoss, 1)],
           ] as [string, string][]
         ).map(([label, value]) => (
-          <div key={label} className="flex justify-between gap-3">
+          <div key={label} className="flex flex-wrap justify-between gap-x-3">
             <dt className="text-muted">{label}</dt>
-            <dd className="tabular text-right text-ink">{value}</dd>
+            <dd className="tabular ml-auto min-w-0 wrap-break-word text-right text-ink">{value}</dd>
           </div>
         ))}
       </dl>

@@ -2,7 +2,7 @@ import { fmtInt, fmtKes, fmtNum } from "../format";
 import type { IngestReport } from "../ingest";
 import { hotspotHits } from "../model/hotspots";
 import { tierSlopes } from "../model/hazard";
-import { hazardToDepth, scenarioReturnPeriods } from "../model/pipeline";
+import { depthAt, scenarioReturnPeriods } from "../model/pipeline";
 import { HOUSING_CLASSES, HOUSING_LABELS, type Dataset, type ModelParams, type ModelResult } from "../model/types";
 import { baseCurve, damageRatio } from "../model/vulnerability";
 
@@ -184,7 +184,9 @@ export function financialChecks(dataset: Dataset, result: ModelResult): Check[] 
   const recomputed = new Map<string, number>();
   dataset.scenarios.forEach((s, k) => {
     let total = 0;
-    for (const b of dataset.buildings) total += damageRatio(hazardToDepth(b.hazard[k] ?? 0, dataset, result.params, slopes[k]), b.housingClass, result.params) * b.tivKes;
+    dataset.buildings.forEach((b, i) => {
+      total += damageRatio(depthAt(dataset, i, k, result.params, slopes[k]).depthM, b.housingClass, result.params) * b.tivKes;
+    });
     recomputed.set(`${s.id}@${rps[k]}`, total);
   });
   const sumOk = result.scenarios.every((s) => close(recomputed.get(`${s.id}@${s.returnPeriod}`) ?? NaN, s.lossKes));

@@ -2,6 +2,9 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { dataChecks, financialChecks, hazardChecks, vulnerabilityChecks } from "../src/lib/checks";
+import { drainageDistances, drainageSensitivity } from "../src/lib/geo/drainage";
+import { withDrainage } from "../src/lib/geo/drainageView";
+import type { GeoCollection, SettlementProps, WaterwayProps } from "../src/lib/geo/layers";
 import { detectDatasets, loadDataset, type FileSource, type IngestReport } from "../src/lib/ingest";
 import { tierSlopes } from "../src/lib/model/hazard";
 import { hotspotHits } from "../src/lib/model/hotspots";
@@ -88,6 +91,34 @@ describe.skipIf(!existsSync(KIT))("starter kit", () => {
       const hits = hotspotHits(loaded.team_a_nairobi.dataset);
       expect(hits).toHaveLength(24);
       expect(hits.filter((h) => h.hit)).toHaveLength(12);
+    });
+
+    it("adds drainage-driven flooding from open map data: 16 of 24 named areas at a 300 m reach", () => {
+      const { dataset, report } = loaded.team_a_nairobi;
+      const geo = <P,>(f: string) => JSON.parse(readFileSync(join(__dirname, "..", "public", "geo", f), "utf8")) as GeoCollection<P>;
+      const widest = dataset.rasters.find((r) => r.scenarioId === "common")!;
+      const distances = drainageDistances({ width: widest.width, height: widest.height, bbox: widest.bbox }, geo<WaterwayProps>("waterways.geojson"), geo<SettlementProps>("informal-settlements.geojson"));
+      const sensitivity = drainageSensitivity(distances, widest, dataset.hotspots);
+      expect(sensitivity.baseHits).toBe(12);
+      const used = sensitivity.rows.find((x) => x.reachM === 300)!;
+      expect(used.hits).toBe(16);
+      expect([...used.newlyFlagged].sort()).toEqual(["Kangemi", "Kibera", "Lang'ata", "Parklands"]);
+      expect(used.wetShare - sensitivity.baseWetShare).toBeLessThan(0.01);
+
+      const drained = withDrainage(dataset, { distances, sensitivity });
+      expect(hotspotHits(drained).filter((h) => h.hit)).toHaveLength(16);
+      const result = runModel(drained, REFERENCE_PARAMS);
+      const losses = result.scenarios.map((x) => x.lossKes);
+      expect([...losses].sort((a, b) => a - b)).toEqual(losses);
+      const terrain = runModel(dataset, REFERENCE_PARAMS);
+      result.scenarios.forEach((x, k) => expect(x.lossKes).toBeGreaterThanOrEqual(terrain.scenarios[k].lossKes));
+      const checks = [...hazardChecks(drained, report), ...financialChecks(drained, result)];
+      expect(checks.filter((c) => c.status === "fail")).toEqual([]);
+      console.log(
+        "Nairobi with drainage, reference assumptions:\n" +
+          result.scenarios.map((x, k) => `  ${String(x.returnPeriod).padStart(4)}y affected ${terrain.scenarios[k].affected} to ${x.affected}  loss KES ${(terrain.scenarios[k].lossKes / 1e9).toFixed(3)}bn to ${(x.lossKes / 1e9).toFixed(3)}bn`).join("\n") +
+          `\n  AAL KES ${(terrain.aalKes / 1e6).toFixed(1)}m to ${(result.aalKes / 1e6).toFixed(1)}m`,
+      );
     });
 
     it("detects that insured values are ten times the documented formula", () => {

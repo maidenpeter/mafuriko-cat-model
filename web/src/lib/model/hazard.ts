@@ -47,7 +47,7 @@ export function tierSlopes(dataset: Pick<Dataset, "hazardKind" | "scenarios" | "
   const ones = () => Array.from({ length: n }, () => 1);
   if (dataset.hazardKind !== "score" || n < 2) return ones();
 
-  const cached = fromRasters.get(dataset);
+  const cached = fromRasters.get(dataset.rasters);
   if (cached) return cached;
 
   const grid = rasterSource(dataset);
@@ -89,6 +89,6 @@ export function tierSlopes(dataset: Pick<Dataset, "hazardKind" | "scenarios" | "
     return Number.isFinite(slope) && slope > 0 ? Math.min(1, slope) : 1;
   });
 
-  if (grid) fromRasters.set(dataset, slopes);
+  if (grid) fromRasters.set(dataset.rasters, slopes);
   return slopes;
 }

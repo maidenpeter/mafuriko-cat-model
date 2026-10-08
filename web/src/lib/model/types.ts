@@ -65,6 +65,17 @@ export interface Raster {
   noData: number | null;
 }
 
+export interface DrainageInfo {
+  /** Distance in metres over which ponding fades from full depth to nothing. */
+  reachM: number;
+  /** Ponding depth in metres at full drainage stress, per scenario, in the order of Dataset.scenarios. */
+  depthM: number[];
+  /** Drainage stress from 0 to 1 at each building, in the order of Dataset.buildings. */
+  buildingStress: number[];
+  /** Stress on the hazard grid, for the map and the hotspot test. */
+  grid: { width: number; height: number; bbox: [number, number, number, number]; stress: Float32Array };
+}
+
 export interface Dataset {
   name: string;
   hazardKind: HazardKind;
@@ -72,6 +83,8 @@ export interface Dataset {
   buildings: Building[];
   hotspots: Hotspot[];
   rasters: Raster[];
+  /** Present when drainage-driven flooding is switched on (see lib/geo/drainage.ts). */
+  drainage?: DrainageInfo;
 }
 
 export interface ModelParams {
@@ -87,7 +100,10 @@ export interface ModelParams {
 
 export interface BuildingScenarioResult {
   hazard: number;
+  /** Depth used: the terrain depth, or drainage ponding where that is deeper. */
   depthM: number;
+  /** Drainage ponding at the building; 0 when drainage is off or the building is outside the zone. */
+  drainageM: number;
   effectiveDepthM: number;
   curveDamage: number;
   damageRatio: number;

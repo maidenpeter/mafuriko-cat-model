@@ -1,4 +1,5 @@
 import { sampleRaster } from "../ingest/raster";
+import { sampleGrid } from "./drainage";
 import { hazardToDepth } from "../model/pipeline";
 import type { Dataset, ModelResult } from "../model/types";
 import type { FacilityProps, GeoCollection, Geometry, Position, WardProps } from "./layers";
@@ -89,17 +90,21 @@ export function wardAccumulation(dataset: Dataset, result: ModelResult, wardOf: 
 
 /**
  * Flood depth in metres at each facility, for every scenario in result order. Read from the
- * hazard maps with the same conversion the model uses for buildings. Zero where the maps
- * are missing or the facility is outside them.
+ * hazard maps with the same conversion the model uses for buildings, and the drainage ponding
+ * where that is switched on and deeper. Zero where the maps are missing or the facility is outside them.
  */
 export function facilityDepths(dataset: Dataset, result: ModelResult, facilities: GeoCollection<FacilityProps>): number[][] {
   const perScenario = result.scenarios.map((s) => {
     const raster = dataset.rasters.find((r) => r.scenarioId === s.id);
+    const src = dataset.scenarios.findIndex((x) => x.id === s.id);
+    const d = dataset.drainage;
     return facilities.features.map((f) => {
-      if (!raster || f.geometry.type !== "Point") return 0;
+      if (f.geometry.type !== "Point") return 0;
       const [lon, lat] = f.geometry.coordinates;
-      const sample = sampleRaster(raster, lon, lat, dataset.hazardKind);
-      return sample.inside ? hazardToDepth(sample.value, dataset, result.params, s.tierSlope) : 0;
+      const sample = raster ? sampleRaster(raster, lon, lat, dataset.hazardKind) : { inside: false, value: 0 };
+      const terrain = sample.inside ? hazardToDepth(sample.value, dataset, result.params, s.tierSlope) : 0;
+      const ponding = d ? sampleGrid(d.grid, d.grid.stress, lon, lat) * (d.depthM[src] ?? 0) : 0;
+      return Math.max(terrain, ponding);
     });
   });
   return facilities.features.map((_, i) => perScenario.map((col) => col[i]));

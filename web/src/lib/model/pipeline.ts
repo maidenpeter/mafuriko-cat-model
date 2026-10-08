@@ -22,6 +22,17 @@ export function hazardToDepth(hazard: number, dataset: Pick<Dataset, "hazardKind
   return dataset.hazardKind === "score" ? hazard * tierSlope * params.depthScaleM : hazard;
 }
 
+/**
+ * Flood depth at one building in one scenario (index into Dataset.scenarios): the terrain depth,
+ * or drainage ponding where that is deeper.
+ */
+export function depthAt(dataset: Dataset, building: number, scenario: number, params: ModelParams, tierSlope: number): { depthM: number; terrainM: number; drainageM: number } {
+  const terrainM = hazardToDepth(dataset.buildings[building]?.hazard[scenario] ?? 0, dataset, params, tierSlope);
+  const d = dataset.drainage;
+  const drainageM = d ? (d.buildingStress[building] ?? 0) * (d.depthM[scenario] ?? 0) : 0;
+  return { depthM: Math.max(terrainM, drainageM), terrainM, drainageM };
+}
+
 /** Return period for each dataset scenario: taken from the data when it has one, otherwise from the assumptions. */
 export function scenarioReturnPeriods(dataset: Dataset, params: ModelParams): number[] {
   return dataset.scenarios.map((s) => s.fixedReturnPeriod ?? params.returnPeriods[s.id as ScoreTier]);
@@ -47,11 +58,11 @@ export function runModel(dataset: Dataset, params: ModelParams): ModelResult {
   }));
 
   let totalTivKes = 0;
-  const buildings: BuildingResult[] = dataset.buildings.map((b) => {
+  const buildings: BuildingResult[] = dataset.buildings.map((b, bi) => {
     totalTivKes += b.tivKes;
     const perScenario = order.map((srcIndex, k) => {
       const hazard = b.hazard[srcIndex] ?? 0;
-      const depthM = hazardToDepth(hazard, dataset, params, slopes[srcIndex]);
+      const { depthM, drainageM } = depthAt(dataset, bi, srcIndex, params, slopes[srcIndex]);
       const d = damageDetail(depthM, b.housingClass, params);
       const lossKes = d.damageRatio * b.tivKes;
 
@@ -68,7 +79,7 @@ export function runModel(dataset: Dataset, params: ModelParams): ModelResult {
       s.lossKes += lossKes;
       cls.lossKes += lossKes;
 
-      return { hazard, depthM, ...d, lossKes };
+      return { hazard, depthM, drainageM, ...d, lossKes };
     });
     return { locId: b.locId, perScenario };
   });

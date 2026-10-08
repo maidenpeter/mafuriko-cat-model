@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { wrapLabel } from "@/lib/labels";
 import { useTextScale } from "@/lib/useDisplay";
 
 export interface Point {
@@ -55,6 +56,13 @@ interface Props {
   /** Lets the plot grow past that height to fill a taller box. The caller's box must be a column flex container. */
   fill?: boolean;
   yMax?: number;
+  /**
+   * A labelled box inside the plot with a leader line to one point, which is ringed. The box sits
+   * along the top of the plot, or along the bottom when the point is too high to leave it room, so
+   * it never covers the point; give the chart a `yMax` above the lines to keep the box clear of them.
+   * The same words belong in `ariaLabel` or in the text beside the chart.
+   */
+  callout?: { x: number; y: number; title?: string; text: string };
 }
 
 function niceTicks(max: number, count = 4): number[] {
@@ -105,7 +113,7 @@ function Swatch({ s }: { s: Series }) {
   );
 }
 
-export function LineChart({ series, band, xScale, xTicks, xFormat, xSubFormat, yFormat, xLabel, yLabel, tooltipTitle, endLabels = false, ariaLabel, hoverXs, height = 320, fill = false, yMax }: Props) {
+export function LineChart({ series, band, xScale, xTicks, xFormat, xSubFormat, yFormat, xLabel, yLabel, tooltipTitle, endLabels = false, ariaLabel, hoverXs, height = 320, fill = false, yMax, callout }: Props) {
   const plot = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(720);
   const [room, setRoom] = useState(0);
@@ -171,6 +179,34 @@ export function LineChart({ series, band, xScale, xTicks, xFormat, xSubFormat, y
     for (let i = ends.length - 2; i >= 0; i--) ends[i].y = Math.min(ends[i].y, ends[i + 1].y - gap);
   }
 
+  // The call-out: its words wrapped to the plot's width, its box against the top or bottom edge, and a leader that stops short of the ring.
+  const note = (() => {
+    if (!callout || w < 80) return null;
+    const pad = 8 * scale;
+    const glyph = fontSize * 0.6;
+    const lineHeight = fontSize * 1.35;
+    const maxWidth = Math.min(w, 300 * scale);
+    const chars = Math.max(8, Math.floor((maxWidth - 2 * pad) / glyph));
+    const lines = [
+      ...(callout.title ? wrapLabel(callout.title, chars, 2).map((text) => ({ text, bold: true })) : []),
+      ...wrapLabel(callout.text, chars, 8).map((text) => ({ text, bold: false })),
+    ];
+    const boxW = Math.min(maxWidth, Math.max(...lines.map((l) => l.text.length)) * glyph + 2 * pad);
+    const boxH = lines.length * lineHeight + 2 * pad - (lineHeight - fontSize);
+    const px = sx(callout.x);
+    const py = sy(callout.y);
+    const ring = 9;
+    const above = py - ring - 12 * scale >= boxH;
+    // Above the point the box reaches to the left, below it to the right: the sides a rising line leaves empty.
+    const bx = Math.min(Math.max(above ? px - boxW + 28 * scale : px - 28 * scale, 0), w - boxW);
+    const by = above ? 0 : h - boxH;
+    const fromX = Math.min(Math.max(px, bx + 10), bx + boxW - 10);
+    const fromY = above ? boxH : by;
+    const length = Math.hypot(px - fromX, py - fromY);
+    const stop = length > ring ? (length - ring) / length : 0;
+    return { lines, pad, lineHeight, boxW, boxH, bx, by, px, py, ring, fromX, fromY, toX: fromX + (px - fromX) * stop, toY: fromY + (py - fromY) * stop };
+  })();
+
   const onMove = (e: React.PointerEvent<SVGRectElement>) => {
     const px = e.clientX - e.currentTarget.getBoundingClientRect().left;
     let best = hoverXs[0];
@@ -229,6 +265,17 @@ export function LineChart({ series, band, xScale, xTicks, xFormat, xSubFormat, y
             {ends.map(({ s, y }) => (
               <text key={s.id} x={w + 12 * scale} y={y} dy="0.32em" fontSize={fontSize} fontWeight={600} fill="var(--ink-2)">{s.endLabel}</text>
             ))}
+
+            {note && (
+              <g pointerEvents="none">
+                <line x1={note.fromX} y1={note.fromY} x2={note.toX} y2={note.toY} stroke="var(--ink)" strokeWidth={1.5} />
+                <circle cx={note.px} cy={note.py} r={note.ring} fill="none" stroke="var(--ink)" strokeWidth={1.5} />
+                <rect x={note.bx} y={note.by} width={note.boxW} height={note.boxH} rx={6} fill="var(--surface)" stroke="var(--ink)" strokeWidth={1} />
+                {note.lines.map((l, i) => (
+                  <text key={i} x={note.bx + note.pad} y={note.by + note.pad + fontSize * 0.85 + i * note.lineHeight} fontSize={fontSize} fontWeight={l.bold ? 600 : 400} fill={l.bold ? "var(--ink)" : "var(--ink-2)"}>{l.text}</text>
+                ))}
+              </g>
+            )}
 
             {hover !== null && (
               <g pointerEvents="none">

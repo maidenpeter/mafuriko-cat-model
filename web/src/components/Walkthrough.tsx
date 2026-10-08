@@ -2,32 +2,35 @@
 
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties } from "react";
-import { aiChecks, deliberate, replay, type Deliberation } from "@/lib/agents/orchestrate";
+import { aiChecks, deliberate, replay, type Deliberation, type ModelBasis } from "@/lib/agents/orchestrate";
 import { buildProfile } from "@/lib/agents/profile";
 import { ROLE_LABELS, ROLES, type Role } from "@/lib/agents/schema";
 import type { Prices } from "@/lib/agents/usage";
 import { dataChecks, financialChecks, hazardChecks, summarise, vulnerabilityChecks } from "@/lib/checks";
 import { termsChecks } from "@/lib/checks/terms";
 import { emptyDecision, type DecisionRecord } from "@/lib/decision";
-import { fmtInt, fmtKes, fmtNum, fmtPct } from "@/lib/format";
+import { fmtInt, fmtKes } from "@/lib/format";
 import { prepareDrainage, withDrainage, type DrainageState } from "@/lib/geo/drainageView";
 import { loadGeo, type GeoLayers } from "@/lib/geo/layers";
 import { detectDatasets, loadDataset, type DatasetCandidate, type FileInfo, type FileSource } from "@/lib/ingest";
 import { filesFromUpload } from "@/lib/ingest/zip";
-import { kes1 } from "@/lib/labels";
+import type { LossMode } from "@/lib/model/drivers";
 import { hotspotHits } from "@/lib/model/hotspots";
 import { REFERENCE_PARAMS } from "@/lib/model/params";
 import { runModel } from "@/lib/model/pipeline";
 import { applyTerms, DEFAULT_TERMS, type InsuranceTerms } from "@/lib/model/terms";
 import type { Dataset } from "@/lib/model/types";
 import { loadModelFiles, pickNairobi } from "@/lib/modelData/client";
-import { buildOfferFocus, isPriced, type OfferFocusProps, type PricedFocus } from "@/lib/offer/focus";
+import { assumedJudgement, buildOfferFocus, isPriced, offerBrief, PORTFOLIO_KEYS, portfolioJudgement, type FocusJudgement, type OfferFocus, type OfferFocusProps, type PricedFocus } from "@/lib/offer/focus";
+import { JUDGEMENT_KEYS, type OfferJudgement } from "@/lib/offer/judgement";
 import type { ExtractionRun, OfferState } from "@/lib/offer/types";
 import { loadRun, saveRun, type Active, type LogEntry, type Session } from "@/lib/session";
-import { STEP_IDS, STEP_NAMES, stepIndex, type StepId } from "@/lib/steps";
+import { STEP_IDS, STEP_NAMES, STEPS_WITH_VIEW, stepIndex, type StepId } from "@/lib/steps";
 import { Dashboard, type DashboardStep } from "./dashboard/Dashboard";
-import { OfferDropCard } from "./dashboard/OfferDropCard";
-import { DisplayControls } from "./DisplayControls";
+import { ControlBar, type ViewMode } from "./shell/ControlBar";
+import { FiguresRow } from "./shell/FiguresRow";
+import { GUTTER } from "./shell/layout";
+import { TopBar } from "./shell/TopBar";
 import { AgentsStep } from "./steps/AgentsStep";
 import { AuditStep } from "./steps/AuditStep";
 import { DataStep } from "./steps/DataStep";
@@ -37,13 +40,21 @@ import { OfferStep } from "./steps/OfferStep";
 import { ResultsStep } from "./steps/ResultsStep";
 import { ReplaceDataPanel } from "./steps/UploadStep";
 import { VulnerabilityStep } from "./steps/VulnerabilityStep";
-import { Button, Note, Segmented, StatusIcon, Tag } from "./ui";
+import { Button, Note, StatusIcon } from "./ui";
 
 /** What /api/agents/status answers: the model, which agents have a key, and the token prices when both are set. Never a key. */
 type AgentStatus = { model: string; configured: Record<Role, boolean>; prices?: Prices | null };
 
-/** Which view every step shows: the priced offer's building, or the whole portfolio as before. */
-type Mode = "offer" | "portfolio";
+/** Two sets of assumptions give a portfolio building the same water: drivers 1 to 3 read PORTFOLIO_KEYS and no others. */
+const sameSite = (a: OfferJudgement, b: OfferJudgement) => PORTFOLIO_KEYS.every((key) => a[key] === b[key]);
+/**
+ * The basis a run of the engine is made on: the header switch and the assumptions behind the loss drivers.
+ * The assumptions travel as text and are read afresh for each run, so no two runs share an object.
+ */
+const basisOf = (mode: LossMode, assumedKey: string): ModelBasis => ({ mode, judgement: JSON.parse(assumedKey) as OfferJudgement });
+/** True when a result or a saved run was worked out on this basis. Depth only reads no judgement figure, so only the mode counts there. */
+const onBasis = (ran: { mode?: LossMode; judgement?: OfferJudgement } | null | undefined, basis: ModelBasis) =>
+  (ran?.mode ?? "depth_only") === basis.mode && (basis.mode === "depth_only" || (!!ran?.judgement && sameSite(ran.judgement, basis.judgement)));
 
 /** Where the loaded model data came from, in the words the header shows after the data set's name. */
 interface DataOrigin {
@@ -91,7 +102,7 @@ function dataSetLabel(name: string): string {
 
 const uploadOrigin = (name: string): DataOrigin => ({ source: "upload", from: `from your upload (${name})`, reason: "", folderName: name });
 
-/** What every step but the Dashboard is handed besides its own props: the offer, and a way to open another step. */
+/** What every step but the Dashboard is handed besides its own props: the offer, its judgement figures, and a way to open another step. */
 interface StepExtras extends OfferFocusProps {
   /** Opens another step of the walkthrough by its id from lib/steps. */
   onOpenStep: (id: StepId) => void;
@@ -114,6 +125,7 @@ interface DecisionExtras {
 const handed = <E,>() => <P,>(step: ComponentType<P>) => step as ComponentType<P & E>;
 
 const DashboardView = handed<OfferFocusProps>()(Dashboard);
+const OfferView = handed<OfferFocusProps>()(OfferStep);
 const DataView = handed<StepExtras>()(DataStep);
 /** The hazard maps and the risk map are one step, so it is handed what the map step took as well: the assumptions and result in force. */
 const HazardView = handed<StepExtras & { active: Active }>()(HazardStep);
@@ -139,16 +151,6 @@ function fileNameFrom(disposition: string | null): string | null {
   return /filename\s*=\s*"([^"]+)"/i.exec(disposition)?.[1] ?? null;
 }
 
-// The page's side gutters, shared by the header bar, the key figures, the content and the Back and Next bar
-// so their edges line up. Backgrounds run the full width of the screen; only the contents take the gutters.
-// The cap is for very wide monitors, and is in rem so it widens with the text size.
-const GUTTER = "mx-auto w-full max-w-[120rem] px-4 sm:px-6 2xl:px-10";
-/** The small word in front of a group of controls on the navy bar, so nobody has to guess what a switch is for. */
-const CAPTION = "text-xs font-medium uppercase tracking-wide text-white/65";
-/** A button on the navy bar, drawn in white like the display controls beside it. */
-const BAR_BUTTON =
-  "whitespace-nowrap rounded-full border border-white/30 px-3 py-1 text-sm font-medium text-white transition hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white";
-
 export function Walkthrough() {
   // The current step, as its place in STEP_IDS. Steps are told apart by id, never by this number.
   const [step, setStep] = useState(stepIndex("dashboard"));
@@ -173,15 +175,19 @@ export function Walkthrough() {
   const [log, setLog] = useState<LogEntry[]>([]);
   // The offer being priced in the offer step. Kept here so it is still there after a look at another step.
   const [offer, setOffer] = useState<OfferState | null>(null);
+  // The judgement figures the underwriter typed over the reference or the agents' values. Empty until one is typed.
+  const [typedJudgement, setTypedJudgement] = useState<Partial<OfferJudgement>>({});
   // What the underwriter chose on the header switch. null leaves it to the app: Offer once an offer is priced, Portfolio otherwise.
-  const [userMode, setUserMode] = useState<Mode | null>(null);
+  const [userMode, setUserMode] = useState<ViewMode | null>(null);
+  // What a loss comes from: the depth at the point and ponding alone, or all six loss drivers. The portfolio follows the same switch.
+  const [mode, setMode] = useState<LossMode>("all_drivers");
   // The underwriter's decision on the offer, recorded on the Results step and listed on the Audit step.
   const [decision, setDecision] = useState<DecisionRecord>(emptyDecision);
   // The ward map and the waterways, loaded once: the offer is placed and measured against them.
   const [geo, setGeo] = useState<GeoLayers | null>(null);
-  // An offer on its way to the offer step: from the dashboard card, an upload or the rehearsal link.
+  // An offer on its way to the offer step, always as a file: from an upload of model data or the rehearsal link.
   // A new seq means a new offer, even when the file is the same one.
-  const [incoming, setIncoming] = useState<{ file?: File; text?: string; seq: number } | null>(null);
+  const [incoming, setIncoming] = useState<{ file: File; seq: number } | null>(null);
   // The insurance terms applied after the damage model: example terms until someone edits them in the loss engine step.
   const [terms, setTerms] = useState<InsuranceTerms>(DEFAULT_TERMS);
 
@@ -203,9 +209,9 @@ export function Walkthrough() {
 
   /**
    * Every change to the offer goes through here. A newly read document, or no offer at all, hands the
-   * header switch back to the app and starts the decision afresh. An edit to the values of the same
-   * document keeps the draft, but a decision already recorded goes back to being a draft: the
-   * figures it was recorded against have moved.
+   * header switch back to the app, drops any judgement figure typed for the last offer and starts the
+   * decision afresh. An edit to the values of the same document keeps the draft, but a decision
+   * already recorded goes back to being a draft: the figures it was recorded against have moved.
    */
   const offerRun = useRef<ExtractionRun | null>(null);
   const changeOffer = useCallback((next: OfferState | null) => {
@@ -213,11 +219,39 @@ export function Walkthrough() {
     if (run !== offerRun.current) {
       offerRun.current = run;
       setUserMode(null);
+      setTypedJudgement({});
       setDecision(emptyDecision());
     } else {
       setDecision((d) => (d.recordedAt ? { ...d, recordedAt: null } : d));
     }
     setOffer(next);
+  }, []);
+
+  /**
+   * The underwriter types over judgement figures. A figure named in `next` replaces what was typed
+   * for it; one given as undefined goes back to the reference or the agents' value; an empty object
+   * clears everything typed. Code keeps each figure inside its allowed range when it prices. A
+   * decision already recorded goes back to being a draft, as the price it was recorded against has moved.
+   */
+  const changeJudgement = useCallback((next: Partial<OfferJudgement>) => {
+    setTypedJudgement((typed) => {
+      const named = JUDGEMENT_KEYS.filter((key) => key in next);
+      if (named.length === 0) return {};
+      const out = { ...typed };
+      for (const key of named) {
+        const value = next[key];
+        if (typeof value === "number" && Number.isFinite(value)) out[key] = value;
+        else delete out[key];
+      }
+      return out;
+    });
+    setDecision((d) => (d.recordedAt ? { ...d, recordedAt: null } : d));
+  }, []);
+
+  /** The header switch between Depth only and All loss drivers. Every figure moves, so a recorded decision goes back to being a draft. */
+  const changeMode = useCallback((next: LossMode) => {
+    setMode(next);
+    setDecision((d) => (d.recordedAt ? { ...d, recordedAt: null } : d));
   }, []);
 
   const stepId = STEP_IDS[step];
@@ -255,9 +289,9 @@ export function Walkthrough() {
 
   // Hands an offer to the offer step and opens that step, which reads it straight away.
   const offerSeq = useRef(0);
-  const giveOffer = useCallback((input: { file?: File; text?: string }) => {
+  const giveOffer = useCallback((file: File) => {
     offerSeq.current += 1;
-    setIncoming({ ...input, seq: offerSeq.current });
+    setIncoming({ file, seq: offerSeq.current });
     setReplaceOpen(false);
     setStep(stepIndex("offer"));
   }, []);
@@ -366,7 +400,7 @@ export function Walkthrough() {
     async (source: FileSource) => {
       try {
         const name = fileNameOf(source.path);
-        giveOffer({ file: new File([await source.arrayBuffer()], name) });
+        giveOffer(new File([await source.arrayBuffer()], name));
         note(MODEL_DATA, `${name} is an offer: handed to the ${STEP_NAMES.offer} step`);
       } catch (e) {
         setError(`The offer in the upload could not be opened: ${(e as Error).message}`);
@@ -424,7 +458,7 @@ export function Walkthrough() {
       const res = await fetch("/api/test-offer", { cache: "no-store" });
       if (res.ok) {
         const name = fileNameFrom(res.headers.get("Content-Disposition")) ?? "test-offer.docx";
-        giveOffer({ file: new File([await res.blob()], name, { type: res.headers.get("Content-Type") ?? "" }) });
+        giveOffer(new File([await res.blob()], name, { type: res.headers.get("Content-Type") ?? "" }));
         return;
       }
     } catch {
@@ -454,16 +488,29 @@ export function Walkthrough() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // The assumptions behind the loss drivers that the portfolio's buildings are run with: the reference values, the
+  // agents' agreed figures while "Agreed by agents" is on and an offer is on screen, and anything typed over them.
+  // Held as text, so a new copy of the same figures does not run the model again.
+  const assumedKey = JSON.stringify(assumedJudgement(useAi && offer ? deliberation?.offerJudgement?.final : null, typedJudgement));
+  // The same without the agents: the reference values and anything typed over them. The reference run is made on
+  // these, so "without AI" never carries a figure the agents set, and their buffer counts as part of what they change.
+  const referenceKey = JSON.stringify(assumedJudgement(null, typedJudgement));
+
   const runAgents = async () => {
     if (!session) return;
+    // With a priced offer loaded the agents are also given its flood facts, and argue the assumptions behind its
+    // loss drivers beside the model's parameters. With none they work exactly as before. Either way the engine
+    // scores their proposals on the basis the screen shows: the mode of the header switch and the judgement in force.
+    const brief = pricedFocus ? offerBrief(pricedFocus) : null;
     setAgentsBusy(true);
     setReplayed(false);
-    note(STEP_NAMES.agents, "Round 1 started: Optimist, Cautious and Critic in parallel");
-    const d = await deliberate(session.dataset, session.profile, setDeliberation);
+    note(STEP_NAMES.agents, `Round 1 started: Optimist, Cautious and Critic in parallel${brief ? ", with the facts of the offer" : ""}`);
+    const d = await deliberate(session.dataset, session.profile, setDeliberation, brief, basisOf(mode, assumedKey));
     for (const role of ROLES) {
       const run = d.runs[role];
       note(STEP_NAMES.agents, `${ROLE_LABELS[role]}: ${run.status === "done" ? `valid reply in ${((run.ms ?? 0) / 1000).toFixed(1)} s` : `no valid reply (${run.error ?? run.status})`}`);
     }
+    if (brief) note(STEP_NAMES.agents, d.offerJudgement?.final ? "The assumptions behind the offer's loss drivers were agreed and applied to its price" : "No agreed assumptions for the offer's loss drivers. Its price stays on the reference figures.");
     if (d.final) {
       saveRun(session, d);
       setHasSaved(true);
@@ -477,7 +524,7 @@ export function Walkthrough() {
 
   const applySaved = (saved: Deliberation, source: string) => {
     if (!session) return;
-    const d = replay(session.dataset, saved);
+    const d = replay(session.dataset, saved, basisOf(mode, assumedKey));
     setDeliberation(d);
     setReplayed(true);
     setUseAi(true);
@@ -485,46 +532,84 @@ export function Walkthrough() {
   };
 
   // What every step shows: the loaded dataset, with drainage-driven flooding added when it is switched on.
-  const view = useMemo<Session | null>(() => {
+  const drainageOn = !!session && useDrainage && !!drainage && drainage.dataset === session.dataset;
+  const viewData = useMemo(() => {
     if (!session) return null;
-    if (!useDrainage || !drainage || drainage.dataset !== session.dataset) return session;
+    if (!drainageOn || !drainage) return { dataset: session.dataset, hits: session.hits, hazardChecks: session.hazardChecks };
     const dataset = withDrainage(session.dataset, drainage.state);
-    return { ...session, dataset, reference: runModel(dataset, REFERENCE_PARAMS), hits: hotspotHits(dataset), hazardChecks: hazardChecks(dataset, session.report) };
-  }, [session, drainage, useDrainage]);
-  const drainageOn = !!view && view !== session;
+    return { dataset, hits: hotspotHits(dataset), hazardChecks: hazardChecks(dataset, session.report) };
+  }, [session, drainage, drainageOn]);
+  // The reference run follows the switch too, on the figures no agent set. Depth only on the terrain maps is the run made when the data was loaded.
+  const view = useMemo<Session | null>(() => {
+    if (!session || !viewData) return null;
+    const reference = mode === "depth_only" && viewData.dataset === session.dataset ? session.reference : runModel(viewData.dataset, REFERENCE_PARAMS, basisOf(mode, referenceKey));
+    return { ...session, ...viewData, reference };
+  }, [session, viewData, mode, referenceKey]);
 
-  // The agents decide on the terrain-only data; their assumptions are re-run on whichever view is shown.
-  const viewDeliberation = useMemo<Deliberation | null>(() => (deliberation && view && drainageOn ? replay(view.dataset, deliberation) : deliberation), [deliberation, view, drainageOn]);
+  // The agents decide on the terrain-only data, on the basis in force when they ran. Their assumptions are
+  // re-run on whichever view and basis is shown now, without calling any model.
+  const viewDeliberation = useMemo<Deliberation | null>(() => {
+    if (!deliberation || !view) return deliberation;
+    const basis = basisOf(mode, assumedKey);
+    return drainageOn || !onBasis(deliberation.basis, basis) ? replay(view.dataset, deliberation, basis) : deliberation;
+  }, [deliberation, view, drainageOn, mode, assumedKey]);
 
-  const active = useMemo<Active | null>(() => {
+  const assumptions = useMemo<Active | null>(() => {
     if (!view) return null;
     if (useAi && viewDeliberation?.final) return { source: "ai", params: viewDeliberation.final.params, result: viewDeliberation.final.result };
     return { source: "reference", params: REFERENCE_PARAMS, result: view.reference };
   }, [view, viewDeliberation, useAi]);
 
+  // One picture of the offer, worked out once and handed to every step: located, priced and checked by
+  // code on the maps, the flood source, the mode, the assumptions, the judgement figures and the terms in
+  // force. null when no offer is read. The agents' judgement figures travel inside the deliberation, and the
+  // focus uses them only when they were argued for the offer now on screen.
+  const drainageInForce = drainageOn && drainage ? drainage.state : null;
+  const layers = useMemo(() => (geo ? { wards: geo.wards, waterways: geo.waterways } : null), [geo]);
+  const offerFocus = useMemo(
+    () => (view && assumptions ? buildOfferFocus({ offer, session: view, active: assumptions, drainage: drainageInForce, policyDefaults: terms, deliberation: viewDeliberation, layers, mode, judgement: typedJudgement }) : null),
+    [offer, view, assumptions, drainageInForce, terms, viewDeliberation, layers, mode, typedJudgement],
+  );
+  // The judgement figures in force and who set each: the offer's, or the portfolio's own when no offer is read.
+  const ownJudgement = useMemo(() => portfolioJudgement(typedJudgement), [typedJudgement]);
+  const judgement: FocusJudgement = offerFocus?.judgement ?? ownJudgement;
+  // The same held as text: what the portfolio is run with once the offer has settled whose figures count.
+  const settledKey = JSON.stringify(judgement.assumed);
+
+  // The offer settles whose judgement figures count: when the agents argued another offer theirs are left out.
+  // Each of the agents' sets is then shown on the settled figures, so it is measured the same way as the offer.
+  // Nearly always that is the run made above. The reference run stays as it is: it never holds an agents' figure.
+  const shownDeliberation = useMemo<Deliberation | null>(() => {
+    if (!viewDeliberation || !view) return viewDeliberation;
+    const basis = basisOf(mode, settledKey);
+    return onBasis(viewDeliberation.basis, basis) ? viewDeliberation : replay(view.dataset, viewDeliberation, basis);
+  }, [viewDeliberation, view, mode, settledKey]);
+
+  // The assumptions in force and the portfolio's result under them, on the settled figures.
+  const active = useMemo<Active | null>(() => {
+    if (!view || !assumptions) return null;
+    if (assumptions.source === "ai" && shownDeliberation?.final) return { source: "ai", params: shownDeliberation.final.params, result: shownDeliberation.final.result };
+    return { source: "reference", params: REFERENCE_PARAMS, result: view.reference };
+  }, [view, shownDeliberation, assumptions]);
+
   // The same assumptions on terrain flooding alone, for the "what drainage adds" comparison.
   const terrainResult = useMemo(() => {
     if (!session || !active || !drainageOn) return null;
-    return active.source === "ai" && deliberation?.final ? deliberation.final.result : session.reference;
-  }, [session, active, drainageOn, deliberation]);
+    const ready = active.source === "ai" ? deliberation?.final?.result : session.reference;
+    const basis = basisOf(mode, settledKey);
+    return ready && onBasis(ready, basis) ? ready : runModel(session.dataset, active.params, basis);
+  }, [session, active, drainageOn, deliberation, mode, settledKey]);
 
   // Ground-up losses taken through the policy terms and the reinsurance: gross and net for every event.
   const termsResult = useMemo(() => (view && active ? applyTerms(view.dataset, active.result, terms) : null), [view, active, terms]);
 
-  // One picture of the offer, worked out once and handed to every step: located, priced and checked by
-  // code on the maps, the flood source, the assumptions and the terms in force. null when no offer is read.
-  const drainageInForce = drainageOn && drainage ? drainage.state : null;
-  const layers = useMemo(() => (geo ? { wards: geo.wards, waterways: geo.waterways } : null), [geo]);
-  const offerFocus = useMemo(
-    () => (view && active ? buildOfferFocus({ offer, session: view, active, drainage: drainageInForce, policyDefaults: terms, portfolioTerms: termsResult, deliberation: viewDeliberation, layers }) : null),
-    [offer, view, active, drainageInForce, terms, termsResult, viewDeliberation, layers],
-  );
   // Offer mode needs a priced offer. Until there is one, and whenever the underwriter chooses it, every step shows the portfolio.
   const pricedFocus: PricedFocus | null = isPriced(offerFocus) ? offerFocus : null;
-  const mode: Mode = pricedFocus && userMode !== "portfolio" ? "offer" : "portfolio";
-  const focus = mode === "offer" ? pricedFocus : null;
-  // The same two props for every step: `focus` in Offer mode only, `offerFocus` whatever the mode.
-  const follow: OfferFocusProps = { focus, offerFocus };
+  const viewMode: ViewMode = pricedFocus && userMode !== "portfolio" ? "offer" : "portfolio";
+  const focus = viewMode === "offer" ? pricedFocus : null;
+  // The same props for every step: `focus` in Offer mode only, `offerFocus` whatever the mode, the mode of
+  // the loss drivers, and the judgement figures in force with the way to type over them.
+  const follow: OfferFocusProps = { focus, offerFocus, mode, judgement, onJudgement: changeJudgement };
   const prices = status?.prices ?? null;
 
   const checks = useMemo(() => {
@@ -533,6 +618,7 @@ export function Walkthrough() {
     // run, so re-running the engine on the drainage view would never match it.
     const ai = deliberation && !agentsBusy ? aiChecks(session.dataset, deliberation) : [];
     const vulnerability = vulnerabilityChecks(active.params);
+    // financialChecks ends with driverChecks (lib/checks/drivers.ts): the split by loss driver, read back from the result.
     const financial = [...financialChecks(view.dataset, active.result), ...termsChecks(termsResult)];
     return { ai, vulnerability, financial, all: [...view.dataChecks, ...view.hazardChecks, ...ai, ...vulnerability, ...financial] };
   }, [session, view, active, termsResult, deliberation, agentsBusy]);
@@ -566,12 +652,18 @@ export function Walkthrough() {
     setReplaceOpen(true);
   };
 
-  const totals = summarise(checks.all);
-  const isScore = session?.dataset.hazardKind === "score";
+  // The offer's own checks count too, whenever the Audit step lists them: in Offer mode, and for an offer that could not be priced.
+  const auditedOffer: OfferFocus | null = focus ?? (offerFocus && offerFocus.status !== "locating" && !pricedFocus ? offerFocus : null);
+  const totals = summarise([...checks.all, ...(auditedOffer?.checks ?? [])]);
   // Until a model is on screen the panel stands in for every step: it shows the first load, and what went wrong with it.
   const showPanel = !session || replaceOpen;
+  // The step on screen, for the header: its name in the top bar, and whether the control bar offers the View switch. null while the panel stands in.
+  const shownStep: StepId | null = showPanel ? null : stepId;
+  const showView = shownStep !== null && STEPS_WITH_VIEW.includes(shownStep);
+  // A step without the View switch reads the same whatever it says, so the figures row shows the priced offer there and never disagrees with the page.
+  const figuresFocus = showView ? focus : pricedFocus;
   const nextId: StepId | undefined = STEP_IDS[step + 1];
-  const modelDataLine = session && origin ? `${dataSetLabel(session.dataset.name)}, ${origin.from}` : opening || busy ? "opening" : "none loaded";
+  const modelDataLine = session && origin ? `${dataSetLabel(session.dataset.name)}, ${origin.from}` : opening || busy ? "Opening" : "None loaded";
   const openStep = (id: StepId) => goTo(stepIndex(id));
 
   return (
@@ -580,66 +672,26 @@ export function Walkthrough() {
       style={headerHeight != null ? ({ "--header-height": `${headerHeight}px` } as CSSProperties) : undefined}
     >
       <header ref={headerRef} className="z-20 lg:sticky lg:top-0">
-        <div className="@container bg-navy text-white">
-          <div className={`${GUTTER} flex flex-wrap items-center gap-x-2 gap-y-2.5 py-3`}>
-            {/* The brand asks only for the room its mark and name need, then takes what is left over.
-                That keeps the display controls beside it on the first row, down to a phone at the largest text. */}
-            <div className="flex min-w-0 flex-1 basis-28 items-center gap-2 sm:gap-3 @min-[104rem]:flex-none">
-              <span aria-hidden className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
-                  <path d="M2 9c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2 2-2 4-2" />
-                  <path d="M2 14c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2 2-2 4-2" opacity="0.75" />
-                  <path d="M2 19c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2 2-2 4-2" opacity="0.5" />
-                </svg>
-              </span>
-              <div className="min-w-0 leading-tight">
-                <div className="font-display text-lg font-semibold tracking-tight">Mafuriko</div>
-                <div className="text-xs text-white/75">A Nairobi centered CAT model</div>
-              </div>
-            </div>
-            <DisplayControls className="ml-auto @min-[104rem]:order-last" />
-            {/* The model data and its switches take their own row, so the bar does not rearrange itself
-                when a switch appears partway through. Where the bar is wide enough to hold everything they sit
-                on the first row, after the brand: a new switch is added at their right end and nothing moves. */}
-            <div className="flex basis-full flex-wrap items-center gap-x-3 gap-y-2 border-white/20 @min-[104rem]:ml-4 @min-[104rem]:min-w-0 @min-[104rem]:flex-1 @min-[104rem]:basis-0 @min-[104rem]:border-l @min-[104rem]:pl-6">
-              <span className="inline-flex min-w-0 flex-wrap items-center gap-2">
-                {/* The reason the sample is in use is also written out on the Dashboard; here it is one hover away. */}
-                <span className="min-w-0 text-sm text-white wrap-anywhere" title={origin?.reason || undefined}>
-                  Model data: {modelDataLine}
-                </span>
-                <button type="button" className={BAR_BUTTON} onClick={openReplace}>Replace model data</button>
-              </span>
-              {session && (
-                <span className="inline-flex flex-wrap items-center gap-2">
-                  <span className={CAPTION}>Data</span>
-                  <Tag kind="synthetic">Synthetic portfolio</Tag>
-                  <Tag kind={isScore ? "proxy" : "real"}>{isScore ? "Proxy hazard, not measured" : "Published depth maps"}</Tag>
-                </span>
-              )}
-              {/* Always there once the model has loaded, so it sits before the switches that appear later. */}
-              {session && (
-                <span className="inline-flex flex-wrap items-center gap-2">
-                  <span className={CAPTION}>View</span>
-                  <ModeSwitch mode={mode} offerReady={pricedFocus !== null} onChange={setUserMode} />
-                </span>
-              )}
-              {session && drainage && drainage.dataset === session.dataset && (
-                <span className="inline-flex flex-wrap items-center gap-2">
-                  <span className={CAPTION}>Flood source</span>
-                  <Segmented label="Flood source" value={useDrainage ? "on" : "off"} onChange={(v) => setUseDrainage(v === "on")} options={[{ value: "off", label: "Terrain only" }, { value: "on", label: "Terrain + drainage" }]} />
-                </span>
-              )}
-              {session && deliberation?.final && (
-                <span className="inline-flex flex-wrap items-center gap-2">
-                  <span className={CAPTION}>Assumptions</span>
-                  <Segmented label="Assumptions" value={useAi ? "ai" : "reference"} onChange={(v) => setUseAi(v === "ai")} options={[{ value: "ai", label: "Agreed by agents" }, { value: "reference", label: "Reference, no AI" }]} />
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
+        <TopBar step={shownStep} />
         <div className="h-[3px] bg-brand" />
-        {view && active && (focus ? <OfferKeyFigures focus={focus} /> : <KeyFigures active={active} hazard={drainageOn ? "Terrain + drainage" : "Terrain only"} />)}
+        <ControlBar
+          loaded={!!session}
+          showView={showView}
+          viewMode={viewMode}
+          onViewMode={setUserMode}
+          offerFocus={offerFocus}
+          mode={mode}
+          onMode={changeMode}
+          drainage={session && drainage && drainage.dataset === session.dataset ? useDrainage : null}
+          onDrainage={setUseDrainage}
+          useAi={deliberation?.final ? useAi : null}
+          onUseAi={setUseAi}
+          dataLine={modelDataLine}
+          dataReason={origin?.reason ?? ""}
+          hazardKind={session?.dataset.hazardKind ?? null}
+          onReplaceData={openReplace}
+        />
+        {view && active && <FiguresRow focus={figuresFocus} offerFocus={offerFocus} active={active} buildings={view.dataset.buildings.length} />}
       </header>
 
       <div className={`${GUTTER} flex flex-1 flex-col gap-6 py-6 lg:flex-row lg:gap-8 2xl:gap-10`}>
@@ -714,26 +766,25 @@ export function Walkthrough() {
                       session={view}
                       active={active}
                       terms={termsResult}
-                      deliberation={viewDeliberation}
+                      deliberation={shownDeliberation}
                       checks={checks.all}
                       drainageOn={drainageOn}
-                      offer={offerFocus?.status === "locating" ? null : (offerFocus?.summary ?? null)}
+                      decision={decision}
                       onOpenStep={(target) => openStep(DASHBOARD_LINKS[target])}
-                      offerCard={<OfferDropCard onOffer={giveOffer} onReplaceData={(zip) => void handleFiles([zip])} />}
                       {...follow}
                     />
                   )}
                   {stepId === "offer" && (
-                    <OfferStep
+                    <OfferView
                       session={view}
-                      active={active}
                       modelReady={status ? status.configured.chair : null}
                       offer={offer}
                       onOffer={changeOffer}
                       onLog={(message) => note(STEP_NAMES.offer, message)}
                       incoming={incoming}
-                      focus={focus}
+                      {...follow}
                       offerFocus={offerFocus}
+                      onOpenStep={openStep}
                     />
                   )}
                   {stepId === "data" && <DataView session={view} {...follow} onOpenStep={openStep} />}
@@ -742,7 +793,7 @@ export function Walkthrough() {
                     <HazardView
                       session={view}
                       active={active}
-                      drainage={session.dataset.hazardKind === "score" ? { state: drainage && drainage.dataset === session.dataset ? drainage.state : null, enabled: useDrainage, onToggle: setUseDrainage } : undefined}
+                      drainage={session.dataset.hazardKind === "score" ? { state: drainage && drainage.dataset === session.dataset ? drainage.state : null, enabled: useDrainage } : undefined}
                       {...follow}
                       onOpenStep={openStep}
                     />
@@ -750,7 +801,7 @@ export function Walkthrough() {
                   {stepId === "agents" && (
                     <AgentsView
                       session={view}
-                      deliberation={viewDeliberation}
+                      deliberation={shownDeliberation}
                       busy={agentsBusy}
                       checks={checks.ai}
                       status={status}
@@ -776,7 +827,7 @@ export function Walkthrough() {
                     <ResultsView
                       session={view}
                       active={active}
-                      deliberation={viewDeliberation}
+                      deliberation={shownDeliberation}
                       engineSession={session}
                       terrainResult={terrainResult}
                       terms={termsResult}
@@ -791,7 +842,7 @@ export function Walkthrough() {
                     <AuditView
                       session={view}
                       active={active}
-                      deliberation={viewDeliberation}
+                      deliberation={shownDeliberation}
                       checks={checks.all}
                       log={log}
                       terms={termsResult}
@@ -819,7 +870,7 @@ export function Walkthrough() {
               <Button variant="ghost" className="whitespace-nowrap" onClick={reset}>Start over</Button>
             </div>
             <div className="ml-auto flex items-center gap-3">
-              {stepId === "agents" && !deliberation?.final && !agentsBusy && <span className="hidden text-xs text-muted sm:inline">Continuing without the agents uses reference assumptions.</span>}
+              {stepId === "agents" && !deliberation?.final && !agentsBusy && <span className="hidden text-xs text-muted sm:inline">Continuing without the agents uses reference assumptions{pricedFocus ? ", for the model and for the offer's price" : ""}.</span>}
               {nextId && (
                 <Button className="whitespace-nowrap" onClick={() => goTo(step + 1)} disabled={agentsBusy}>
                   Next: {STEP_NAMES[nextId]}
@@ -831,90 +882,4 @@ export function Walkthrough() {
       )}
     </div>
   );
-}
-
-/**
- * The header switch between the priced offer and the portfolio. Drawn like the Segmented control
- * beside it; it is its own piece because "Offer" has to be switched off until an offer is priced.
- */
-function ModeSwitch({ mode, offerReady, onChange }: { mode: Mode; offerReady: boolean; onChange: (mode: Mode) => void }) {
-  const option = (value: Mode, label: string, disabled: boolean) => (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={value === mode}
-      disabled={disabled}
-      title={disabled ? "Read and price an offer first" : undefined}
-      onClick={() => onChange(value)}
-      className={`rounded-full px-3 py-1 text-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${value === mode ? "bg-surface font-medium text-ink shadow-sm" : "text-ink-2 enabled:hover:text-ink"}`}
-    >
-      {label}
-    </button>
-  );
-  return (
-    <div role="radiogroup" aria-label="Show the offer or the portfolio" className="inline-flex flex-wrap gap-1 rounded-full border border-line bg-surface-2 p-1">
-      {option("offer", "Offer", !offerReady)}
-      {option("portfolio", "Portfolio", false)}
-    </div>
-  );
-}
-
-/** One band of figures under the header: two columns on a phone, three on a tablet, then one row with a rule between figures. */
-function FigureStrip({ items, lead }: { items: { label: string; value: string; strong?: boolean }[]; lead?: string }) {
-  return (
-    <div className="@container border-b border-line bg-plane/95 backdrop-blur">
-      {lead && <p className={`${GUTTER} pt-2 text-xs leading-snug text-ink-2 wrap-anywhere`}>{lead}</p>}
-      {/* The steps are measured against the strip in rem, so a larger text size keeps the rows until one band fits. */}
-      <dl className={`${GUTTER} grid grid-cols-2 gap-x-6 gap-y-2 py-2 @2xl:grid-cols-3 @4xl:grid-cols-[repeat(6,auto)] @4xl:gap-x-4 @5xl:gap-x-6`}>
-        {items.map((x) => (
-          <div key={x.label} className="min-w-0 border-line @4xl:border-l @4xl:pl-4 @4xl:first:border-l-0 @4xl:first:pl-0 @5xl:pl-6">
-            <dt className="text-xs uppercase tracking-wide text-muted">{x.label}</dt>
-            <dd className={`tabular text-sm font-semibold @5xl:text-base ${x.strong ? "text-brand" : "text-ink"}`}>{x.value}</dd>
-          </div>
-        ))}
-      </dl>
-    </div>
-  );
-}
-
-/**
- * The same strip in Offer mode: the offer's own figures, each labelled as the offer's. Every loss is
- * from the engine. Gross is after the policy deductible and limit; the change to the portfolio is ground-up.
- */
-function OfferKeyFigures({ focus }: { focus: PricedFocus }) {
-  const { total, portfolio } = focus.price;
-  const rate = total.ratePerMilleGross;
-  const added = portfolio.loss100ChangeKes;
-  const addedShare = portfolio.loss100ChangeShare;
-  const sign = added !== null && added < 0 ? "-" : "+";
-  const items: { label: string; value: string; strong?: boolean }[] = [
-    { label: "Offer sum insured", value: kes1(total.tivKes) },
-    { label: "Offer 1-in-100 gross loss · 1% a year", value: total.loss100GrossKes !== null ? kes1(total.loss100GrossKes) : "not modelled", strong: true },
-    { label: "Offer average annual loss, gross", value: kes1(total.aalGrossKes) },
-    { label: "Offer pure flood rate, gross", value: `${fmtNum(rate, rate !== 0 && Math.abs(rate) < 0.1 ? 4 : 2)} per mille` },
-    {
-      label: "Added to portfolio 1-in-100, ground-up",
-      value: added === null ? "not modelled" : Math.abs(added) < 0.5 ? "no change" : `${sign}${kes1(Math.abs(added))}${addedShare !== null ? ` (${sign}${fmtPct(Math.abs(addedShare), Math.abs(addedShare) < 0.001 ? 3 : 1)})` : ""}`,
-    },
-    { label: "Offer terms used", value: focus.terms.summary },
-  ];
-  const lead = `Figures for this offer: ${[focus.line.insured ?? focus.building.name, focus.line.location].filter(Boolean).join(", ")} (${focus.documentName}). Switch to Portfolio in the bar above for the whole portfolio.`;
-  return <FigureStrip items={items} lead={lead} />;
-}
-
-/** The figures an underwriter looks for first, kept in view on every step. The losses are ground-up: before any insurance terms. */
-function KeyFigures({ active, hazard }: { active: Active; hazard: string }) {
-  const r = active.result;
-  const at = (rp: number) => r.standardLosses.find((l) => l.returnPeriod === rp)?.lossKes ?? null;
-  const loss100 = at(100);
-  const loss250 = at(250);
-  const items: { label: string; value: string; strong?: boolean }[] = [
-    { label: "Total insured value", value: fmtKes(r.totalTivKes) },
-    { label: "1-in-100 ground-up loss · 1% a year", value: loss100 != null ? fmtKes(loss100, 2) : "not modelled", strong: true },
-    { label: "1-in-250 ground-up loss · 0.4% a year", value: loss250 != null ? fmtKes(loss250, 2) : "not modelled" },
-    { label: "Ground-up average annual loss", value: fmtKes(r.aalKes, 2) },
-    { label: "Flood source", value: hazard },
-    { label: "Assumptions", value: active.source === "ai" ? "Agreed by agents" : "Reference, no AI" },
-  ];
-  return <FigureStrip items={items} />;
 }

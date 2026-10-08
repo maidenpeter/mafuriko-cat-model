@@ -9,10 +9,10 @@ import { SCORE_TIERS } from "@/lib/model/types";
 import { isPriced, type OfferFocus, type PricedFocus } from "@/lib/offer/focus";
 import { plural } from "@/lib/offer/shared";
 import type { Active, Session } from "@/lib/session";
-import { STEP_NAMES, stepKicker, type StepId } from "@/lib/steps";
+import { STEP_NAMES, type StepId } from "@/lib/steps";
 import { SourceBadge, SourceLine } from "../charts/ChartFrame";
 import { HazardMap, hazardMapRatio } from "../charts/HazardMap";
-import { Button, Card, CheckList, ChecksSummary, Note, Segmented, StepHeader, Tag } from "../ui";
+import { Button, Card, CheckList, ChecksSummary, Note, Segmented, selectView, StepHeader, Tag } from "../ui";
 import { MapStep } from "./MapStep";
 
 /**
@@ -32,11 +32,13 @@ function Sources({ items, className = "" }: { items: { badge: ReactNode; text: R
   );
 }
 
-/** What the Hazard step needs to show and switch drainage-driven flooding. */
+/**
+ * What the Hazard step needs to show drainage-driven flooding and say whether it is in force.
+ * The setting is switched under "Flood source" in the bar above every page, and nowhere else.
+ */
 export interface DrainageControl {
   state: DrainageState | null;
   enabled: boolean;
-  onToggle: (on: boolean) => void;
 }
 
 interface Props {
@@ -53,7 +55,7 @@ interface Props {
 
 /**
  * The one hazard step: the interactive map first, then the tests of how far the hazard layer can be trusted.
- * With a priced offer it opens on that building, and the portfolio's own map is the second view.
+ * With a priced offer in Offer view it is about that building; otherwise the map is the portfolio's.
  */
 export function HazardStep({ session, active, drainage, focus = null, offerFocus = null, onOpenStep }: Props) {
   const { dataset, reference, hits } = session;
@@ -62,11 +64,12 @@ export function HazardStep({ session, active, drainage, focus = null, offerFocus
   const scenario = dataset.scenarios[index];
   const missed = hits.filter((h) => !h.hit);
 
-  // With a priced offer the step opens on the building; the portfolio's map is one click away.
-  const [view, setView] = useState<"offer" | "portfolio">("offer");
-  const shown = focus && view === "offer" ? focus : null;
-  // An offer that is loaded but not followed here: outside the maps, waiting for a value, or the header is on Portfolio.
+  // The building the step follows: the priced offer while "View" in the bar is on Offer.
+  const shown = focus;
+  // An offer that is loaded but not followed here: outside the maps, waiting for a value, or "View" is on Portfolio.
   const aside = focus ? null : offerFocus;
+  // The basis the map is drawn on: the offer's while it is followed, otherwise the portfolio run's.
+  const allDrivers = (shown ? shown.drivers.mode : active.result.mode) === "all_drivers";
 
   // A depth map carries its own return period. A score tier has none of its own: the one shown is the reference assumption.
   const returnPeriod = scenario.fixedReturnPeriod ?? reference.scenarios.find((s) => s.id === scenario.id)?.returnPeriod;
@@ -98,25 +101,16 @@ export function HazardStep({ session, active, drainage, focus = null, offerFocus
 
   return (
     <div>
-      <StepHeader kicker={stepKicker("hazard")} title={STEP_NAMES.hazard}>
+      <StepHeader title={STEP_NAMES.hazard}>
         {shown
-          ? `Where ${shown.building.name} stands on the flood maps, with the portfolio's insured buildings around it. Pick a return period to see how deep the water is at the building.`
-          : "Where water collects at each event, which insured buildings it reaches and how losses pile up by ward. Pick an event or press play to watch the flood spread as events get rarer."}
+          ? allDrivers
+            ? `Where ${shown.building.name} stands on the flood maps. Move the slider to see the water that reaches it in each flood.`
+            : `Where ${shown.building.name} stands on the flood maps. Depth only is selected, so only the water at the building's own point counts.`
+          : allDrivers
+            ? "Where water collects at each event, which insured buildings it reaches at their point, within the buffer, by drainage ponding and by drain overload, and how losses pile up by ward. Pick an event or press play to watch the flood spread as events get rarer."
+            : "Where water collects at each event, which insured buildings it reaches and how losses pile up by ward. Pick an event or press play to watch the flood spread as events get rarer."}
       </StepHeader>
 
-      {focus && (
-        <div className="mb-4">
-          <Segmented
-            label="What the map is about"
-            value={view}
-            onChange={setView}
-            options={[
-              { value: "offer", label: "This offer" },
-              { value: "portfolio", label: "Portfolio" },
-            ]}
-          />
-        </div>
-      )}
       {aside && (
         <div className="mb-4">
           {aside.outside ? (
@@ -133,7 +127,7 @@ export function HazardStep({ session, active, drainage, focus = null, offerFocus
               )}
             </Note>
           ) : isPriced(aside) ? (
-            <p className="text-sm text-ink-2">An offer is loaded: {aside.building.name}. Switch the header to Offer to see it on this map.</p>
+            <p className="text-sm text-ink-2">An offer is loaded: {aside.building.name}. {selectView("Offer")} to see it on this map.</p>
           ) : (
             <Note>{aside.statusLine}</Note>
           )}
@@ -165,6 +159,7 @@ export function HazardStep({ session, active, drainage, focus = null, offerFocus
               ? `The shading is the susceptibility score in the "${scenario.label}" tier: the darker the cell, the higher the score, and ground with no shading scores 0. `
               : `The shading is the flood depth in metres in a ${returnPeriod !== undefined ? rpWithChance(returnPeriod) : scenario.label} flood: the darker the cell, the deeper the water, and ground with no shading stays dry. `}
             Each dot is an insured building of the portfolio; the large dots sit on a shaded cell. Point at a large dot{hits.length > 0 ? " or a known flood area" : ""} to see its values. Pick another scenario above the map to see the footprint change.
+            {allDrivers && " This picture is the map read at each building's own point. Water within the buffer and from overloaded drains is counted on the map at the top of this step."}
           </p>
           <HazardMap dataset={dataset} scenarioIndex={index} hits={hits} offer={shown ? { lat: shown.site.lat, lon: shown.site.lon, name: shown.building.name, approximate: shown.site.approximate } : null} />
           <Sources items={mapSources} className="mt-4 border-t border-line pt-3" />
@@ -207,24 +202,22 @@ export function HazardStep({ session, active, drainage, focus = null, offerFocus
 }
 
 function DrainageCard({ control, total, className }: { control: DrainageControl; total: number; className?: string }) {
-  const { state, enabled, onToggle } = control;
+  const { state, enabled } = control;
   const reach = DRAINAGE_DEFAULTS.reachM;
   const row = state?.sensitivity.rows.find((x) => x.reachM === reach);
   const depths = SCORE_TIERS.map((t) => DRAINAGE_DEFAULTS.depthM[t]);
+  // The setting in force, in the words of the "Flood source" switch. Until the drainage zone has been worked out,
+  // terrain flooding alone is in force and the bar has no switch to point at.
+  const inForce = state && enabled ? "Terrain + drainage" : "Terrain only";
   return (
     <Card
       className={className}
       title="Drainage-driven flooding"
       aside={
-        <Segmented
-          label="Hazard"
-          value={enabled ? "on" : "off"}
-          onChange={(v) => onToggle(v === "on")}
-          options={[
-            { value: "off", label: "Terrain only" },
-            { value: "on", label: "Terrain + drainage" },
-          ]}
-        />
+        <p className="min-w-0 text-sm leading-relaxed text-ink-2">
+          <strong className="font-semibold text-ink">In force: {inForce}.</strong>
+          {state && <> Select the other under &quot;Flood source&quot; in the bar above.</>}
+        </p>
       }
     >
       {/* The card runs the full width under the map, so its parts sit side by side: the text and figures beside the

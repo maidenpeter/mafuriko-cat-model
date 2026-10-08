@@ -9,7 +9,7 @@ const LETTER: Record<TextSize, string> = { standard: "text-sm", large: "text-lg"
 
 const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white";
 
-/** Light or dark, and how large the text is. Sits on the navy header bar, so it is drawn in white. */
+/** Light or dark, and how large the text is. Sits at the right end of the navy top bar, so it is drawn in white. */
 export function DisplayControls({ className = "" }: { className?: string }) {
   const theme = useTheme();
   const size = useTextSize();
@@ -45,7 +45,7 @@ export function DisplayControls({ className = "" }: { className?: string }) {
   return (
     <div className={`flex shrink-0 items-center gap-1.5 ${className}`}>
       {/* The words are for readers who do not know the icons; on a phone there is only room for the controls. */}
-      <span aria-hidden className="hidden text-xs font-medium uppercase tracking-wide text-white/65 md:inline">Text size</span>
+      <span aria-hidden className="hidden text-xs font-medium text-white/75 md:inline">Text size</span>
       <div role="radiogroup" aria-label="Text size" onKeyDown={onArrow} className="inline-flex rounded-full border border-white/30">
         {TEXT_SIZES.map((s) => {
           const checked = s.value === size;

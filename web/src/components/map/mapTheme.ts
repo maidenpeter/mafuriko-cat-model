@@ -1,8 +1,9 @@
-/** Shared between the map and its legend. Kept apart from RiskMap so the legend can render without loading the map library. */
+/** Shared between the map, its control strip and its key. Kept apart from RiskMap so they can render without loading the map library. */
 
 import type { Position } from "@/lib/geo/layers";
 
-export type LayerKey = "hazard" | "drainage" | "buildings" | "wards" | "waterways" | "settlements" | "facilities" | "hotspots";
+/** The layers the reader can switch on and off. "buffer" is the ring around an offer building; the building itself is always shown. */
+export type LayerKey = "hazard" | "drainage" | "buildings" | "wards" | "waterways" | "settlements" | "facilities" | "hotspots" | "buffer";
 export type LayerState = Record<LayerKey, boolean>;
 export type WardMetric = "loss" | "tiv" | "flooded" | "lossRatio";
 export type Selection = { type: "building"; index: number } | { type: "ward"; index: number };
@@ -32,28 +33,103 @@ export interface MapView {
   offerKey: string | null;
 }
 
+/** The offer building as a solid block: what it stands on and how tall it is drawn. */
+export interface OfferBlock {
+  /** The base as GeoJSON polygon rings, [longitude, latitude]: the building's outline, or a square standing in for it. */
+  rings: Position[][];
+  /** The height the block is drawn at, in metres. */
+  heightM: number;
+  /** The middle of the base, [longitude, latitude]: the call-out's line ends above it. */
+  centre: Position;
+}
+
+/**
+ * The words of the offer building's call-out. The step writes every line from figures it already
+ * holds; the map only lays them out.
+ */
+export interface OfferCallout {
+  /** The building's class and insured value. null when neither is known. */
+  about: string | null;
+  /** The water at the site in the event chosen, and which reading gave it: "1-in-100: 0.1 m, drain overload", or "1-in-100: dry". */
+  water: string;
+  /** The loss in that event. null when there is none to show. */
+  loss: string | null;
+  /** A short remark under the lines: "Shape approximate", "Approximate location". null when there is none. */
+  note: string | null;
+  /** The whole call-out as one passage, read out in place of the lines by a screen reader. */
+  spoken: string;
+}
+
 /**
  * The offer building as the map draws it: always on top of every other layer.
- * With an outline it is a filled shape in the brand colour; without one a marker at the point;
- * an approximate location is a marker inside a ring.
+ * At an exact position it is a solid block in the brand colour with a call-out above it; an
+ * approximate location is a wide ring with the call-out and no block.
  */
 export interface OfferMark {
   /** One value per offer location. The camera goes to the building once for each new key. */
   key: string;
   lat: number;
   lon: number;
-  /** The building's name, written beside the mark and at the head of its tooltip. */
+  /** The building's name, at the head of its call-out and of its tooltip. */
   name: string;
   /** True when a named place stands in for coordinates the document does not give. */
   approximate: boolean;
-  /** The building's outline as GeoJSON polygon rings, [longitude, latitude]. null while it is looked up or when there is none. */
-  outline: Position[][] | null;
+  /** The block to draw. null for an approximate location: a ring is drawn and no block. */
+  block: OfferBlock | null;
+  /** The call-out's lines, under the name. */
+  callout: OfferCallout;
   /** The lines of the tooltip, under the name. */
   lines: string[];
+  /**
+   * The buffer in force around the building, in metres: the highest map depth inside it is the depth used.
+   * Drawn as a dashed ring. null when the reading at the point is in force (Depth only), and no ring is drawn.
+   */
+  bufferM: number | null;
+  /** The lines of the ring's tooltip. */
+  bufferLines: string[];
+}
+
+/**
+ * The buffer ring as a closed line of [longitude, latitude] points, radiusM metres from the building.
+ * Metres are turned into degrees along each axis the way the hazard grid measures them, so the ring
+ * drawn is the area the buffer depth was read from.
+ */
+export function bufferRing(lat: number, lon: number, radiusM: number, steps = 96): Position[] {
+  const perLat = 110574;
+  const perLon = 111320 * Math.cos((lat * Math.PI) / 180);
+  const ring: Position[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const a = ((i % steps) / steps) * 2 * Math.PI;
+    ring.push([lon + (radiusM * Math.cos(a)) / perLon, lat + (radiusM * Math.sin(a)) / perLat]);
+  }
+  return ring;
+}
+
+/**
+ * How close the map opens on an offer building: OFFER_ZOOM, or further out when the buffer ring
+ * would not fit. `roomPx` is the shorter side of the map on screen.
+ */
+export function offerZoom(lat: number, bufferM: number | null, roomPx: number): number {
+  if (bufferM === null || !(bufferM > 0) || !(roomPx > 0)) return OFFER_ZOOM;
+  // Metres per pixel at zoom 0 on 512 px tiles, at this latitude. The ring is given 80% of the room.
+  const metresPerPixel = 78271.517 * Math.cos((lat * Math.PI) / 180);
+  return Math.min(OFFER_ZOOM, Math.log2((metresPerPixel * roomPx * 0.4) / bufferM));
 }
 
 /** How close the map opens on an offer building: near enough to read its outline and its neighbours. */
 export const OFFER_ZOOM = 16;
+/** The tilt and the compass turn the camera takes, once, when it goes to an offer building drawn as a block, in degrees. */
+export const OFFER_PITCH = 50;
+export const OFFER_BEARING = -20;
+/** Further out than this zoom the call-out is a small pill with the building's name. No buffer ring opens the map this far out. */
+export const CALLOUT_FAR_ZOOM = 13.5;
+/** The radius of the ring drawn for an approximate location, in pixels. */
+export const APPROXIMATE_RING_PX = 24;
+
+/** The point eastM metres east and northM metres north of [lon, lat], measured the way bufferRing measures. */
+export function offsetPoint(lat: number, lon: number, eastM: number, northM: number): Position {
+  return [lon + eastM / (111320 * Math.cos((lat * Math.PI) / 180)), lat + northM / 110574];
+}
 /** The offer building's colour on the map and in its key: the brand colour of the theme in force. */
 export const OFFER_COLOR = "var(--brand)";
 

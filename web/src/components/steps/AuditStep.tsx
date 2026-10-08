@@ -3,8 +3,13 @@
 /**
  * Audit: everything needed to challenge or reproduce the result, on one page and as a PDF.
  *
- *   The offer on record     its one line, where it stands, and the decision recorded on the Results step
- *   All checks              six groups: data, hazard, vulnerability, financial and terms, agents, the offer
+ *   The offer on record     its one line, where it stands, the decision recorded on the Results step, and
+ *                           how many questions go to the broker (the list has its home in Price an offer)
+ *   All checks              six groups: data, hazard, vulnerability, financial and terms, agents, the offer.
+ *                           The checks on the loss drivers are among them: the portfolio's under financial,
+ *                           the offer's under the offer
+ *   Losses beyond depth     the mode in force and the table "Assumptions beyond flood depth": every one with
+ *                           its value in force, its allowed range, its source and who set it
  *   Extraction record       what was sent, what came back, which path read it, and one row per value
  *                           with its source sentence and the result of the check on it
  *   Agent usage and cost    per agent and in total; a cost only when token prices are set on the server
@@ -13,7 +18,10 @@
  *
  * The page is laid out once as plain rows (auditPage) and drawn twice from them: on screen, and as a
  * self-contained black on white document for printing (auditHtml). Nothing is priced here: every
- * offer figure and every check on the offer comes from the focus (lib/offer/focus).
+ * offer figure and every check on the offer comes from the focus (lib/offer/focus). The loss by
+ * driver and the premium build-up have their homes in other steps; this page points to them, and
+ * the written note and the audit file carry them in full. The questions for the broker are listed
+ * in the print view and the downloaded files; on screen this page gives their count and the link.
  *
  * The offer's sections show in Offer mode, and for an offer that could not be priced, where the
  * record of how it was read is all there is. In Portfolio mode with a priced offer the step is the
@@ -28,16 +36,33 @@ import type { Check, CheckStatus } from "@/lib/checks";
 import { checkGroups, flagCountText, headlineFlags, type AuditGroup } from "@/lib/dashboard";
 import { DECISION_LABELS, type DecisionRecord } from "@/lib/decision";
 import { escapeHtml, fmtNoteDate } from "@/lib/decisionNote";
-import { buildAudit, buildNote, type ExportExtras, type OasisReference, LIMITS, PARAM_LABELS, TERMS_NOTICE, termRows, unusedForDepth } from "@/lib/export";
+import {
+  beyondDepthAssumptions,
+  brokerQuestionRows,
+  buildAudit,
+  buildNote,
+  type BeyondDepthRow,
+  type ExportExtras,
+  type OasisReference,
+  LIMITS,
+  lossModeLine,
+  PARAM_LABELS,
+  settersLine,
+  TERMS_NOTICE,
+  termRows,
+  unusedForDepth,
+} from "@/lib/export";
 import { fmtInt, fmtNum } from "@/lib/format";
-import { kes1 } from "@/lib/labels";
+import { kes1, LOSS_MODE_LABELS, PORTFOLIO_DRIVERS_LINE, type SourceKind } from "@/lib/labels";
 import { flattenParams, REFERENCE_PARAMS } from "@/lib/model/params";
 import type { TermsResult } from "@/lib/model/terms";
-import { isPriced, type OfferFocus, type OfferFocusProps } from "@/lib/offer/focus";
+import type { LossMode } from "@/lib/model/drivers";
+import { isPriced, type FocusJudgement, type OfferFocus, type OfferFocusProps } from "@/lib/offer/focus";
+import { plural } from "@/lib/offer/shared";
 import { download, slim, type Active, type LogEntry, type Session } from "@/lib/session";
-import { STEP_NAMES, stepKicker, type StepId } from "@/lib/steps";
-import { SourceBadge, SourceLine } from "../charts/ChartFrame";
-import { Button, Card, CheckList, ChecksSummary, Note, StepHeader, Tag } from "../ui";
+import { STEP_NAMES, type StepId } from "@/lib/steps";
+import { SourceBadge, SourceLine, type ChartSource } from "../charts/ChartFrame";
+import { Button, Card, CheckList, ChecksSummary, Note, selectView, StepHeader, StepLink, Tag } from "../ui";
 
 interface Props extends OfferFocusProps {
   session: Session;
@@ -49,7 +74,7 @@ interface Props extends OfferFocusProps {
   terms: TermsResult;
   /** Where the model data was read from, when it came from the folder or the built-in sample. */
   modelSource?: { source: "folder" | "sample"; folderName: string; reason: string | null };
-  /** The model data's origin in the header's words: "Nairobi starter kit, from the model data folder". */
+  /** The model data's origin as the bar's "Model data" panel words it: "Nairobi starter kit, from the model data folder". */
   dataSource?: string;
   /** Token prices set on the server, or null when none are set: no cost is shown without them. */
   prices?: Prices | null;
@@ -90,8 +115,28 @@ interface AuditPage {
   xol: string;
   assumptionsSource: string;
   assumptions: Rows;
+  /** The losses beyond flood depth: the mode in force, and every assumption with its value, range, source and who set it. */
+  beyond: {
+    mode: LossMode;
+    modeLabel: string;
+    /** What the mode means, as one sentence to put after its name. */
+    modeLine: string;
+    /** How many of the assumptions each party set, in words. */
+    setters: string;
+    /** Which of the drivers reach the portfolio, and why the others do not: for the print view. null with Depth only. */
+    portfolioLine: string | null;
+    rows: BeyondDepthRow[];
+  };
+  /** What to ask the broker, for the print view. Empty without an offer, or when nothing is missing. */
+  questions: { id: string; question: string; why: string }[];
   limits: string[];
 }
+
+/** The assumptions beyond flood depth as a plain table, for the print view. */
+const beyondTable = (rows: BeyondDepthRow[]): Rows => ({
+  head: ["Assumption", "In force", "Reference", "Allowed range", "Who set it", "Source", "Used for"],
+  rows: rows.map((r) => [r.label, r.value, r.referenceText, r.rangeText, r.setByText, `${r.source}${r.quote ? ` "${r.quote}"` : ""}`, r.usedFor]),
+});
 
 const tokens = (n: number | null) => (n === null ? NOT_REPORTED : fmtInt(n));
 
@@ -156,8 +201,23 @@ function extractionRecord(offer: OfferFocus): NonNullable<AuditPage["extraction"
   };
 }
 
-export function auditPage(p: { session: Session; active: Active; deliberation: Deliberation | null; checks: Check[]; terms: TermsResult; modelSource: Props["modelSource"]; dataSource: string; prices: Prices | null; decision: DecisionRecord | null; offer: OfferFocus | null }): AuditPage {
+export function auditPage(p: {
+  session: Session;
+  active: Active;
+  deliberation: Deliberation | null;
+  checks: Check[];
+  terms: TermsResult;
+  modelSource: Props["modelSource"];
+  dataSource: string;
+  prices: Prices | null;
+  decision: DecisionRecord | null;
+  offer: OfferFocus | null;
+  /** The assumptions beyond flood depth and who set each. Left out, the offer's own block is used. */
+  judgement?: FocusJudgement | null;
+}): AuditPage {
   const { session, active, terms, offer, decision } = p;
+  const mode: LossMode = active.result.mode ?? "depth_only";
+  const beyondRows = beyondDepthAssumptions(p.judgement ?? offer?.judgement ?? null, p.deliberation, active.result);
   const { dataset } = session;
   const isScore = dataset.hazardKind === "score";
   const ref = new Map(flattenParams(REFERENCE_PARAMS).map((x) => [x.path, x.value]));
@@ -175,6 +235,7 @@ export function auditPage(p: { session: Session; active: Active; deliberation: D
     ["Hazard maps", `${fmtInt(dataset.scenarios.length)} ${isScore ? "tiers, read as a hazard score" : "flood depth maps"}`],
     ["Insured buildings", fmtInt(dataset.buildings.length)],
     ["Flood source", dataset.drainage ? "Terrain and drainage" : "Terrain only"],
+    ["Losses from", LOSS_MODE_LABELS[mode]],
   ];
 
   let offerPart: AuditPage["offer"] = null;
@@ -240,6 +301,15 @@ export function auditPage(p: { session: Session; active: Active; deliberation: D
           return [PARAM_LABELS[x.path], fmtNum(x.value), fmtNum(reference), active.source === "ai" ? (moved ? "Agents, moved from the reference" : "Agents, kept at the reference") : "Reference value"];
         }),
     },
+    beyond: {
+      mode,
+      modeLabel: LOSS_MODE_LABELS[mode],
+      modeLine: lossModeLine(mode),
+      setters: settersLine(beyondRows),
+      portfolioLine: mode === "all_drivers" ? PORTFOLIO_DRIVERS_LINE : null,
+      rows: beyondRows,
+    },
+    questions: brokerQuestionRows(offer),
     limits: LIMITS.filter((l) => isScore || !/score|tiers are assumed|proxy/.test(l)),
   };
 }
@@ -277,6 +347,8 @@ export function auditHtml(page: AuditPage, log: LogEntry[], generated: Date): st
       t.total ? `<tr class="total">${t.total.map((c) => `<td>${e(c)}</td>`).join("")}</tr>` : ""
     }</tbody></table>`;
   const facts = (rows: [string, string][]) => `<dl>${rows.map(([k, v]) => `<dt>${e(k)}</dt><dd>${e(v)}</dd>`).join("")}</dl>`;
+  // The sentence on which drivers reach the portfolio is printed once, with the assumptions: a limit that says the same is left out.
+  const limits = page.limits.filter((l) => !page.beyond.portfolioLine || !/not modelled for the synthetic portfolio/.test(l));
   const parts: string[] = [];
   parts.push(`<h1>Mafuriko audit</h1>`, `<p>Generated ${e(fmtNoteDate(generated))}. Model data: ${e(page.dataSource)}.</p>`);
   parts.push(`<p class="small">The portfolio is synthetic. Every loss figure is worked out by code; a language model reads the offer document and proposes assumptions, and code checks both.</p>`);
@@ -297,7 +369,21 @@ export function auditHtml(page: AuditPage, log: LogEntry[], generated: Date): st
   parts.push(`<h2>Model data</h2>`, facts(page.model));
   parts.push(`<h2>Insurance terms in force</h2>`, `<p>${e(TERMS_NOTICE)}.</p>`, table(page.terms), `<p>Excess of loss applied: ${e(page.xol)}</p>`, `<h3>Portfolio average annual loss</h3>`, facts(page.termsAal));
   parts.push(`<h2>Assumptions in force: ${e(page.assumptionsSource.toLowerCase())}</h2>`, table(page.assumptions));
-  parts.push(`<h2>What this model cannot tell you</h2>`, `<ul>${page.limits.map((l) => `<li>${e(l)}</li>`).join("")}</ul>`);
+  parts.push(
+    `<h2>Assumptions beyond flood depth</h2>`,
+    `<p><strong>Losses from: ${e(page.beyond.modeLabel)}.</strong> ${e(page.beyond.modeLine)}</p>`,
+    page.beyond.portfolioLine ? `<p>${e(page.beyond.portfolioLine)}</p>` : "",
+    `<p>Every figure is an assumption, kept inside its allowed range by code. Who set them: ${e(page.beyond.setters)}.</p>`,
+    table(beyondTable(page.beyond.rows)),
+  );
+  if (page.questions.length > 0) {
+    parts.push(
+      `<h2>Questions for the broker</h2>`,
+      `<p>Each is a value that matters to the price and that the document does not state. Nothing is guessed in its place.</p>`,
+      table({ head: ["Question", "Why it matters"], rows: page.questions.map((q) => [q.question, q.why]) }),
+    );
+  }
+  parts.push(`<h2>What this model cannot tell you</h2>`, `<ul>${limits.map((l) => `<li>${e(l)}</li>`).join("")}</ul>`);
   parts.push(`<h2>Run log</h2>`, `<table><tbody>${log.map((entry) => `<tr><td class="status">${e(entry.at.slice(11, 23))}</td><td>${e(entry.step)}</td><td>${e(entry.message)}</td></tr>`).join("")}</tbody></table>`);
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Mafuriko audit</title><style>${PRINT_CSS}</style></head><body>${parts.join("\n")}</body></html>`;
 }
@@ -368,7 +454,7 @@ function Folded({ title, children }: { title: string; children: ReactNode }) {
 
 const Raw = ({ text }: { text: string }) => <pre className="max-h-96 overflow-auto rounded-lg border border-line bg-surface p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap wrap-anywhere text-ink-2">{text}</pre>;
 
-export function AuditStep({ session, active, deliberation, checks, log, terms, modelSource, dataSource, prices = null, decision = null, focus = null, offerFocus = null, onOpenStep }: Props) {
+export function AuditStep({ session, active, deliberation, checks, log, terms, modelSource, dataSource, prices = null, decision = null, focus = null, offerFocus = null, judgement = null, onOpenStep }: Props) {
   const isScore = session.dataset.hazardKind === "score";
   const [printNote, setPrintNote] = useState<string | null>(null);
   // The saved Oasis run ships with the app as a small file. The written note compares it with this run; without it the note says so.
@@ -392,8 +478,18 @@ export function AuditStep({ session, active, deliberation, checks, log, terms, m
   const offerHidden = !offer && read !== null;
 
   const source = dataSource ?? `${session.dataset.name}, read from ${session.uploadName}`;
-  const page = auditPage({ session, active, deliberation, checks, terms, modelSource, dataSource: source, prices, decision, offer });
-  const allChecks = [...checks, ...(offer?.checks ?? [])];
+  const page = auditPage({ session, active, deliberation, checks, terms, modelSource, dataSource: source, prices, decision, offer, judgement });
+  const allChecks = page.groups.flatMap((g) => g.checks);
+  /** A link to another step, where that step is the home of what this page only names. */
+  const stepLink = (id: StepId) => <StepLink to={id} onOpenStep={onOpenStep} />;
+  // A figure from the offer carries the badge of whoever read the document: the model, or the fixed rules.
+  const offerKind: SourceKind = read?.document.path === "model" ? "ai" : "real";
+  // The source line names only the kinds of figure the table holds.
+  const beyondSources: ChartSource[] = [
+    { kind: "assumption", text: "Every reference value, typed figure and allowed range" },
+    ...(page.beyond.rows.some((r) => r.setBy === "agents") ? [{ kind: "ai" as const, text: "Figures agreed by the agents, checked and kept in range by code" }] : []),
+    ...(page.beyond.rows.some((r) => r.setBy === "offer") ? [{ kind: offerKind, text: "Figures read from the offer document, each with its sentence" }] : []),
+  ];
 
   const stamp = () => new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
   const base = () => `mafuriko-${session.dataset.name}-${stamp()}`;
@@ -420,12 +516,12 @@ export function AuditStep({ session, active, deliberation, checks, log, terms, m
 
   // The written note and the audit file take the offer whatever the header switch says, with the decision,
   // the data source, the token prices and the saved Oasis run.
-  const extras: ExportExtras = { offer: read, decision, oasis, dataSource: source, prices };
+  const extras: ExportExtras = { offer: read, decision, oasis, dataSource: source, prices, judgement };
 
   return (
     <div>
-      <StepHeader kicker={stepKicker("audit")} title={STEP_NAMES.audit}>
-        Everything needed to challenge or reproduce this result: every check, {offer ? "how the offer was read, " : ""}what the agents used, every assumption and where it came from, the limits of the model, and a log of what ran.
+      <StepHeader title={STEP_NAMES.audit}>
+        Everything needed to challenge or reproduce this result: every check, {offer ? "how the offer was read, " : ""}what the agents used, every assumption with its source and who set it, the limits of the model, and a log of what ran.
       </StepHeader>
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
@@ -439,7 +535,7 @@ export function AuditStep({ session, active, deliberation, checks, log, terms, m
 
       {offerHidden && read && (
         <div className="mb-4">
-          <Note>An offer is loaded ({read.documentName}). Switch the view to Offer in the bar at the top to add its checks, its extraction record and its decision to this page and to the PDF.</Note>
+          <Note>An offer is loaded ({read.documentName}). {selectView("Offer")} to add its checks, its extraction record and its decision to this page and to the PDF.</Note>
         </div>
       )}
 
@@ -462,6 +558,11 @@ export function AuditStep({ session, active, deliberation, checks, log, terms, m
             <p className="mt-1 wrap-anywhere text-sm leading-relaxed text-ink-2">From {page.offer.document}. {page.offer.status}</p>
           )}
           <Facts rows={page.offer.decision} className="mt-4" />
+          {page.questions.length > 0 && (
+            <p className="mt-3 text-sm leading-relaxed text-ink-2">
+              <strong className="font-semibold text-ink">{plural(page.questions.length, "question")} for the broker</strong>, listed with the document in {stepLink("offer")}. The print view and the downloaded files carry the list.
+            </p>
+          )}
           {isPriced(offer) && (
             <p className="mt-3 text-xs leading-relaxed text-muted">
               The figures, the points to weigh with their evidence and the decision note are in {STEP_NAMES.results}.
@@ -516,6 +617,63 @@ export function AuditStep({ session, active, deliberation, checks, log, terms, m
           </p>
         </Card>
       )}
+
+      <Card title="Assumptions beyond flood depth" className="mt-4" aside={<SourceBadge kind="assumption" />}>
+        <p className="-mt-2 max-w-4xl text-sm leading-relaxed text-ink-2">
+          How to read it: one row for each assumption behind the loss drivers that act when a building&apos;s point is dry. &quot;In force&quot; is the figure the price uses, &quot;Who set it&quot; says whether it was read from the offer, agreed by the agents, typed over on screen or left at its reference value, and code keeps every figure inside its allowed range.
+        </p>
+        <p className="mt-2 max-w-4xl text-sm leading-relaxed text-ink-2">
+          <strong className="font-semibold text-ink">Losses from: {page.beyond.modeLabel}.</strong> {page.beyond.modeLine} Who set them: {page.beyond.setters}.
+        </p>
+        <div className="mt-4 max-h-144 overflow-auto">
+          <table className="w-full min-w-[64rem] text-sm">
+            <thead className="text-xs text-muted">
+              <tr>
+                <th scope="col" className="pb-2 text-left font-medium">Assumption, with its unit</th>
+                <th scope="col" className="pb-2 pl-3 text-right font-medium">In force</th>
+                <th scope="col" className="pb-2 pl-3 text-right font-medium">Reference</th>
+                <th scope="col" className="pb-2 pl-3 text-left font-medium">Allowed range</th>
+                <th scope="col" className="pb-2 pl-3 text-left font-medium">Who set it</th>
+                <th scope="col" className="pb-2 pl-3 text-left font-medium">Source</th>
+                <th scope="col" className="pb-2 pl-3 text-left font-medium">Used for</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line">
+              {page.beyond.rows.map((r) => (
+                <tr key={r.key}>
+                  <th scope="row" className="py-1.5 text-left align-top font-normal text-ink-2">{r.label}</th>
+                  <td className="tabular py-1.5 pl-3 text-right align-top font-semibold whitespace-nowrap text-ink">{r.value}</td>
+                  <td className="tabular py-1.5 pl-3 text-right align-top whitespace-nowrap text-ink-2">{r.referenceText}</td>
+                  <td className="py-1.5 pl-3 align-top text-ink-2">{r.rangeText}</td>
+                  <td className="py-1.5 pl-3 align-top">
+                    {/* The badge says what kind of figure it is; the words beside it say who set it. An assumption keeps
+                        its badge when the agents set it, with the AI badge beside it. */}
+                    <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      {r.setBy === "offer" ? <SourceBadge kind={r.quote ? offerKind : "real"} /> : <SourceBadge kind="assumption" />}
+                      {r.setBy === "agents" && <SourceBadge kind="ai" />}
+                      <span className="text-ink-2">{r.setByText}</span>
+                    </span>
+                  </td>
+                  <td className="wrap-anywhere py-1.5 pl-3 align-top text-ink-2">
+                    {r.source}
+                    {r.quote && (
+                      <>
+                        {" "}
+                        <q className="text-ink">{r.quote}</q> The sentence is marked in the document in {stepLink("offer")}.
+                      </>
+                    )}
+                  </td>
+                  <td className="py-1.5 pl-3 align-top whitespace-nowrap text-ink-2">{r.usedFor}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="mt-3 max-w-4xl text-xs leading-relaxed text-muted">
+          These figures are set, with the agents&apos; reasons and what each does to the price, in {stepLink("agents")}. The loss each driver gives per return period is in {stepLink("loss")}, and the premium built up from them is in {stepLink("results")}; the written note and the audit file carry both in full.{page.beyond.mode === "all_drivers" ? <> The checks on the loss drivers are in &quot;All checks&quot; above.</> : null}
+        </p>
+        <SourceLine className="mt-3 border-t border-line pt-3" sources={beyondSources} />
+      </Card>
 
       <Card title="Agent usage and cost" className="mt-4" aside={<SourceBadge kind="ai" />}>
         {page.usage.table && <PlainTable table={page.usage.table} numeric={page.usage.table.head.map((_, i) => i).filter((i) => i >= 2)} minWidth="min-w-[40rem]" wrap={[1]} />}

@@ -3,6 +3,8 @@
 import { motion } from "motion/react";
 import { useEffect, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { summarise, type Check, type CheckStatus } from "@/lib/checks";
+import type { OfferFocus } from "@/lib/offer/focus";
+import { STEP_NAMES, type StepId } from "@/lib/steps";
 
 /** `size` is the icon's size in pixels at the Standard text size. It is drawn in rem, so it grows with the text beside it. */
 export function StatusIcon({ status, size = 18 }: { status: CheckStatus | "running" | "idle"; size?: number }) {
@@ -191,18 +193,83 @@ export function Note({ tone = "info", children }: { tone?: "info" | "warn"; chil
   );
 }
 
-export function StepHeader({ kicker, title, children }: { kicker: string; title: string; children?: ReactNode }) {
+export function StepHeader({ title, children }: { kicker?: string; title: string; children?: ReactNode }) {
+  // The step number and name are shown in the top bar, so the page does not print them again:
+  // the heading stays for screen readers and the introduction leads the step.
   return (
-    <header className="@container mb-6">
-      {/* Where the step has the room, the introduction sits beside the title and not under it, so the first
-          screen shows more of the step. The paragraph keeps its reading width either way. */}
-      <div className="@6xl:flex @6xl:items-end @6xl:justify-between @6xl:gap-12">
-        <div className="@6xl:shrink-0">
-          <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted">{kicker}</div>
-          <h2 className="mt-1 text-3xl font-semibold tracking-tight text-ink">{title}</h2>
-        </div>
-        {children && <p className="mt-2 max-w-3xl wrap-break-word text-base leading-relaxed text-ink-2 @6xl:mt-0 @6xl:min-w-0">{children}</p>}
-      </div>
+    <header className="mb-6">
+      <h2 className="sr-only">{title}</h2>
+      {children && <p className="max-w-5xl wrap-break-word text-lg leading-relaxed text-ink-2">{children}</p>}
     </header>
+  );
+}
+
+/** How every step points at the one Offer / Portfolio switch: the side by its own name, and the switch by its caption in the bar. */
+export const selectView = (view: "Offer" | "Portfolio"): string => `Select ${view} under "View" in the bar above`;
+
+/** A step's name inside a sentence, as a link that opens it. */
+export function StepLink({ to, onOpenStep }: { to: StepId; onOpenStep?: (id: StepId) => void }) {
+  if (!onOpenStep) return <>{STEP_NAMES[to]}</>;
+  return (
+    <button type="button" onClick={() => onOpenStep(to)} className="font-medium text-ink underline underline-offset-2 hover:text-brand">
+      {STEP_NAMES[to]}
+    </button>
+  );
+}
+
+/** A step's checks in one line. The lists themselves are on the Audit step. */
+export function ChecksLine({ checks, what, onOpenStep, className = "" }: { checks: Check[]; what: string; onOpenStep?: (id: StepId) => void; className?: string }) {
+  if (checks.length === 0) return null;
+  const s = summarise(checks);
+  const passed = s.pass === checks.length ? `${s.pass} ${s.pass === 1 ? "check" : "checks"} on ${what} ${s.pass === 1 ? "passes" : "pass"}` : `${s.pass} of ${checks.length} checks on ${what} pass`;
+  const rest = [s.warn > 0 ? `${s.warn} ${s.warn === 1 ? "warning" : "warnings"}` : "", s.fail > 0 ? `${s.fail} failed` : ""].filter(Boolean).join(", ");
+  return (
+    <p className={`flex items-start gap-2 text-sm leading-relaxed text-ink-2 ${className}`}>
+      <span className="mt-0.5"><StatusIcon status={s.fail > 0 ? "fail" : s.warn > 0 ? "warn" : "pass"} size={16} /></span>
+      <span className="min-w-0">{passed}{rest ? `, ${rest}` : ""}. See <StepLink to="audit" onOpenStep={onOpenStep} />.</span>
+    </p>
+  );
+}
+
+/**
+ * Shown while a step is on its portfolio view although an offer has been read: why the step is not
+ * following the building. `what` finishes the sentence 'Select Offer under "View" in the bar above to see ...'.
+ */
+export function OfferNotice({ offerFocus, what, onOpenStep }: { offerFocus: OfferFocus | null | undefined; what: string; onOpenStep?: (id: StepId) => void }) {
+  if (!offerFocus) return null;
+  const held = offerFocus.outside || offerFocus.waiting.length > 0;
+  return (
+    <div className="mb-5 max-w-4xl">
+      <Note tone={held ? "warn" : "info"}>
+        {offerFocus.outside ? (
+          <><strong className="font-semibold text-ink">{offerFocus.outsideMessage}.</strong> {offerFocus.coverage} This step shows the portfolio.</>
+        ) : offerFocus.waiting.length > 0 ? (
+          <>{offerFocus.statusLine} That is settled in the <StepLink to="offer" onOpenStep={onOpenStep} /> step. Until then this step shows the portfolio.</>
+        ) : offerFocus.status === "priced" ? (
+          <>An offer is loaded: {offerFocus.line.insured ?? offerFocus.documentName}. {selectView("Offer")} to see {what}.</>
+        ) : (
+          <>{offerFocus.statusLine} This step shows the portfolio.</>
+        )}
+      </Note>
+    </div>
+  );
+}
+
+/**
+ * Detail a reader can open when they want it: the working behind a figure, a full table, the
+ * sources of a card. Closed unless `open` is set, so a page shows its answer first. The summary
+ * is a real disclosure, so it works from the keyboard and reads its state to a screen reader.
+ */
+export function Fold({ summary, children, open = false, className = "" }: { summary: ReactNode; children: ReactNode; open?: boolean; className?: string }) {
+  return (
+    <details open={open} className={`group ${className}`}>
+      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-md py-1 text-sm font-medium text-ink-2 hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand [&::-webkit-details-marker]:hidden">
+        <svg aria-hidden width="12" height="12" viewBox="0 0 12 12" className="shrink-0 transition-transform group-open:rotate-90">
+          <path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <span>{summary}</span>
+      </summary>
+      <div className="mt-2">{children}</div>
+    </details>
   );
 }

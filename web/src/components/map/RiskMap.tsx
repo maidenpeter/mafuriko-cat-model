@@ -1,9 +1,10 @@
 "use client";
 
-import { FullscreenControl, LngLat, Map as MapLibre, NavigationControl, ScaleControl, setWorkerUrl } from "maplibre-gl";
+import { FullscreenControl, LngLat, Map as MapLibre, Marker, NavigationControl, ScaleControl, setWorkerUrl } from "maplibre-gl";
 import type { ExpressionSpecification, FilterSpecification, GeoJSONSource, MapMouseEvent, StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { currentTheme } from "@/lib/display";
 import { fmtInt, fmtKes, fmtNum, fmtPct } from "@/lib/format";
 import { cssColor, hazardImageUrl, rasterCorners, rgbCss, stressImageUrl, type RGB } from "@/lib/geo/hazardImage";
@@ -11,9 +12,30 @@ import { GEO_ATTRIBUTION, type GeoLayers } from "@/lib/geo/layers";
 import { geometryBBox, type AreaRow, type BBox } from "@/lib/geo/spatial";
 import { hazardToDepth } from "@/lib/model/pipeline";
 import { rpLabel } from "@/lib/labels";
-import { HOUSING_LABELS, type HousingClass } from "@/lib/model/types";
+import { HOUSING_LABELS, type BuildingScenarioResult, type HousingClass } from "@/lib/model/types";
 import type { Active, Session } from "@/lib/session";
-import { DRAINAGE_RGB, FACILITY_COLORS, SETTLEMENT_COLOR, WARD_COLOR, WATER_COLORS, OFFER_ZOOM, type BasemapStatus, type LayerKey, type LayerState, type MapCamera, type MapView, type OfferMark, type Selection, type WardMetric } from "./mapTheme";
+import {
+  APPROXIMATE_RING_PX,
+  bufferRing,
+  CALLOUT_FAR_ZOOM,
+  DRAINAGE_RGB,
+  FACILITY_COLORS,
+  OFFER_BEARING,
+  OFFER_PITCH,
+  offerZoom,
+  offsetPoint,
+  SETTLEMENT_COLOR,
+  WARD_COLOR,
+  WATER_COLORS,
+  type BasemapStatus,
+  type LayerKey,
+  type LayerState,
+  type MapCamera,
+  type MapView,
+  type OfferMark,
+  type Selection,
+  type WardMetric,
+} from "./mapTheme";
 
 setWorkerUrl(new URL("maplibre-gl/dist/maplibre-gl-worker.mjs", import.meta.url).toString());
 
@@ -74,6 +96,8 @@ interface Props {
   onStatus: (s: BasemapStatus) => void;
   /** Kept up to date here and read when the map is created, so a map rebuilt for a theme change opens on the same view. */
   viewRef: { current: MapView };
+  /** What goes fullscreen with the map: the step's frame, which also holds the control strip and the key. */
+  fullscreenHost: { current: HTMLElement | null };
   /** The offer building, drawn above everything else. null in the portfolio view. */
   offer?: OfferMark | null;
   /** Draws the portfolio's buildings smaller and fainter, as the setting around the offer building. */
@@ -103,6 +127,105 @@ function cameraOf(map: MapLibre): MapCamera {
  */
 const heading = (map: MapLibre, to: Partial<MapCamera>): MapCamera => ({ ...cameraOf(map), ...to });
 
+/**
+ * Where the camera goes for an offer building: on the stated point, close enough to take in the
+ * buffer ring. With `tilt`, a building drawn as a block is looked at from an angle, so the block is
+ * seen standing. An approximate location has no block and is looked at as the camera already is.
+ */
+function offerCamera(mark: OfferMark, roomPx: number, tilt: boolean): Pick<MapCamera, "center" | "zoom"> & Partial<MapCamera> {
+  return { center: [mark.lon, mark.lat], zoom: offerZoom(mark.lat, mark.bufferM, roomPx), ...(tilt && mark.block ? { pitch: OFFER_PITCH, bearing: OFFER_BEARING } : {}) };
+}
+
+/** The point the call-out is tied to: the middle of the block's base, or the stated point when there is no block. */
+const calloutAt = (mark: OfferMark): [number, number] => mark.block?.centre ?? [mark.lon, mark.lat];
+
+/** Room left between the call-out and the block, and between the call-out and the edge of the map, in pixels. */
+const CALLOUT_GAP = 14;
+const CALLOUT_EDGE = 6;
+/** The leader line meets the card at least this far in from the card's corner, in pixels. */
+const LEADER_INSET = 10;
+
+/**
+ * How far above its base the roof of a block stands on screen, in pixels, for the camera as it is.
+ * Two short steps on the ground, east and north, show how many pixels a metre takes across the
+ * view (the direction a tilt does not shorten); the height is that scale seen from the tilt.
+ * A little is added because the roof is nearer the camera than the ground is.
+ */
+function roofLift(map: MapLibre, at: [number, number], heightM: number): number {
+  const pitch = (map.getPitch() * Math.PI) / 180;
+  if (!(pitch > 0) || !(heightM > 0)) return 0;
+  const stepM = 20;
+  const o = map.project(at);
+  const e = map.project(offsetPoint(at[1], at[0], stepM, 0));
+  const n = map.project(offsetPoint(at[1], at[0], 0, stepM));
+  const a = (e.x - o.x) / stepM;
+  const b = (n.x - o.x) / stepM;
+  const c = (e.y - o.y) / stepM;
+  const d = (n.y - o.y) / stepM;
+  const sum = a * a + b * b + c * c + d * d;
+  const det = a * d - b * c;
+  const pixelsPerMetre = Math.sqrt((sum + Math.sqrt(Math.max(0, sum * sum - 4 * det * det))) / 2);
+  return heightM * pixelsPerMetre * Math.sin(pitch) * 1.12;
+}
+
+/**
+ * Puts the call-out's card and its leader line in place for the camera as it is. Everything is
+ * measured in pixels from the marker's own point, which the map keeps on the middle of the block's
+ * base. The card goes above the block and never over it; where the map has no room above, it goes
+ * to the right, to the left, or underneath. The line runs from the card to the middle of the roof.
+ */
+function placeCallout(map: MapLibre, mark: OfferMark, card: HTMLElement, line: HTMLElement) {
+  const at = calloutAt(mark);
+  const origin = map.project(at);
+  // What the call-out must stay clear of: the block as it stands on screen, or the ring of an approximate location.
+  const ring = APPROXIMATE_RING_PX + 3;
+  let left = -ring;
+  let right = ring;
+  let top = -ring;
+  let bottom = ring;
+  let roof = 0;
+  if (mark.block) {
+    roof = -roofLift(map, at, mark.block.heightM);
+    left = right = bottom = 0;
+    top = roof;
+    for (const corner of mark.block.rings[0]) {
+      const p = map.project(corner);
+      left = Math.min(left, p.x - origin.x);
+      right = Math.max(right, p.x - origin.x);
+      top = Math.min(top, p.y - origin.y + roof);
+      bottom = Math.max(bottom, p.y - origin.y);
+    }
+  }
+  const host = map.getContainer();
+  const w = card.offsetWidth;
+  const h = card.offsetHeight;
+  // How far the card's top left corner may go and still be inside the map.
+  const minX = CALLOUT_EDGE - origin.x;
+  const maxX = host.clientWidth - CALLOUT_EDGE - origin.x - w;
+  const minY = CALLOUT_EDGE - origin.y;
+  const maxY = host.clientHeight - CALLOUT_EDGE - origin.y - h;
+  const within = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), Math.max(lo, hi));
+  const beside = right + CALLOUT_GAP <= maxX ? "right" : left - CALLOUT_GAP - w >= minX ? "left" : null;
+  const where = top - CALLOUT_GAP - h >= minY ? "above" : (beside ?? (bottom + CALLOUT_GAP <= maxY ? "below" : "above"));
+  let x: number;
+  let y: number;
+  let box: { x: number; y: number; w: number; h: number };
+  if (where === "above" || where === "below") {
+    // Centred over the block, and moved sideways only as far as keeps it inside the map and over its own line.
+    x = Math.min(-LEADER_INSET, Math.max(LEADER_INSET - w, within(-w / 2, minX, maxX)));
+    y = where === "above" ? top - CALLOUT_GAP - h : bottom + CALLOUT_GAP;
+    box = where === "above" ? { x: -1, y: y + h, w: 2, h: roof - (y + h) } : { x: -1, y: bottom, w: 2, h: CALLOUT_GAP };
+  } else {
+    x = where === "right" ? right + CALLOUT_GAP : left - CALLOUT_GAP - w;
+    y = Math.min(roof - LEADER_INSET, Math.max(roof + LEADER_INSET - h, within(roof - h / 2, minY, maxY)));
+    box = where === "right" ? { x: 0, y: roof - 1, w: x, h: 2 } : { x: x + w, y: roof - 1, w: -(x + w), h: 2 };
+  }
+  card.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+  line.style.transform = `translate(${Math.round(box.x)}px, ${Math.round(box.y)}px)`;
+  line.style.width = `${Math.max(0, Math.round(box.w))}px`;
+  line.style.height = `${Math.max(0, Math.round(box.h))}px`;
+}
+
 /** Fetches the open basemap style; falls back to a plain background when there is no connection. */
 async function loadStyle(dark: boolean, plane: string): Promise<{ style: StyleSpecification; online: boolean }> {
   const ctl = new AbortController();
@@ -119,9 +242,9 @@ async function loadStyle(dark: boolean, plane: string): Promise<{ style: StyleSp
 }
 
 export function RiskMap(props: Props) {
-  const { session, active, geo, k, layers, threeD, wardMetric, wardRows, facilityDepth, selection, focus, viewRef, offer = null, muted = false } = props;
+  const { session, active, geo, k, layers, threeD, wardMetric, wardRows, facilityDepth, selection, focus, viewRef, fullscreenHost, offer = null, muted = false } = props;
   const box = useRef<HTMLDivElement>(null);
-  const frame = useRef<HTMLDivElement>(null);
+  const stage = useRef<HTMLDivElement>(null);
   const tipBox = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibre | null>(null);
   const onlineRef = useRef(false);
@@ -133,6 +256,20 @@ export function RiskMap(props: Props) {
   const [tip, setTip] = useState<Tip | null>(null);
   const hazardUrls = useRef<string[]>([]);
   const [hazardReady, setHazardReady] = useState(0);
+  // The offer building's call-out is drawn by React into an element the map moves about as a marker.
+  // Pointer events pass through it, so a drag or a scroll that starts on the call-out still reaches the map.
+  const [calloutHost] = useState<HTMLDivElement | null>(() => {
+    if (typeof document === "undefined") return null;
+    const el = document.createElement("div");
+    el.className = "pointer-events-none";
+    return el;
+  });
+  const calloutCard = useRef<HTMLDivElement>(null);
+  const calloutLine = useRef<HTMLDivElement>(null);
+  const calloutMarker = useRef<Marker | null>(null);
+  const placeNow = useRef<(() => void) | null>(null);
+  // True when the map is zoomed far out: the call-out is then a small pill with the name.
+  const [far, setFar] = useState(false);
 
   const { dataset } = session;
   const r = active.result;
@@ -149,12 +286,12 @@ export function RiskMap(props: Props) {
       latest.current.onStatus(online ? "online" : "offline");
 
       // A map rebuilt for a theme change opens where the last one was looking. The first map opens on the
-      // offer building when there is one, and is marked as having gone there so no effect moves it again;
-      // otherwise it opens on the county.
+      // offer building when there is one, tilted so its block is seen standing, and is marked as having
+      // gone there so no effect moves it again; otherwise it opens on the county.
       const saved = viewRef.current.camera;
       const mark = latest.current.offer ?? null;
       if (!saved && mark) viewRef.current.offerKey = mark.key;
-      const opening = saved ?? (mark ? { center: [mark.lon, mark.lat] as [number, number], zoom: OFFER_ZOOM } : null);
+      const opening = saved ?? (mark ? offerCamera(mark, Math.min(box.current.clientWidth, box.current.clientHeight), !latest.current.threeD) : null);
       const start = geo.county?.features[0] ? geometryBBox(geo.county.features[0].geometry) : rasterBox(session);
       map = new MapLibre({
         container: box.current,
@@ -172,19 +309,24 @@ export function RiskMap(props: Props) {
       });
       mapRef.current = map;
       map.addControl(new NavigationControl({ visualizePitch: true }), "top-right");
-      // The frame goes fullscreen, not the map alone, so the hover tooltips come with it.
-      map.addControl(new FullscreenButton({ container: frame.current ?? undefined }), "top-right");
+      // The step's frame goes fullscreen, not the map alone, so the control strip and the key come with it.
+      map.addControl(new FullscreenButton({ container: fullscreenHost.current ?? undefined }), "top-right");
       map.addControl(new ScaleControl({ unit: "metric" }), "bottom-left");
 
       const keepCamera = () => {
         if (map && !disposed) viewRef.current.camera = cameraOf(map);
       };
       map.on("moveend", keepCamera);
+      const watchZoom = () => {
+        if (map && !disposed) setFar(map.getZoom() < CALLOUT_FAR_ZOOM);
+      };
+      map.on("zoom", watchZoom);
       map.on("load", () => {
         if (!map || disposed) return;
         addStaticLayers(map, latest.current, online);
         bindInteractions(map, latest, setTip);
         keepCamera();
+        watchZoom();
         setReady(true);
       });
       map.on("error", (e) => {
@@ -406,6 +548,7 @@ export function RiskMap(props: Props) {
       settlements: ["settlements-fill", "settlements-line"],
       facilities: ["facilities"],
       hotspots: ["hotspots", "hotspots-label"],
+      buffer: ["offer-buffer-casing", "offer-buffer-line"],
     };
     for (const [key, ids] of Object.entries(groups) as [Exclude<LayerKey, "hazard">, string[]][]) {
       for (const id of ids) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", layers[key] ? "visible" : "none");
@@ -420,9 +563,10 @@ export function RiskMap(props: Props) {
     const map = mapRef.current;
     if (!ready || !map) return;
     // The camera tilts or flattens only when the 3D switch changes. A rebuilt map opens with the
-    // tilt and turn it had, so it gets its terrain back and is otherwise left alone.
+    // tilt and turn it had, so it gets its terrain back and is otherwise left alone. A first map
+    // with the switch off has nothing to flatten: it opens flat, or on the tilt an offer building gives it.
     const view = viewRef.current;
-    const moved = view.threeD === threeD;
+    const moved = view.threeD === threeD || (view.threeD === null && !threeD);
     view.threeD = threeD;
     if (!threeD) map.setTerrain(null);
     else if (onlineRef.current && map.getSource("dem")) map.setTerrain({ source: "dem", exaggeration: 1.8 });
@@ -442,16 +586,58 @@ export function RiskMap(props: Props) {
     map.setPaintProperty("buildings", "circle-stroke-width", paint.strokeWidth);
   }, [ready, muted]);
 
-  // ---- the offer building: its outline or marker, filled in again on every rebuilt map -----------
+  // ---- the offer building: its block or its ring, filled in again on every rebuilt map -----------
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map) return;
-    const mode = !offer ? "" : offer.approximate ? "approximate" : offer.outline ? "outline" : "marker";
-    const point = offer ? [{ type: "Feature" as const, properties: { mode, label: offer.approximate ? `${offer.name} (approximate)` : offer.name }, geometry: { type: "Point", coordinates: [offer.lon, offer.lat] } }] : [];
-    const outline = offer?.outline && !offer.approximate ? [{ type: "Feature" as const, properties: {}, geometry: { type: "Polygon", coordinates: offer.outline } }] : [];
+    // An exact position is a block standing on its base. An approximate one is a ring and no block.
+    const block = offer?.block && !offer.approximate ? [{ type: "Feature" as const, properties: { h: offer.block.heightM }, geometry: { type: "Polygon", coordinates: offer.block.rings } }] : [];
+    const point = offer?.approximate ? [{ type: "Feature" as const, properties: {}, geometry: { type: "Point", coordinates: [offer.lon, offer.lat] } }] : [];
+    (map.getSource("offer-block") as GeoJSONSource | undefined)?.setData(fc(block) as unknown as SetDataArg);
     (map.getSource("offer-point") as GeoJSONSource | undefined)?.setData(fc(point) as unknown as SetDataArg);
-    (map.getSource("offer-outline") as GeoJSONSource | undefined)?.setData(fc(outline) as unknown as SetDataArg);
+    // The buffer ring is drawn again whenever its radius changes. With the point reading in force there is none.
+    const ring = offer && offer.bufferM !== null && offer.bufferM > 0 ? [{ type: "Feature" as const, properties: {}, geometry: { type: "LineString", coordinates: bufferRing(offer.lat, offer.lon, offer.bufferM) } }] : [];
+    (map.getSource("offer-buffer") as GeoJSONSource | undefined)?.setData(fc(ring) as unknown as SetDataArg);
   }, [ready, offer]);
+
+  // ---- the offer building's call-out: a marker the map keeps on the building ------------------------
+  const hasOffer = offer !== null;
+  useEffect(() => {
+    const map = mapRef.current;
+    const mark = latest.current.offer;
+    if (!ready || !map || !calloutHost || !mark) return;
+    // The terrain of the 3D view never fades the call-out: it stays readable wherever the camera is.
+    const marker = new Marker({ element: calloutHost, anchor: "center", opacityWhenCovered: 1 }).setLngLat(calloutAt(mark)).addTo(map);
+    const place = () => {
+      const now = latest.current.offer;
+      if (now && calloutCard.current && calloutLine.current) placeCallout(map, now, calloutCard.current, calloutLine.current);
+    };
+    calloutMarker.current = marker;
+    placeNow.current = place;
+    // The card changes size with its words, the text size and the zoom. Each time, it is put back in its place.
+    const watch = new ResizeObserver(place);
+    if (calloutCard.current) watch.observe(calloutCard.current);
+    map.on("move", place);
+    map.on("resize", place);
+    map.on("terrain", place);
+    place();
+    return () => {
+      map.off("move", place);
+      map.off("resize", place);
+      map.off("terrain", place);
+      watch.disconnect();
+      marker.remove();
+      calloutMarker.current = null;
+      placeNow.current = null;
+    };
+  }, [ready, hasOffer, calloutHost]);
+
+  // The call-out follows the block: to a new building, and to an outline or a height that arrives later.
+  useEffect(() => {
+    if (!offer) return;
+    calloutMarker.current?.setLngLat(calloutAt(offer));
+    placeNow.current?.();
+  }, [ready, offer, far]);
 
   // This effect comes after the others that move the camera, so on a new offer its move is the one that stands.
   const offerKey = offer?.key ?? null;
@@ -463,8 +649,18 @@ export function RiskMap(props: Props) {
     if (view.offerKey === offerKey) return;
     view.offerKey = offerKey;
     const at = latest.current.offer;
-    if (!at) return;
-    const to = { center: [at.lon, at.lat] as [number, number], zoom: Math.max(map.getZoom(), OFFER_ZOOM) };
+    if (!at) {
+      // The offer is no longer followed. The tilt this effect gave is taken back, unless the reader has changed it or the 3D view is on.
+      if (!latest.current.threeD && Math.abs(map.getPitch() - OFFER_PITCH) < 0.5 && Math.abs(map.getBearing() - OFFER_BEARING) < 0.5) {
+        const flat = { pitch: 0, bearing: 0 };
+        map.easeTo({ ...flat, duration: 900 });
+        view.camera = heading(map, flat);
+      }
+      return;
+    }
+    // The camera tilts once, so the block is seen standing. With the 3D view on, the tilt of that view is kept.
+    const size = map.getContainer();
+    const to = offerCamera(at, Math.min(size.clientWidth, size.clientHeight), !latest.current.threeD);
     map.easeTo({ ...to, duration: 1100 });
     view.camera = heading(map, to);
   }, [ready, offerKey, viewRef]);
@@ -473,7 +669,7 @@ export function RiskMap(props: Props) {
   // or bottom edge at any text size, in the page or in fullscreen.
   useLayoutEffect(() => {
     const el = tipBox.current;
-    const host = frame.current;
+    const host = stage.current;
     if (!tip || !el || !host) return;
     const left = Math.max(4, Math.min(tip.x + 14, host.clientWidth - el.offsetWidth - 4));
     const below = tip.y + 14;
@@ -482,10 +678,38 @@ export function RiskMap(props: Props) {
     el.style.transform = `translate(${left}px, ${top}px)`;
   }, [tip]);
 
-  // The frame fills the box the map step gives it; that box sets the height.
+  // The map fills the box the map step gives it, beside the key and under the control strip. It is a
+  // container, so the call-out can drop lines on a narrow map whatever the text size.
   return (
-    <div ref={frame} className="relative h-full w-full overflow-hidden rounded-xl border border-line bg-surface-2">
+    <div ref={stage} className="@container absolute inset-0 overflow-hidden bg-surface-2">
       <div ref={box} className="h-full w-full" />
+      {/* The offer building's call-out. The map holds the element and moves it; placeCallout sets the card and the line.
+          On a narrow map it keeps the name and the water line, and from far out it is a pill with the name and a small square where the building is. */}
+      {calloutHost &&
+        offer &&
+        createPortal(
+          <>
+            <div ref={calloutLine} aria-hidden className="absolute left-0 top-0 rounded-full bg-brand ring-1 ring-surface" />
+            {far && offer.block && <span aria-hidden className="absolute left-0 top-0 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-[2px] border border-surface bg-brand" />}
+            <div
+              ref={calloutCard}
+              role="img"
+              aria-label={offer.callout.spoken}
+              className={`absolute left-0 top-0 w-max max-w-[min(17rem,calc(100cqw-1rem))] bg-surface font-sans text-xs leading-snug shadow-lg ${far ? "rounded-full border border-brand px-2.5 py-0.5" : "rounded-lg border border-l-4 border-line border-l-brand px-2.5 py-1.5"}`}
+            >
+              <div className={`truncate font-semibold text-ink ${far ? "" : "text-sm"}`}>{offer.name}</div>
+              {!far && (
+                <>
+                  {offer.callout.about && <div className="hidden text-ink-2 @md:block">{offer.callout.about}</div>}
+                  <div className="tabular text-ink">{offer.callout.water}</div>
+                  {offer.callout.loss && <div className="tabular hidden text-ink-2 @md:block">{offer.callout.loss}</div>}
+                  {offer.callout.note && <div className="hidden text-muted @md:block">{offer.callout.note}</div>}
+                </>
+              )}
+            </div>
+          </>,
+          calloutHost,
+        )}
       {/* The notice fades in after a moment, so a quick rebuild for a theme change does not flash it. */}
       {!ready && (
         <div className="absolute inset-0 flex items-center justify-center text-sm text-ink-2 transition-opacity delay-300 duration-200 starting:opacity-0">
@@ -515,7 +739,7 @@ function rasterBox(session: Session): BBox {
 }
 
 function firstSymbolId(map: MapLibre): string | undefined {
-  return map.getStyle().layers.find((l) => l.type === "symbol" && !["wards-label", "hotspots-label", "offer-label"].includes(l.id))?.id;
+  return map.getStyle().layers.find((l) => l.type === "symbol" && !["wards-label", "hotspots-label"].includes(l.id))?.id;
 }
 
 /** How the portfolio's building dots are drawn: at full strength, or smaller and fainter around an offer building. */
@@ -663,31 +887,41 @@ function addStaticLayers(map: MapLibre, p: Props, online: boolean) {
   // filled by an effect, which runs again on a rebuilt map.
   const brandRgb = cssColor("--brand", [209, 18, 66]);
   const brand = rgbCss(brandRgb);
-  const isMode = (mode: string): FilterSpecification => ["==", ["get", "mode"], mode];
-  const marker = { "circle-radius": 7, "circle-color": brand, "circle-stroke-color": surface, "circle-stroke-width": 2.5 };
-  map.addSource("offer-outline", { type: "geojson", data: empty });
+  map.addSource("offer-block", { type: "geojson", data: empty });
   map.addSource("offer-point", { type: "geojson", data: empty });
-  map.addLayer({ id: "offer-outline-fill", type: "fill", source: "offer-outline", paint: { "fill-color": brand, "fill-opacity": 0.22 } });
-  map.addLayer({ id: "offer-outline-line", type: "line", source: "offer-outline", layout: { "line-join": "round" }, paint: { "line-color": brand, "line-width": ["interpolate", ["linear"], ["zoom"], 13, 2, 18, 4.5] } });
-  // An approximate location keeps its ring at every zoom: the ring says "somewhere about here".
-  map.addLayer({ id: "offer-ring", type: "circle", source: "offer-point", filter: isMode("approximate"), paint: { "circle-radius": 24, "circle-color": rgbCss(brandRgb, 0.12), "circle-stroke-color": brand, "circle-stroke-width": 2.5 } });
-  // From far away an outline is a speck, so an exact location gets a ring and a marker until the map is close.
-  map.addLayer({ id: "offer-ring-far", type: "circle", source: "offer-point", maxzoom: 15, filter: ["!=", ["get", "mode"], "approximate"], paint: { "circle-radius": 17, "circle-color": rgbCss(brandRgb, 0), "circle-stroke-color": brand, "circle-stroke-width": 2.5 } });
-  map.addLayer({ id: "offer-point-far", type: "circle", source: "offer-point", maxzoom: 15, filter: isMode("outline"), paint: marker });
-  map.addLayer({ id: "offer-point", type: "circle", source: "offer-point", filter: ["!=", ["get", "mode"], "outline"], paint: marker });
-  if (online) {
-    map.addLayer({
-      id: "offer-label",
-      type: "symbol",
-      source: "offer-point",
-      layout: { "text-field": ["get", "label"], "text-font": ["Noto Sans Bold"], "text-size": 13, "text-offset": [0, 1.5], "text-anchor": "top", "text-max-width": 12, "text-allow-overlap": true, "text-ignore-placement": true },
-      paint: { "text-color": ink, "text-halo-color": surface, "text-halo-width": 2 },
-    });
-  }
+  map.addSource("offer-buffer", { type: "geojson", data: empty });
+  // The buffer ring: a dashed line, so it is told apart from the solid ring of an approximate location by its
+  // shape as well as its size. A pale line under it keeps it readable over deep water and on either basemap.
+  const ringWidth: ExpressionSpecification = ["interpolate", ["linear"], ["zoom"], 11, 1.5, 16, 2.5];
+  const casingWidth: ExpressionSpecification = ["interpolate", ["linear"], ["zoom"], 11, 4, 16, 5.5];
+  map.addLayer({ id: "offer-buffer-casing", type: "line", source: "offer-buffer", paint: { "line-color": surface, "line-opacity": 0.85, "line-width": casingWidth } });
+  map.addLayer({ id: "offer-buffer-line", type: "line", source: "offer-buffer", paint: { "line-color": brand, "line-width": ringWidth, "line-dasharray": [3, 2] } });
+  // The block's base: a dark line on a pale one, drawn under the block. Seen from straight above, the block is a
+  // filled shape and the line is its edge, so it reads in the flat view; seen from a tilt, the walls rise from it.
+  const baseWidth: ExpressionSpecification = ["interpolate", ["linear"], ["zoom"], 13, 3, 18, 6];
+  const baseCasingWidth: ExpressionSpecification = ["interpolate", ["linear"], ["zoom"], 13, 6, 18, 10];
+  map.addLayer({ id: "offer-block-casing", type: "line", source: "offer-block", layout: { "line-join": "round" }, paint: { "line-color": surface, "line-width": baseCasingWidth } });
+  map.addLayer({ id: "offer-block-line", type: "line", source: "offer-block", layout: { "line-join": "round" }, paint: { "line-color": ink, "line-width": baseWidth } });
+  // The building itself: one solid block in the brand colour, as tall as the step says. Its name is in the call-out, not in a map label.
+  map.addLayer({ id: "offer-block", type: "fill-extrusion", source: "offer-block", paint: { "fill-extrusion-color": brand, "fill-extrusion-height": ["get", "h"], "fill-extrusion-base": 0, "fill-extrusion-opacity": 1 } });
+  // An approximate location has no block. It keeps its ring at every zoom: the ring says "somewhere about here".
+  map.addLayer({ id: "offer-ring", type: "circle", source: "offer-point", paint: { "circle-radius": APPROXIMATE_RING_PX, "circle-color": rgbCss(brandRgb, 0.12), "circle-stroke-color": brand, "circle-stroke-width": 2.5 } });
 }
 
-const OFFER_LAYERS = ["offer-point", "offer-point-far", "offer-ring", "offer-ring-far", "offer-outline-fill"];
-const INTERACTIVE = [...OFFER_LAYERS, "buildings", "columns", "hotspots", "facilities", "settlements-fill", "wards-fill"];
+const OFFER_LAYERS = ["offer-ring", "offer-block", "offer-block-line"];
+const BUFFER_LAYER = "offer-buffer-casing";
+const INTERACTIVE = [...OFFER_LAYERS, BUFFER_LAYER, "buildings", "columns", "hotspots", "facilities", "settlements-fill", "wards-fill"];
+
+/** Where the water at a portfolio building comes from, in the words used across the app. */
+function waterFrom(t: BuildingScenarioResult): string {
+  const d = t.drivers;
+  // Depth only: the terrain depth at the point, or drainage ponding where that is deeper.
+  if (!d) return t.drainageM > 0 && t.drainageM >= t.depthM ? " (drainage ponding)" : " at the point";
+  if (d.pointM >= d.surfaceM) return " at the point";
+  if (d.bufferM >= d.surfaceM) return " within the buffer";
+  if (d.pondingM >= d.surfaceM) return " (drainage ponding)";
+  return " (drain overload)";
+}
 
 /** Hover tooltips and clicks. Reads the latest props through a ref so the handlers are bound once. */
 function bindInteractions(map: MapLibre, latest: { current: Props }, setTip: (t: Tip | null) => void) {
@@ -708,6 +942,9 @@ function bindInteractions(map: MapLibre, latest: { current: Props }, setTip: (t:
     if (OFFER_LAYERS.includes(hit.layer.id)) {
       if (!p.offer) return setTip(null);
       setTip({ ...place(e), title: p.offer.name, lines: p.offer.lines });
+    } else if (hit.layer.id === BUFFER_LAYER) {
+      if (!p.offer || p.offer.bufferM === null) return setTip(null);
+      setTip({ ...place(e), title: `Buffer of ${fmtInt(p.offer.bufferM)} m`, lines: p.offer.bufferLines });
     } else if (hit.layer.id === "buildings" || hit.layer.id === "columns") {
       const i = Number(props.i);
       const b = p.session.dataset.buildings[i];
@@ -717,7 +954,7 @@ function bindInteractions(map: MapLibre, latest: { current: Props }, setTip: (t:
         title: `${b.locId} · ${HOUSING_LABELS[b.housingClass as HousingClass]}`,
         lines: [
           `Insured value ${fmtKes(b.tivKes, 2)} (synthetic)`,
-          t.depthM > 0 ? `${event}: ${fmtNum(t.depthM)} m of water${t.drainageM > 0 && t.drainageM >= t.depthM ? " (drainage ponding)" : ""}, ${fmtPct(t.damageRatio, 1)} damage` : `${event}: dry`,
+          t.depthM > 0 ? `${event}: ${fmtNum(t.depthM)} m of water${waterFrom(t)}, ${fmtPct(t.damageRatio, 1)} damage` : `${event}: dry`,
           `Ground-up loss ${fmtKes(t.lossKes, 2)}`,
           "Click to trace the loss",
         ],

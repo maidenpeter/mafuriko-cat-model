@@ -4,16 +4,19 @@ import { motion } from "motion/react";
 import { useMemo, useState, type ReactNode } from "react";
 import type { Check } from "@/lib/checks";
 import { fmtInt, fmtKes, fmtNum, fmtPct } from "@/lib/format";
-import { annualChance, kes1, pct1, rpLabel, rpWithChance } from "@/lib/labels";
+import { annualChance, kes1, LOSS_MODE_LABELS, pct1, PORTFOLIO_DRIVERS_LINE, rpLabel, rpWithChance, selectMode, shareText } from "@/lib/labels";
 import type { InsuranceTerms, TermsResult } from "@/lib/model/terms";
 import { HOUSING_LABELS } from "@/lib/model/types";
-import { isPriced, type FocusTerm, type OfferFocus, type PricedFocus } from "@/lib/offer/focus";
+import { DRIVER_IDS, driverName, type DriverId, type DriverSource } from "@/lib/offer/drivers";
+import { PORTFOLIO_KEYS, settersOf, settersText, type FocusJudgement, type FocusTerm, type OfferFocus, type PricedFocus } from "@/lib/offer/focus";
 import type { Active, Session } from "@/lib/session";
 import { STEP_NAMES, stepKicker, type StepId } from "@/lib/steps";
 import { ChartFrame, SourceLine, type ChartSource } from "../charts/ChartFrame";
+import { DriverSwatch, PORTFOLIO_SERIES, StackSwatch } from "../charts/StackedBars";
 import { Waterfall, type WaterfallStep } from "../charts/Waterfall";
+import { DriverSources, insuredValueSource, offerKindOf } from "../DriverSources";
 import { TermsPanel } from "../TermsPanel";
-import { Card, CheckList, ChecksSummary, Note, Segmented, StepHeader, Tag } from "../ui";
+import { Card, CheckList, ChecksSummary, Fold, Note, OfferNotice, Segmented, selectView, StepHeader, StepLink, Tag } from "../ui";
 
 interface Props {
   session: Session;
@@ -27,252 +30,277 @@ interface Props {
   focus?: PricedFocus | null;
   /** The offer whatever the switch says, priced or not. */
   offerFocus?: OfferFocus | null;
+  /** The judgement figures in force and who set each, for the portfolio as well as the offer. */
+  judgement?: FocusJudgement | null;
   /** Opens another step of the walkthrough. */
   onOpenStep?: (id: StepId) => void;
 }
 
-type View = "offer" | "portfolio";
+/** The step follows the View switch, one story at a time: the offer's building with a priced offer in Offer view, otherwise the portfolio. */
+export function LossStep({ session, active, checks, terms, onTermsChange, focus = null, offerFocus = null, judgement = null, onOpenStep }: Props) {
+  return focus ? (
+    <OfferStory focus={focus} terms={terms} onTermsChange={onTermsChange} onOpenStep={onOpenStep} />
+  ) : (
+    <PortfolioEngine session={session} active={active} checks={checks} terms={terms} onTermsChange={onTermsChange} offerFocus={offerFocus} judgement={judgement} onOpenStep={onOpenStep} />
+  );
+}
 
-export function LossStep({ session, active, checks, terms, onTermsChange, focus = null, offerFocus = null, onOpenStep }: Props) {
-  const [view, setView] = useState<View>("offer");
-  const showOffer = focus !== null && view === "offer";
+/** The chance of a flood in any one year, as it reads inside a sentence: "1%". */
+const chanceOf = (returnPeriod: number) => annualChance(returnPeriod).replace(" a year", "");
 
+/** The flood a view opens on: the one nearest 1-in-100, or the rarest when that one causes no loss. Rows are most frequent first. */
+function openingFlood<T extends { returnPeriod: number }>(rows: T[], loss: (row: T) => number): T | undefined {
+  const nearest = rows.reduce<T | undefined>((best, r) => (!best || Math.abs(Math.log(r.returnPeriod / 100)) < Math.abs(Math.log(best.returnPeriod / 100)) ? r : best), undefined);
+  return nearest && loss(nearest) > 0 ? nearest : rows[rows.length - 1];
+}
+
+/** One step of the story: a plain title, one short sentence and the figure it arrives at. The last step is the strongest thing on the page. */
+function StoryStep({ n, title, text, value, final = false, off = false, children }: { n: number; title: string; text: ReactNode; value: string; final?: boolean; off?: boolean; children?: ReactNode }) {
   return (
-    <div>
-      <StepHeader kicker={stepKicker("loss")} title={STEP_NAMES.loss}>
-        {showOffer
-          ? "One building, one flood at a time: the depth at the site, the damage that depth does, and what the policy terms leave the insurer to pay. Every line is arithmetic you can follow by hand; a language model produces none of it."
-          : "For every building and every scenario: hazard value, to depth, to damage ratio, times insured value. The scenario loss is the sum. The insurance terms then turn that ground-up loss into the gross loss the insurer pays and the net loss it keeps. Nothing here is estimated by a model; it is arithmetic you can follow by hand."}
-      </StepHeader>
-
-      {focus ? (
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-          <p className="min-w-0 text-sm leading-relaxed text-ink-2">
-            {view === "offer" ? (focus.severalLine ?? `Following ${focus.building.name}.`) : "The whole portfolio through the same engine, without the offer."}
-          </p>
-          <Segmented<View> label="What this step shows" value={view} onChange={setView} options={[{ value: "offer", label: "This offer" }, { value: "portfolio", label: "Portfolio" }]} />
-        </div>
-      ) : (
-        offerFocus && (
-          <div className="mb-4">
-            <OfferNotice offerFocus={offerFocus} onOpenStep={onOpenStep} />
+    <li className={`rounded-xl px-4 py-3.5 ${final ? "bg-ink text-surface" : "bg-surface-2"}`}>
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1.5">
+        <div className="min-w-0 flex-1 basis-64 wrap-anywhere">
+          <div className={`flex items-baseline gap-2 text-base font-semibold ${final ? "" : "text-ink"}`}>
+            <span className={`tabular text-sm font-normal ${final ? "opacity-70" : "text-muted"}`}>{n}.</span>
+            {title}
           </div>
-        )
-      )}
-
-      {focus && view === "offer" ? (
-        <OfferTrace focus={focus} active={active} terms={terms} onTermsChange={onTermsChange} onOpenStep={onOpenStep} onShowPortfolio={() => setView("portfolio")} />
-      ) : (
-        <PortfolioEngine session={session} active={active} checks={checks} terms={terms} onTermsChange={onTermsChange} />
-      )}
-    </div>
+          <p className={`mt-0.5 text-sm leading-relaxed ${final ? "opacity-80" : "text-ink-2"}`}>{text}</p>
+        </div>
+        <span className={`tabular ml-auto font-semibold whitespace-nowrap ${final ? "text-4xl" : "text-2xl"} ${off ? "text-muted" : ""}`}>{value}</span>
+      </div>
+      {children}
+    </li>
   );
 }
 
-/** Another step's name, as a link to it when the step can be opened from here. */
-function StepLink({ id, onOpenStep }: { id: StepId; onOpenStep?: (id: StepId) => void }) {
-  if (!onOpenStep) return <span className="font-medium text-ink">{STEP_NAMES[id]}</span>;
-  return (
-    <button type="button" onClick={() => onOpenStep(id)} className="font-medium text-ink underline underline-offset-2 hover:text-brand">
-      {STEP_NAMES[id]}
-    </button>
-  );
-}
-
-/** One line on the offer when the step is showing the portfolio: why, and where to go. */
-function OfferNotice({ offerFocus, onOpenStep }: { offerFocus: OfferFocus; onOpenStep?: (id: StepId) => void }) {
-  if (offerFocus.outside) {
-    return (
-      <Note tone="warn">
-        <span className="font-medium text-ink">{offerFocus.outsideMessage}.</span> {offerFocus.coverage} There is no loss to trace for this offer, so this step shows the portfolio.
-      </Note>
-    );
-  }
-  if (offerFocus.waiting.length > 0) {
-    const n = offerFocus.waiting.length;
-    return (
-      <Note tone="warn">
-        The offer is not priced yet: {n} {n === 1 ? "value waits" : "values wait"} to be confirmed in <StepLink id="offer" onOpenStep={onOpenStep} />. Until then this step shows the portfolio.
-      </Note>
-    );
-  }
-  if (isPriced(offerFocus)) {
-    return <Note>An offer is loaded ({offerFocus.line.insured ?? offerFocus.documentName}). Switch to Offer in the header to follow that building through this step.</Note>;
-  }
-  return (
-    <Note>
-      {offerFocus.statusLine} This step shows the portfolio; the offer is in <StepLink id="offer" onOpenStep={onOpenStep} />.
-    </Note>
-  );
-}
-
-// ---------------------------------------------------------------------------------------------
-// This offer: one building traced from the hazard map to the gross loss
-// ---------------------------------------------------------------------------------------------
-
-/** Where a figure's input came from. "document" and "typed" are the offer's own; the rest are the shared badges. */
-interface Source {
-  kind: "document" | "typed" | "real" | "assumption" | "ai";
-  label: string;
-  /** The sentence of the document the value rests on, shown on hover and beside the figure in the worked row. */
-  quote?: string;
-}
-
-/** The small tag under a figure. Shape and word carry the meaning, as on the shared badges. */
-function SourceTag({ source }: { source: Source }) {
-  if (source.kind === "document" || source.kind === "typed") {
-    return (
-      <span title={source.quote || undefined} className="inline-flex max-w-full shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface-2 px-2.5 py-0.5 text-xs font-medium text-ink-2">
-        <span aria-hidden className="shrink-0">{source.kind === "document" ? "❝" : "✎"}</span>
-        {source.label}
-      </span>
-    );
-  }
-  return <Tag kind={source.kind}>{source.label}</Tag>;
-}
-
-const termSource = (term: FocusTerm): Source =>
+const termSource = (term: FocusTerm): DriverSource =>
   term.source === "from the document"
-    ? { kind: "document", label: term.mixed ? "Document, part typed" : "Document", quote: term.quotes.join(" ") }
+    ? { kind: "offer", what: term.mixed ? "From the document, part typed" : "From the document", quote: term.quotes.join(" ") }
     : term.source === "typed by you"
-      ? { kind: "typed", label: "Typed by you" }
-      : { kind: "assumption", label: "Assumption: example terms" };
+      ? { kind: "offer", what: "Typed over the document", quote: "" }
+      : { kind: "assumption", what: "Example terms: the document states none", keys: [] };
 
 /** A depth in metres. A film of water too thin for two decimals is not written as zero. */
 const metres = (m: number) => (m > 0 && m < 0.005 ? "under 0.01 m" : `${fmtNum(m)} m`);
 
+// ---------------------------------------------------------------------------------------------
+// This offer: one flood told in five steps, from the water at the building to what the insurer pays
+// ---------------------------------------------------------------------------------------------
+
 interface Stage {
+  key: string;
+  /** The driver this line is, when it is one of the six. */
+  driver?: DriverId;
   label: string;
   value: string;
   how: ReactNode;
-  source: Source | null;
-  quote?: string;
+  sources: DriverSource[];
+  /** A driver that takes no part in this price. */
+  off?: boolean;
+  /** "sum" for the two totals that close a part of the stack; "gross" for the last line. */
+  weight?: "sum" | "gross";
 }
 
-function OfferTrace({ focus, active, terms, onTermsChange, onOpenStep, onShowPortfolio }: { focus: PricedFocus; active: Active; terms: TermsResult; onTermsChange: (t: InsuranceTerms) => void; onOpenStep?: (id: StepId) => void; onShowPortfolio: () => void }) {
+function OfferStory({ focus, terms, onTermsChange, onOpenStep }: { focus: PricedFocus; terms: TermsResult; onTermsChange: (t: InsuranceTerms) => void; onOpenStep?: (id: StepId) => void }) {
+  const d = focus.drivers;
+  const all = d.mode === "all_drivers";
   const b = focus.price.building;
-  const site = focus.building;
-  const rows = b.perReturnPeriod;
+  const rows = d.perReturnPeriod;
+  const judgement = focus.judgement;
+  const offerKind = offerKindOf(focus);
   const isScore = focus.hazardKind === "score";
   const usingAi = focus.assumptionsInForce === "ai";
-  const className = HOUSING_LABELS[b.housingClass];
+  // The arithmetic is written out with the building's own values when the offer is one building; with several the losses are their sum.
+  const single = d.buildings === 1;
 
-  // The return period worked step by step. It opens on the one nearest 1-in-100, the flood the headline figure is read at.
-  const nearest100 = rows.reduce((best, r, i) => (Math.abs(Math.log(r.returnPeriod / 100)) < Math.abs(Math.log(rows[best].returnPeriod / 100)) ? i : best), 0);
+  // With Depth only the first two lines are the whole model; the other four are switched off together.
+  const shown: DriverId[] = all ? [...DRIVER_IDS] : ["surrounding", "ponding"];
+  const lineOf = (id: DriverId) => d.lines.find((l) => l.id === id);
+  // A driver's name is the one its line carries: with Depth only the first line is the depth at the point.
+  const nameOf = (id: DriverId) => lineOf(id)?.label ?? driverName(id, d.mode);
+  const component = (id: "structure" | "below_ground" | "interruption") => d.components.find((c) => c.id === id);
+
+  // The flood the story is told for.
   const [chosen, setChosen] = useState<string | null>(null);
-  const row = rows.find((r) => r.id === chosen) ?? rows[nearest100];
+  const row = rows.find((r) => r.id === chosen) ?? openingFlood(rows, (r) => r.groundUpTotalKes);
 
-  // An assumption the agents chose carries the AI badge; the reference value carries the assumption badge.
-  const assumed = (what: string): Source => (usingAi ? { kind: "ai", label: `AI: ${what}` } : { kind: "assumption", label: `Assumption: ${what}` });
-  const hazardMap: Source = { kind: "real", label: "Hazard map" };
-  const curveSource: Source = { kind: "real", label: "JRC curve" };
-  const pondingSource: Source = { kind: "assumption", label: "Assumption: drainage ponding" };
+  if (!row) {
+    return (
+      <div>
+        <StepHeader kicker={stepKicker("loss")} title={STEP_NAMES.loss}>No flood scenario is loaded, so there is nothing to follow.</StepHeader>
+      </div>
+    );
+  }
 
-  // The insured value: stated, or floor area × cost per m², each read from the document or typed over it.
-  const valueFields = (site.tivFrom === "area_times_cost" ? ["floorAreaM2", "costPerM2Kes"] : ["tivKes"]).flatMap((key) => focus.fields.filter((f) => f.id === `row:${site.index}:${key}`));
-  const valueTyped = valueFields.length > 0 && valueFields.every((f) => f.origin === "edited");
-  const valueQuote = [...new Set(valueFields.filter((f) => f.origin !== "edited").map((f) => f.quote.trim()).filter(Boolean))].join(" ");
-  const valueSource: Source = valueTyped ? { kind: "typed", label: "Typed by you" } : { kind: "document", label: "Document", quote: valueQuote };
+  const site = focus.building;
+  const insuredValue = insuredValueSource(focus);
   const deductibleSource = termSource(focus.terms.deductible);
   const limitSource = termSource(focus.terms.limit);
   const exampleTerms = focus.terms.deductible.source === "example terms" || focus.terms.limit.source === "example terms";
 
-  if (!row) return <Note>No flood scenario is loaded, so there is nothing to trace.</Note>;
+  const structure = component("structure");
+  const below = component("below_ground");
+  const interruption = component("interruption");
+  const trace = b.perReturnPeriod.find((r) => r.id === row.id);
+  const depths = row.depths;
+  const design = rpLabel(d.drainDesign.returnPeriod);
+  const event = rpLabel(row.returnPeriod);
+  const kes = (v: number) => fmtKes(v, 2);
 
-  const slope = active.result.scenarios.find((s) => s.id === row.id)?.tierSlope;
-  const depthScale = active.params.depthScaleM;
-  // The terrain depth written as its own sum, only when that sum gives the engine's figure.
-  const scoreSum = isScore && row.hazard > 0 && slope !== undefined && Math.abs(row.hazard * slope * depthScale - row.terrainM) < 0.005;
-  const terrainHow = scoreSum
-    ? `Terrain: score ${fmtNum(row.hazard, 3)} × tier slope ${fmtNum(slope, 3)} × depth scale ${fmtNum(depthScale)} m = ${metres(row.terrainM)}.`
-    : `Terrain${isScore ? "" : " map"}: ${metres(row.terrainM)}.`;
-  const pondingHow = focus.drainageOn ? ` Drainage ponding: ${metres(row.drainageM)}. The deeper of the two is used.` : " Drainage ponding is switched off.";
+  // The value below ground loses the larger of the basement ladder's ratio and the structure's damage ratio, so the line says which gave the ratio applied.
+  const { basementTakesWater, basementDamageRatio, basementAppliedRatio } = row.building;
+  const ingress = `Water at the site, ${metres(depths.surfaceM)}, ${basementTakesWater ? "reaches" : "is below"} the ${metres(d.judgement.ingressThresholdM)} ingress threshold`;
+  const belowValue = single && below ? `value below ground ${kes(below.valueKes)} × ` : "";
+  const ladderGave = basementTakesWater && basementDamageRatio >= row.building.damageRatio;
+  const otherRatio = ladderGave
+    ? `the structure's damage ratio is ${shareText(row.building.damageRatio)}`
+    : basementTakesWater
+      ? `the basement ladder gives ${shareText(basementDamageRatio)}`
+      : "below the threshold the basement ladder gives nothing";
+  const basementHow = !(basementAppliedRatio > 0)
+    ? `${ingress} and the structure takes no damage at that depth: no loss below ground.`
+    : `${ingress}${basementTakesWater ? ", so the basement takes water" : ""}: ${belowValue}${shareText(basementAppliedRatio)}, from ${ladderGave ? "the basement ladder" : "the structure's damage ratio"} (${otherRatio}; the larger of the two is used).`;
+
+  const driverHow: Record<DriverId, ReactNode> = {
+    surrounding: all
+      ? `At the point, ${metres(depths.pointM)} of water: ${kes(row.pointKes)}. Within the ${fmtInt(d.bufferRadiusM)} m buffer, ${metres(depths.bufferM)}: adds ${kes(row.bufferAddedKes)}.`
+      : `${metres(depths.pointM)} of water on the map at the building's point: ${kes(row.pointKes)}.`,
+    ponding: `Ponding at the site, ${metres(depths.pondingM)}: adds ${kes(row.groundUpKes.ponding)} beyond the map depth.`,
+    overload: depths.overloaded
+      ? `The ${event} flood is rarer than the ${design} event the drains were designed for, so the site has at least ${metres(depths.overloadM)} of water: adds ${kes(row.groundUpKes.overload)} beyond the lines above.`
+      : `The ${event} flood is not rarer than the ${design} event the drains were designed for: the drains cope.`,
+    basement: basementHow,
+    interruption:
+      row.groundUpKes.interruption > 0
+        ? `${fmtNum(row.building.outageDays, 1)} outage days × a day's rent or revenue${single && interruption?.dailyKes ? ` of ${kes(interruption.dailyKes)}` : ""}.`
+        : "No water reaches the site in this flood, so there is no outage.",
+    uncertainty: `${shareText(d.judgement.uncertaintyLoading)} × ${kes(row.modelledKes)}, the five lines above added up. Kept apart from them: it stands for causes not modelled.`,
+  };
+
+  // The story: which reading gave the water, and what each part of the building loses, in a few words.
+  const waterFrom: Record<typeof row.surfaceFrom, string> = {
+    point: "Read on the flood map at the building's own point.",
+    buffer: `The deepest water in the streets around it, within ${fmtInt(d.bufferRadiusM)} m.`,
+    ponding: "Water ponding near drains at the site.",
+    overload: "A flood this rare overloads the drains, so shallow water stands at the site.",
+    dry: "No water reaches the building in this flood.",
+  };
+  const depthOnlyOff = `Off: ${LOSS_MODE_LABELS.depth_only} is selected`;
+  const parts: { key: string; label: string; text: string; kes: number; off: boolean }[] = [
+    {
+      key: "structure",
+      label: "The building itself",
+      text: single ? `${shareText(row.building.damageRatio)} of its value${below?.on ? " above ground" : ""} is lost at that depth` : "each building's damage at its own depth, added up",
+      kes: row.structureKes,
+      off: false,
+    },
+    {
+      key: "below",
+      label: "What is below ground",
+      text: below?.on
+        ? basementTakesWater
+          ? `the basement takes water: ${shareText(basementAppliedRatio)} of the plant and contents kept there`
+          : basementAppliedRatio > 0
+            ? `plant and contents kept there lose ${shareText(basementAppliedRatio)}, as the building does`
+            : "no loss in this flood"
+        : !all
+          ? depthOnlyOff
+          : d.basement.present === false
+            ? "Off: the offer says there is no basement"
+            : "Off: the offer does not say there is a basement",
+      kes: row.groundUpKes.basement,
+      off: !below?.on,
+    },
+    {
+      key: "rent",
+      label: "Lost rent",
+      text: interruption?.on
+        ? row.groundUpKes.interruption > 0
+          ? `${fmtNum(row.building.outageDays, 1)} days out of use`
+          : "no water at the site, so no days lost"
+        : !all
+          ? depthOnlyOff
+          : d.interruptionCover === "excluded"
+            ? "Off: the offer does not cover it"
+            : "Off: the offer does not say it is covered",
+      kes: row.groundUpKes.interruption,
+      off: !interruption?.on,
+    },
+  ];
+  const uncertaintyOn = lineOf("uncertainty")?.on ?? false;
+  const noDamage = !(row.groundUpTotalKes > 0);
+  const subject = single ? `${site.name} takes` : `the offer's ${fmtInt(d.buildings)} priced buildings take`;
 
   const stages: Stage[] = [
     {
-      label: "Insured value",
-      value: fmtKes(b.tivKes, 2),
-      how:
-        site.tivFrom === "area_times_cost" && site.floorAreaM2 !== null && site.costPerM2Kes !== null
-          ? `Floor area ${fmtInt(site.floorAreaM2)} m² × ${fmtKes(site.costPerM2Kes)} per m²`
-          : valueTyped
-            ? "The figure typed over the document's"
-            : "As the document states it",
-      source: valueSource,
-      quote: valueSource.quote,
+      key: "water",
+      label: "Water at the site",
+      value: metres(depths.surfaceM),
+      how: (
+        <>
+          {all
+            ? `At the point ${metres(depths.pointM)}, within the buffer ${metres(depths.bufferM)}, drainage ponding ${metres(depths.pondingM)}, drain overload ${metres(depths.overloadM)}: the deepest is used.`
+            : `At the point ${metres(depths.pointM)}, drainage ponding ${metres(depths.pondingM)}: the deeper is used.`}{" "}
+          How each depth is read is in <StepLink to="hazard" onOpenStep={onOpenStep} />.
+        </>
+      ),
+      sources: [],
     },
     {
-      label: isScore ? "Hazard score on the map" : "Flood depth on the map",
-      value: isScore ? fmtNum(row.hazard, 3) : metres(row.hazard),
-      how: `Read from the "${row.label}" map at the building's point`,
-      source: hazardMap,
+      key: "structure",
+      label: "The structure's loss at that depth",
+      value: kes(row.structureKes),
+      how: (
+        <>
+          {single && trace && structure
+            ? `${metres(trace.depthM)} × fragility ${fmtNum(b.fragility)} = ${metres(trace.effectiveDepthM)} on the curve for ${HOUSING_LABELS[b.housingClass]}: damage ratio ${fmtPct(row.building.damageRatio, 1)}${row.building.capped ? ", the cap for the class," : ""} × structure value ${kes(structure.valueKes)}.`
+            : "Each building's damage ratio at its deepest water × its structure value, added up."}{" "}
+          Read once on the curve; the {all ? "three" : "two"} lines below share it out, so no water is counted twice. The curve is in <StepLink to="vulnerability" onOpenStep={onOpenStep} />.
+        </>
+      ),
+      sources: structure ? [insuredValue, ...(structure.valueSource.kind === "data" ? [] : [structure.valueSource]), structure.damageSource] : [insuredValue],
     },
+    ...shown.map((id): Stage => {
+      const line = lineOf(id);
+      const on = line?.on ?? false;
+      return {
+        key: id,
+        driver: id,
+        label: nameOf(id),
+        value: on ? kes(row.groundUpKes[id]) : "Not priced",
+        how: on ? driverHow[id] : (line?.text ?? ""),
+        // An off driver names only what the document says about it; its on-off reason is the sentence itself.
+        sources: on ? (line?.sources ?? []) : (line?.sources ?? []).filter((s) => s.kind === "offer"),
+        off: !on,
+      };
+    }),
     {
-      label: "Depth at the building",
-      value: metres(row.depthM),
-      how: terrainHow + pondingHow,
-      source: row.depthFrom === "drainage" ? pondingSource : isScore ? assumed("depth scale") : hazardMap,
-    },
-    {
-      label: "Depth on the curve",
-      value: metres(row.effectiveDepthM),
-      how: `${metres(row.depthM)} × fragility ${fmtNum(b.fragility)} for ${className}`,
-      source: assumed("fragility"),
-    },
-    {
-      label: "Damage ratio",
-      value: fmtPct(row.damageRatio, 1),
-      how: row.capped ? `The JRC curve gives ${fmtPct(row.curveDamage, 1)}; the ${fmtPct(b.cap, 0)} cap for this class limits it` : `JRC curve at ${metres(row.effectiveDepthM)}; under the ${fmtPct(b.cap, 0)} cap for this class`,
-      source: row.capped ? assumed("damage cap") : curveSource,
-    },
-    {
+      key: "ground-up",
       label: "Ground-up loss",
-      value: fmtKes(row.groundUpKes, 2),
-      how: `${fmtPct(row.damageRatio, 1)} × ${fmtKes(b.tivKes, 2)}`,
-      source: null,
+      value: kes(row.groundUpTotalKes),
+      how: all ? "The six drivers added up, before any policy terms." : "The lines above added up, before any policy terms.",
+      sources: [],
+      weight: "sum",
     },
+    { key: "deductible", label: "Deductible taken", value: kes(row.deductibleKes), how: focus.terms.deductible.text, sources: [deductibleSource] },
+    { key: "limit", label: "Amount over the limit", value: kes(row.overLimitKes), how: focus.terms.limit.text, sources: [limitSource] },
     {
-      label: "Deductible taken",
-      value: fmtKes(row.deductibleKes, 2),
-      how: focus.terms.deductible.text,
-      source: deductibleSource,
-      quote: deductibleSource.quote,
-    },
-    {
-      label: "Amount over the limit",
-      value: fmtKes(row.overLimitKes, 2),
-      how: focus.terms.limit.text,
-      source: limitSource,
-      quote: limitSource.quote,
-    },
-    {
+      key: "gross",
       label: "Gross loss",
-      value: fmtKes(row.grossKes, 2),
-      how: `${fmtKes(row.groundUpKes, 2)} less ${fmtKes(row.deductibleKes, 2)} less ${fmtKes(row.overLimitKes, 2)}`,
-      source: null,
+      value: kes(row.grossKes),
+      how: `${kes(row.groundUpTotalKes)} less ${kes(row.deductibleKes)} less ${kes(row.overLimitKes)}`,
+      sources: [],
+      weight: "gross",
     },
   ];
 
-  // Average annual loss, gross, band by band: the same sum the figure above it comes from.
-  const curve = b.curve;
-  const bands = curve.map((p, i) => {
-    const next = curve[i + 1];
-    const chance = next ? 1 / p.returnPeriod - 1 / next.returnPeriod : 1 / p.returnPeriod;
-    const lossKes = next ? (p.grossKes + next.grossKes) / 2 : p.grossKes;
-    return { id: p.id, label: next ? `${rpLabel(p.returnPeriod)} to ${rpLabel(next.returnPeriod)}` : `${rpLabel(p.returnPeriod)} and rarer`, chance, lossKes, partKes: chance * lossKes };
-  });
-
-  const steps: WaterfallStep[] = [
-    { label: "Ground-up", value: row.groundUpKes, kind: "total" },
-    { label: "Minus deductible", value: row.deductibleKes, kind: "decrease" },
-    ...(row.overLimitKes > 0 ? [{ label: "Minus over limit", value: row.overLimitKes, kind: "decrease" as const }] : []),
-    { label: "Gross", value: row.grossKes, kind: "total" },
-  ];
-  const waterfallTitle = `From ground-up loss to gross loss at this building in a ${rpLabel(row.returnPeriod)} flood`;
-  const chartSources: ChartSource[] = [
-    { kind: focus.document.path === "model" ? "ai" : "real", text: focus.document.path === "model" ? "Insured value read from the offer document by the AI reader and checked by code" : "Insured value read from the offer document" },
+  const agentsSetSome = Object.values(judgement.setBy).includes("agents");
+  const tableSources: ChartSource[] = [
+    { kind: offerKind, text: offerKind === "ai" ? "Insured value and stated facts read from the offer document by the AI reader and checked by code" : "Insured value and stated facts read from the offer document by the fixed rules" },
     { kind: "real", text: isScore ? "Hazard maps and the JRC depth-damage curve" : "Flood depth maps and the JRC depth-damage curve" },
     { kind: usingAi ? "ai" : "assumption", text: isScore ? "Return periods, depth scale, fragility and damage cap" : "Fragility and damage cap" },
+    ...(all ? [{ kind: "assumption" as const, text: `The figures behind the drivers beyond depth: each is listed with its value, range and who set it in ${STEP_NAMES.audit}` }] : []),
+    ...(all && agentsSetSome ? [{ kind: "ai" as const, text: "Some of those figures were agreed by the agents" }] : []),
     ...(focus.drainageOn ? [{ kind: "assumption" as const, text: "Drainage ponding depths" }] : []),
     ...(exampleTerms ? [{ kind: "assumption" as const, text: "Example terms where the document states none" }] : []),
   ];
@@ -281,246 +309,284 @@ function OfferTrace({ focus, active, terms, onTermsChange, onOpenStep, onShowPor
 
   const th = "pb-2 pl-3 text-right align-bottom font-medium";
   const td = "tabular py-2.5 pl-3 text-right text-ink-2";
-  const head = (label: string, source: Source | null) => (
-    <th scope="col" className={th}>
-      <div>{label}</div>
-      <div className="mt-1 flex min-h-6 justify-end">{source && <SourceTag source={source} />}</div>
-    </th>
-  );
 
   return (
-    <div className="grid gap-4">
-      {b.dryAtEveryReturnPeriod && (
-        <Note>
-          The building is dry at every return period modelled, so every loss on this page is KES 0. How close the water comes is in <StepLink id="hazard" onOpenStep={onOpenStep} />.
-        </Note>
-      )}
+    <div>
+      <StepHeader kicker={stepKicker("loss")} title={STEP_NAMES.loss}>
+        {noDamage
+          ? `In a ${rpLabel(row.returnPeriod)} flood, one with a ${chanceOf(row.returnPeriod)} chance in any year, ${subject} no damage, so the insurer pays nothing.`
+          : `In a ${rpLabel(row.returnPeriod)} flood, one with a ${chanceOf(row.returnPeriod)} chance in any year, ${subject} ${kes1(row.groundUpTotalKes)} of damage and the insurer pays ${kes1(row.grossKes)}. Five steps show how.`}
+      </StepHeader>
 
-      <Card title={`One flood, worked step by step: ${rpWithChance(row.returnPeriod)}`} aside={rpPicker}>
-        <p className="-mt-2 mb-4 max-w-3xl text-sm leading-relaxed text-ink-2">
-          Read in order: each stage takes the figure before it and shows the sum that gives the next. The tag beside a figure says where its input came from. Depths are in metres and amounts in KES.
-        </p>
-        {/* A list down the card; three stages to a row on a medium step, five on a wide one, with the gross loss taking the last two places. */}
-        <motion.ol key={row.id} className="grid gap-2 @3xl:grid-cols-3 @7xl:grid-cols-5" initial="hidden" animate="show" variants={{ show: { transition: { staggerChildren: 0.08 } } }}>
-          {stages.map((stage, i, all) => {
-            const last = i === all.length - 1;
-            return (
-              <motion.li key={stage.label} variants={{ hidden: { opacity: 0, x: -8 }, show: { opacity: 1, x: 0 } }} className={`flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 rounded-xl px-3.5 py-2.5 @3xl:flex-col @3xl:flex-nowrap @3xl:items-start @3xl:justify-start @3xl:gap-y-3 @3xl:py-3.5 ${last ? "bg-ink text-surface @7xl:col-span-2" : "bg-surface-2"}`}>
-                <div className="min-w-0 wrap-anywhere">
-                  <div className={`text-xs ${last ? "opacity-70" : "text-muted"}`}>{i + 1}. {stage.label}</div>
-                  <div className={`text-sm ${last ? "opacity-80" : "text-ink-2"}`}>{stage.how}</div>
-                  {stage.quote && <q className="mt-1 block text-xs leading-relaxed text-muted">{stage.quote}</q>}
-                </div>
-                <div className="ml-auto flex flex-wrap items-center justify-end gap-x-2.5 gap-y-1 text-right @3xl:mt-auto @3xl:ml-0 @3xl:justify-start @3xl:text-left">
-                  {stage.source && <SourceTag source={stage.source} />}
-                  <span className="tabular text-base font-semibold">{stage.value}</span>
-                </div>
-              </motion.li>
-            );
-          })}
-        </motion.ol>
-        {focus.several && <p className="mt-3 max-w-3xl text-xs leading-relaxed text-muted">A deductible or limit stated in the document applies once per flood to the whole offer; this building carries its share of it.</p>}
+      <div className="grid gap-4">
+        {b.dryAtEveryReturnPeriod ? (
+          <Note>
+            No water reaches the site in any flood modelled, so every loss on this page is KES 0. How close the water comes is in <StepLink to="hazard" onOpenStep={onOpenStep} />.
+          </Note>
+        ) : (
+          b.dryAtPointEveryReturnPeriod && (
+            <Note>
+              The flood maps and the ponding are dry at the building&apos;s own point in every flood, so {LOSS_MODE_LABELS.depth_only} would price this offer at zero. Every loss below comes from the other loss drivers.
+            </Note>
+          )
+        )}
 
-        <h4 className="mt-6 mb-1 text-sm font-semibold text-ink">Every return period</h4>
-        <p className="mb-3 max-w-3xl text-sm leading-relaxed text-ink-2">One row per flood, most frequent first. Choose a return period to work it through above. Hover over a Document tag to read the sentence it rests on.</p>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-300 text-sm">
-            <thead className="text-xs text-muted">
-              <tr>
-                <th scope="col" className="pb-2 text-left align-bottom font-medium">
-                  <div>Return period (chance in any year)</div>
-                  <div className="mt-1 flex min-h-6">
-                    <SourceTag source={isScore ? assumed("return period") : hazardMap} />
-                  </div>
-                </th>
-                {head(isScore ? "Hazard score (0 to 1)" : "Map depth (m)", hazardMap)}
-                {head("Terrain depth (m)", isScore ? assumed("depth scale") : hazardMap)}
-                {focus.drainageOn && head("Ponding (m)", pondingSource)}
-                {focus.drainageOn && head("Depth used (m)", null)}
-                {head("Depth on the curve (m)", assumed("fragility"))}
-                {head("Damage ratio (%)", curveSource)}
-                {head("Ground-up loss (KES)", valueSource)}
-                {head("Deductible taken (KES)", deductibleSource)}
-                {head("Over the limit (KES)", limitSource)}
-                {head("Gross loss (KES)", null)}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line">
-              {rows.map((r) => {
-                const on = r.id === row.id;
-                return (
-                  <tr key={r.id} className={on ? "bg-surface-2" : undefined}>
-                    <th scope="row" className="py-2.5 pr-3 pl-2 text-left font-medium whitespace-nowrap text-ink">
-                      <button type="button" aria-pressed={on} onClick={() => setChosen(r.id)} className="tabular underline-offset-2 hover:underline">
-                        {rpWithChance(r.returnPeriod)}
-                      </button>
-                      {on && <span className="ml-2 text-xs font-normal text-muted">worked above</span>}
-                    </th>
-                    <td className={td}>{isScore ? fmtNum(r.hazard, 3) : fmtNum(r.hazard)}</td>
-                    <td className={td}>{fmtNum(r.terrainM)}</td>
-                    {focus.drainageOn && <td className={td}>{fmtNum(r.drainageM)}</td>}
-                    {focus.drainageOn && <td className={td}>{fmtNum(r.depthM)}</td>}
-                    <td className={td}>{fmtNum(r.effectiveDepthM)}</td>
-                    <td className={td}>
-                      {fmtPct(r.damageRatio, 1)}
-                      {r.capped && <span className="ml-1 text-xs text-muted">at the cap</span>}
-                    </td>
-                    <td className={td}>{fmtKes(r.groundUpKes, 2)}</td>
-                    <td className={td}>{fmtKes(r.deductibleKes, 2)}</td>
-                    <td className={td}>{fmtKes(r.overLimitKes, 2)}</td>
-                    <td className="tabular py-2.5 pr-2 pl-3 text-right font-semibold text-ink">{fmtKes(r.grossKes, 2)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </Card>
-
-      <div className="grid gap-4 @6xl:grid-cols-2">
-        <Card title="Average annual loss and pure rate">
-          <p className="-mt-2 mb-4 max-w-3xl text-sm leading-relaxed text-ink-2">
-            The losses in the table above, weighted by how often each flood comes. The pure rate is before expense, profit and uncertainty loadings.
-          </p>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-136 text-sm">
-              <thead className="text-xs text-muted">
-                <tr>
-                  <th scope="col" className="pb-2 text-left font-medium">Figure</th>
-                  <th scope="col" className="pb-2 pl-3 text-left font-medium">Formula</th>
-                  <th scope="col" className="pb-2 pl-3 text-right font-medium">Value</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line">
-                {[
-                  { label: "Average annual loss, ground-up", formula: "Area under the ground-up losses against their annual chance", value: fmtKes(b.aalGroundUpKes, 2) },
-                  { label: "Average annual loss, gross", formula: "The same area under the gross losses", value: fmtKes(b.aalGrossKes, 2) },
-                  { label: "Pure rate, ground-up", formula: `${fmtKes(b.aalGroundUpKes, 2)} ÷ ${fmtKes(b.tivKes, 2)} × 1,000`, value: `${fmtNum(b.ratePerMilleGroundUp, 3)} per mille` },
-                  { label: "Pure rate, gross", formula: `${fmtKes(b.aalGrossKes, 2)} ÷ ${fmtKes(b.tivKes, 2)} × 1,000`, value: `${fmtNum(b.ratePerMilleGross, 3)} per mille` },
-                ].map((f) => (
-                  <tr key={f.label}>
-                    <th scope="row" className="py-2.5 pr-3 text-left font-medium text-ink">{f.label}</th>
-                    <td className="py-2.5 pl-3 text-ink-2">{f.formula}</td>
-                    <td className="tabular py-2.5 pl-3 text-right font-semibold whitespace-nowrap text-ink">{f.value}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <details className="mt-3">
-            <summary className="cursor-pointer select-none text-sm font-medium text-ink-2 hover:text-ink">The gross average annual loss, band by band</summary>
-            <p className="mt-2 max-w-3xl text-sm leading-relaxed text-ink-2">
-              Between two neighbouring return periods, the gap between their annual chances × the average of their two gross losses. The rarest flood counts at its own chance and loss. Floods more frequent than the first are taken to cause no loss. The parts add up to the figure above.
-            </p>
-            <div className="mt-2 overflow-x-auto">
-              <table className="w-full min-w-128 text-sm">
-                <thead className="text-xs text-muted">
-                  <tr>
-                    <th scope="col" className="pb-2 text-left font-medium">Band of floods</th>
-                    <th scope="col" className="pb-2 pl-3 text-right font-medium">Chance in any year (%)</th>
-                    <th scope="col" className="pb-2 pl-3 text-right font-medium">Gross loss in the band (KES)</th>
-                    <th scope="col" className="pb-2 pl-3 text-right font-medium">Chance × loss (KES)</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-line">
-                  {bands.map((band) => (
-                    <tr key={band.id}>
-                      <th scope="row" className="tabular py-2 pr-3 text-left font-medium whitespace-nowrap text-ink">{band.label}</th>
-                      <td className={td}>{fmtPct(band.chance, 2)}</td>
-                      <td className={td}>{fmtKes(band.lossKes, 2)}</td>
-                      <td className={td}>{fmtKes(band.partKes, 2)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </details>
-          {focus.several && (
-            <p className="mt-3 text-xs leading-relaxed text-muted">
-              These are this building&apos;s own figures. The key figures at the top of the page add all {fmtInt(focus.price.pricedCount)} priced buildings: gross average annual loss {kes1(focus.price.total.aalGrossKes)}.
+        <Card title={`One flood, step by step: ${rpWithChance(row.returnPeriod)}`} aside={rpPicker}>
+          {!all && (
+            <p className="-mt-2 mb-4 max-w-3xl text-sm leading-relaxed text-ink-2">
+              <strong className="font-semibold text-ink">{LOSS_MODE_LABELS.depth_only} is selected:</strong> only the water at the building&apos;s own point{focus.drainageOn ? " and ponding near drains" : ""} counts, and the streets around it are not read. {selectMode("all_drivers")} to price the parts shown as off.
             </p>
           )}
+          <ol key={row.id} className="grid gap-2">
+            <StoryStep n={1} title="How much water reaches the building" text={waterFrom[row.surfaceFrom]} value={metres(depths.surfaceM)} />
+            <StoryStep n={2} title="What the water damages" text="Up to three things, each counted once." value={kes1(row.modelledKes)}>
+              <dl className="mt-3 grid gap-1.5 border-t border-line pt-3">
+                {parts.map((part) => (
+                  <div key={part.key} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 text-sm">
+                    <dt className="min-w-0 wrap-anywhere text-ink-2">
+                      <span className="font-medium text-ink">{part.label}:</span> {part.text}
+                    </dt>
+                    <dd className={`tabular ml-auto font-semibold whitespace-nowrap ${part.off ? "text-muted" : "text-ink"}`}>{part.off ? "Off" : kes1(part.kes)}</dd>
+                  </div>
+                ))}
+              </dl>
+            </StoryStep>
+            <StoryStep
+              n={3}
+              title="What the model cannot see"
+              text={uncertaintyOn ? `An extra ${shareText(d.judgement.uncertaintyLoading)} for causes the model leaves out, such as seepage, blocked drains and pump failure.` : `${depthOnlyOff}.`}
+              value={uncertaintyOn ? kes1(row.groundUpKes.uncertainty) : "Off"}
+              off={!uncertaintyOn}
+            />
+            <StoryStep n={4} title="The damage in full" text="Steps 2 and 3 added up. Called the ground-up loss: the damage before any insurance terms." value={kes1(row.groundUpTotalKes)} />
+            <StoryStep
+              n={5}
+              title="What the insurer pays"
+              text={
+                noDamage
+                  ? "No damage in this flood, so nothing to pay."
+                  : `Less the ${kes1(row.deductibleKes)} deductible, the part the policyholder keeps, ${row.overLimitKes > 0 ? `and less ${kes1(row.overLimitKes)} above the limit` : "and within the limit"}, the most the policy pays. Called the gross loss.`
+              }
+              value={kes1(row.grossKes)}
+              final
+            />
+          </ol>
+          {focus.several && (
+            <p className="mt-3 max-w-3xl text-xs leading-relaxed text-muted">
+              {focus.severalLine} {!single && (d.depthsFor ?? `The amounts add all ${fmtInt(d.buildings)} priced buildings.`)}
+            </p>
+          )}
+          <SourceLine sources={tableSources} className="mt-4 border-t border-line pt-3" />
         </Card>
 
-        <ChartFrame
-          title={waterfallTitle}
-          subtitle={`Read from left to right. A solid bar is a loss measured from zero; a striped bar is what the deductible or the limit takes off the bar before it. A flood this size or larger has about a ${annualChance(row.returnPeriod).replace(" a year", "")} chance in any year.`}
-          sources={chartSources}
-          aside={rpPicker}
-        >
-          {row.groundUpKes > 0 ? (
-            <Waterfall title={waterfallTitle} yLabel={`Loss in a ${rpLabel(row.returnPeriod)} flood, KES`} steps={steps} totalLabel="Loss at this stage" decreaseLabel="Taken off by the deductible or the limit" />
-          ) : (
-            <p className="rounded-xl bg-surface-2 px-3.5 py-6 text-sm leading-relaxed text-ink-2">
-              No water reaches the building in a {rpLabel(row.returnPeriod)} flood, so the ground-up and gross losses are both KES 0 and there is nothing to draw.
-              {b.firstWetReturnPeriod !== null && ` The first flood that reaches it is the ${rpLabel(b.firstWetReturnPeriod)}.`}
-            </p>
-          )}
-        </ChartFrame>
-      </div>
-
-      <Card title="The terms used, and where reinsurance comes in">
-        <dl className="grid gap-3 @4xl:grid-cols-2">
-          {[
-            { name: "Deductible", term: focus.terms.deductible, source: deductibleSource },
-            { name: "Limit", term: focus.terms.limit, source: limitSource },
-          ].map(({ name, term, source }) => (
-            <div key={name} className="min-w-0 rounded-xl bg-surface-2 px-3.5 py-3">
-              <dt className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
-                {name}
-                <SourceTag source={source} />
-              </dt>
-              <dd className="mt-1 wrap-anywhere text-sm text-ink">
-                {term.text}
-                {term.quotes.map((quote) => (
-                  <q key={quote} className="mt-1 block text-xs leading-relaxed text-muted">{quote}</q>
+        <Card>
+          <div className="space-y-2">
+            <Fold summary="Show the working: each line's arithmetic and where its figures come from">
+              <ol className="grid gap-2">
+                {stages.map((stage, i) => (
+                  <li
+                    key={stage.key}
+                    className={`flex flex-wrap items-start justify-between gap-x-4 gap-y-1.5 rounded-xl px-3.5 py-2.5 ${stage.weight === "gross" ? "border border-ink bg-surface" : stage.weight === "sum" ? "border border-axis bg-surface" : "bg-surface-2"}`}
+                  >
+                    <div className="min-w-0 flex-1 basis-64 wrap-anywhere">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium text-ink">
+                        <span className="tabular text-xs font-normal text-muted">{i + 1}.</span>
+                        {stage.driver && <DriverSwatch id={stage.driver} />}
+                        {stage.label}
+                        {stage.off && <span className="text-xs font-normal text-muted">off</span>}
+                      </div>
+                      <div className="mt-0.5 text-sm leading-relaxed text-ink-2">{stage.how}</div>
+                      <DriverSources sources={stage.sources} judgement={judgement} offerKind={offerKind} onOpenStep={onOpenStep} className="mt-2" />
+                    </div>
+                    <span className={`tabular ml-auto text-base font-semibold whitespace-nowrap ${stage.off ? "text-muted" : "text-ink"}`}>{stage.value}</span>
+                  </li>
                 ))}
-              </dd>
-            </div>
-          ))}
-        </dl>
-        <p className="mt-4 max-w-3xl text-sm leading-relaxed text-ink-2">
-          {exampleTerms
-            ? "Where the document states no term, the example terms in the panel below stand in, and changing them changes the gross loss above."
-            : "Both terms come from the offer, so the example terms in the panel below do not touch this building; they still apply to the portfolio around it."}
-        </p>
-        <details className="mt-3">
-          <summary className="cursor-pointer select-none text-sm font-medium text-ink-2 hover:text-ink">Insurance terms panel: the example policy terms and the reinsurance</summary>
-          <TermsPanel terms={terms} onChange={onTermsChange} className="mt-3" />
-        </details>
+              </ol>
+              <p className="mt-3 max-w-3xl text-xs leading-relaxed text-muted">
+                {focus.several && "A deductible or limit stated in the document applies once per flood to the whole offer. "}
+                The checks on this arithmetic are listed in <StepLink to="audit" onOpenStep={onOpenStep} />.
+              </p>
+            </Fold>
 
-        <p className="mt-4 max-w-3xl border-t border-line pt-4 text-sm leading-relaxed text-ink-2">
-          Reinsurance, the quota share and the excess of loss, is bought on the whole portfolio and not on one offer, so no net loss is worked out for this building.{" "}
-          {g && g.without100Kes !== null && g.with100Kes !== null ? (
-            <>
-              With the offer in it, the portfolio&apos;s 1-in-100 gross loss goes from {kes1(g.without100Kes)} to {kes1(g.with100Kes)}
-              {g.change100Share !== null ? ` (${pct1(g.change100Share)} more)` : ""}. What it does to the net loss is not worked out here; the portfolio&apos;s own net figures are in the{" "}
-              <button type="button" onClick={onShowPortfolio} className="font-medium text-ink underline underline-offset-2 hover:text-brand">Portfolio view</button> of this step, and what the change means for the decision is in <StepLink id="results" onOpenStep={onOpenStep} />.
-            </>
-          ) : (
-            <>
-              What the offer adds to the portfolio is in <StepLink id="results" onOpenStep={onOpenStep} />.
-            </>
-          )}{" "}
-          The checks on this arithmetic are listed in <StepLink id="audit" onOpenStep={onOpenStep} />.
+            <Fold summary="Every modelled flood, as a table" className="border-t border-line pt-2">
+              <p className="mb-3 max-w-3xl text-sm leading-relaxed text-ink-2">
+                One row per flood, most frequent first. The driver columns add up to the ground-up loss; the deductible and anything over the limit come off it to give the gross loss. Choose a flood to follow it in the steps above.
+              </p>
+              <div className="overflow-x-auto">
+                <table className={`w-full text-sm ${all ? "min-w-360" : "min-w-232"}`}>
+                  <thead className="text-xs text-muted">
+                    <tr>
+                      <th scope="col" className="pb-2 text-left align-bottom font-medium">Return period (chance in any year)</th>
+                      <th scope="col" className={th}>Depth at the point (m)</th>
+                      {all && <th scope="col" className={th}>Depth within the buffer (m)</th>}
+                      <th scope="col" className={th}>Water at the site (m)</th>
+                      {shown.map((id) => (
+                        <th key={id} scope="col" className={th}>
+                          <span className="inline-flex items-center justify-end gap-1.5"><DriverSwatch id={id} />{nameOf(id)} (KES)</span>
+                        </th>
+                      ))}
+                      <th scope="col" className={th}>Ground-up loss (KES)</th>
+                      <th scope="col" className={th}>Deductible taken (KES)</th>
+                      <th scope="col" className={th}>Over the limit (KES)</th>
+                      <th scope="col" className={th}>Gross loss (KES)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-line">
+                    {rows.map((r) => {
+                      const on = r.id === row.id;
+                      return (
+                        <tr key={r.id} className={on ? "bg-surface-2" : undefined}>
+                          <th scope="row" className="py-2.5 pr-3 pl-2 text-left font-medium whitespace-nowrap text-ink">
+                            <button type="button" aria-pressed={on} onClick={() => setChosen(r.id)} className="tabular underline-offset-2 hover:underline">
+                              {rpWithChance(r.returnPeriod)}
+                            </button>
+                            {on && <span className="ml-2 text-xs font-normal text-muted">shown above</span>}
+                          </th>
+                          <td className={td}>{fmtNum(r.depths.pointM)}</td>
+                          {all && <td className={td}>{fmtNum(r.depths.bufferM)}</td>}
+                          <td className={td}>{fmtNum(r.depths.surfaceM)}</td>
+                          {shown.map((id) => <td key={id} className={td}>{lineOf(id)?.on ? kes(r.groundUpKes[id]) : "off"}</td>)}
+                          <td className="tabular py-2.5 pl-3 text-right font-medium text-ink">{kes(r.groundUpTotalKes)}</td>
+                          <td className={td}>{kes(r.deductibleKes)}</td>
+                          <td className={td}>{kes(r.overLimitKes)}</td>
+                          <td className="tabular py-2.5 pr-2 pl-3 text-right font-semibold text-ink">{kes(r.grossKes)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </Fold>
+
+            <Fold summary="The policy terms used" className="border-t border-line pt-2">
+              <dl className="grid gap-3 @4xl:grid-cols-2">
+                {[
+                  { name: "Deductible", term: focus.terms.deductible, source: deductibleSource },
+                  { name: "Limit", term: focus.terms.limit, source: limitSource },
+                ].map(({ name, term, source }) => (
+                  <div key={name} className="min-w-0 rounded-xl bg-surface-2 px-3.5 py-3">
+                    <dt className="text-xs text-muted">{name}</dt>
+                    <dd className="mt-1 wrap-anywhere text-sm text-ink">
+                      {term.text}
+                      <DriverSources sources={[source]} offerKind={offerKind} onOpenStep={onOpenStep} className="mt-2" />
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+              <p className="my-4 max-w-3xl text-sm leading-relaxed text-ink-2">
+                Both act on the damage in full.{" "}
+                {exampleTerms
+                  ? "Where the document states no term, the example terms in the panel below stand in, and changing them changes what the insurer pays above."
+                  : "Both terms come from the offer, so the example terms in the panel below do not touch this building; they still apply to the portfolio around it."}
+              </p>
+              <TermsPanel terms={terms} onChange={onTermsChange} />
+              <p className="mt-4 max-w-3xl text-sm leading-relaxed text-ink-2">
+                Reinsurance, the quota share and the excess of loss, is bought on the whole portfolio and not on one offer, so no net loss is worked out for this building.
+                {g && g.without100Kes !== null && g.with100Kes !== null && (
+                  <>
+                    {" "}With the offer in it, the portfolio&apos;s 1-in-100 gross loss goes from {kes1(g.without100Kes)} to {kes1(g.with100Kes)}
+                    {g.change100Share !== null ? ` (${pct1(g.change100Share)} more)` : ""}. {selectView("Portfolio")} for the portfolio&apos;s own net figures.
+                  </>
+                )}
+              </p>
+            </Fold>
+          </div>
+        </Card>
+
+        <p className="max-w-3xl text-sm leading-relaxed text-ink-2">
+          The price built on these losses is in <StepLink to="results" onOpenStep={onOpenStep} />.
         </p>
-      </Card>
+      </div>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------------------------
-// Portfolio: every building through the engine, then the insurance terms
+// Portfolio: the loss split by driver
 // ---------------------------------------------------------------------------------------------
 
-function PortfolioEngine({ session, active, checks, terms, onTermsChange }: Pick<Props, "session" | "active" | "checks" | "terms" | "onTermsChange">) {
+/** The portfolio's ground-up loss per return period, split into what each of drivers 1 to 3 adds. */
+function PortfolioDrivers({ session, active, judgement }: Pick<Props, "session" | "active" | "judgement">) {
+  const r = active.result;
+  const j = r.judgement;
+  const split = r.scenarios.flatMap((s) => (s.byDriver ? [{ ...s, byDriver: s.byDriver }] : []));
+
+  if (r.mode !== "all_drivers" || !j || split.length !== r.scenarios.length) {
+    return (
+      <Note>
+        <strong className="font-semibold text-ink">{LOSS_MODE_LABELS.depth_only} is selected.</strong> Each building&apos;s loss comes from the depth at its point{session.dataset.drainage ? " and drainage ponding" : ""} alone. {selectMode("all_drivers")} to add the water around each building and drain overload.
+      </Note>
+    );
+  }
+
+  const setters = settersOf(judgement, PORTFOLIO_KEYS);
+  const sources: ChartSource[] = [
+    { kind: "synthetic", text: "Portfolio of insured buildings and their insured values" },
+    { kind: "real", text: "Hazard maps and the JRC depth-damage curve" },
+    {
+      kind: "assumption",
+      text: `Buffer of ${fmtInt(j.bufferRadiusM)} m around each building; drains taken as designed for a ${rpLabel(j.drainDesignRp)} event; ${metres(j.drainOverloadDepthM)} of water when they are overloaded${setters.length > 0 ? ` (${settersText(judgement, PORTFOLIO_KEYS)})` : ""}`,
+    },
+    ...(setters.includes("agents") ? [{ kind: "ai" as const, text: "Buffer radius agreed by the agents" }] : []),
+    ...(session.dataset.drainage ? [{ kind: "assumption" as const, text: "Drainage ponding depths" }] : []),
+  ];
+
+  return (
+    <Card title="Where the damage comes from, flood by flood">
+      <p className="-mt-2 mb-3 max-w-3xl text-sm leading-relaxed text-ink-2">
+        One row per modelled flood, most frequent first. Each building&apos;s damage is read once, at the deepest water at it; the columns say which source of water gave it, and add up to the ground-up loss.
+      </p>
+      {/* With the room, the sentence on which drivers the portfolio carries sits beside the table and not under it. */}
+      <div className="grid gap-x-8 gap-y-3 @6xl:grid-cols-[minmax(0,2.6fr)_minmax(0,1fr)]">
+        <div className="min-w-0 overflow-x-auto">
+          <table className="w-full min-w-176 text-sm">
+            <thead className="text-xs text-muted">
+              <tr>
+                <th scope="col" className="pb-2 text-left align-bottom font-medium">Return period (chance in any year)</th>
+                {PORTFOLIO_SERIES.map((p) => (
+                  <th key={p.id} scope="col" className="pb-2 pl-3 text-right align-bottom font-medium">
+                    <span className="inline-flex items-center justify-end gap-1.5"><StackSwatch color={p.color} fill={p.fill} />{p.column} (KES)</span>
+                  </th>
+                ))}
+                <th scope="col" className="pb-2 pl-3 text-right align-bottom font-medium">Ground-up loss (KES)</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line">
+              {split.map((s) => (
+                <tr key={s.id}>
+                  <th scope="row" className="tabular py-2.5 pr-3 text-left font-medium whitespace-nowrap text-ink">{rpWithChance(s.returnPeriod)}</th>
+                  {PORTFOLIO_SERIES.map((p) => <td key={p.id} className="tabular py-2.5 pl-3 text-right text-ink-2">{kes1(s.byDriver[p.key])}</td>)}
+                  <td className="tabular py-2.5 pl-3 text-right font-semibold text-ink">{kes1(s.lossKes)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="max-w-3xl text-sm leading-relaxed text-ink-2">{PORTFOLIO_DRIVERS_LINE}</p>
+      </div>
+      <SourceLine sources={sources} className="mt-4 border-t border-line pt-3" />
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Portfolio: one flood from the damage in full to what the insurer keeps, then the detail folded
+// ---------------------------------------------------------------------------------------------
+
+function PortfolioEngine({ session, active, checks, terms, onTermsChange, offerFocus, judgement, onOpenStep }: Pick<Props, "session" | "active" | "checks" | "terms" | "onTermsChange" | "offerFocus" | "judgement" | "onOpenStep">) {
   const { dataset } = session;
   const r = active.result;
   const isScore = dataset.hazardKind === "score";
-  const last = r.scenarios.length - 1;
-  const [scenario, setScenario] = useState(last);
-  const k = Math.min(scenario, last);
   const maxLoss = Math.max(...r.scenarios.map((s) => s.lossKes), 1);
+
+  // How the terms act, event by event. The flood chosen here is the one every part of the page follows.
+  const layers = terms.scenarios;
+  const anyOverLimit = layers.some((row) => row.overLimitKes > 0);
+  const [event, setEvent] = useState<string | null>(null);
+  const layer = layers.find((row) => row.id === event) ?? openingFlood(layers, (row) => row.groundUpKes);
+  const last = r.scenarios.length - 1;
+  const found = r.scenarios.findIndex((sc) => sc.id === layer?.id);
+  const k = found >= 0 ? found : last;
 
   // Largest losses in the chosen scenario; the trace opens on the biggest one.
   const ranked = useMemo(
@@ -533,12 +599,6 @@ function PortfolioEngine({ session, active, checks, terms, onTermsChange }: Pick
   const t = r.buildings[traceIndex]?.perScenario[k];
   const s = r.scenarios[k];
 
-  // How the terms act, event by event. The chart opens on the event nearest 1-in-100.
-  const layers = terms.scenarios;
-  const anyOverLimit = layers.some((row) => row.overLimitKes > 0);
-  const nearest100 = layers.reduce((best, row, i) => (Math.abs(Math.log(row.returnPeriod / 100)) < Math.abs(Math.log(layers[best].returnPeriod / 100)) ? i : best), 0);
-  const [event, setEvent] = useState<string | null>(null);
-  const layer = layers.find((row) => row.id === event) ?? layers[nearest100];
   const steps: WaterfallStep[] = layer
     ? [
         { label: "Ground-up", value: layer.groundUpKes, kind: "total" },
@@ -553,180 +613,226 @@ function PortfolioEngine({ session, active, checks, terms, onTermsChange }: Pick
   const waterfallTitle = layer ? `From ground-up loss to net loss in a ${rpLabel(layer.returnPeriod)} event` : "";
   // Where the ground-up figures come from. The hazard maps are real data; a hazard score read from them is a proxy.
   const usingAi = active.source === "ai";
+  const allDrivers = r.mode === "all_drivers";
   const groundUpSources: ChartSource[] = [
     { kind: "synthetic", text: "Portfolio of insured buildings and their insured values" },
     { kind: "real", text: isScore ? "Hazard maps (the hazard score read from them is a derived proxy, not a measured depth) and the JRC depth-damage curve" : "Flood depth maps and the JRC depth-damage curve" },
     { kind: "assumption", text: isScore ? "Return periods of the hazard tiers, depth scale, fragility and damage caps" : "Fragility and damage caps" },
     ...(dataset.drainage ? [{ kind: "assumption" as const, text: "Drainage ponding depths" }] : []),
+    ...(allDrivers ? [{ kind: "assumption" as const, text: "With All loss drivers: the buffer around each building, the drain design return period and the depth of water when drains are overloaded" }] : []),
     ...(usingAi ? [{ kind: "ai" as const, text: "Hazard and damage assumptions agreed by the agents" }] : []),
   ];
-  const termsSources: ChartSource[] = [
-    { kind: "synthetic", text: "Portfolio of insured buildings and their insured values" },
-    { kind: "assumption", text: "Insurance terms: example terms, not from any real policy or treaty" },
-    { kind: isScore ? "assumption" : "real", text: isScore ? "Return periods attached to the hazard tiers" : "Return periods carried by the hazard maps" },
-  ];
+  const termsSource: ChartSource = { kind: "assumption", text: "Insurance terms: example terms, not from any real policy or treaty" };
+  const fold = "border-t border-line pt-2";
 
   return (
-    <>
-      {/* Each card takes the full width, in the order the arithmetic runs: ground-up loss, one building followed
-          through, the insurance terms, what they do to every event, then the checks. On a wide step the worked
-          building becomes one row of stages and the checks run down two columns. */}
+    <div>
+      <StepHeader kicker={stepKicker("loss")} title={STEP_NAMES.loss}>
+        {layer
+          ? `In a ${rpLabel(layer.returnPeriod)} flood, one with a ${chanceOf(layer.returnPeriod)} chance in any year, the portfolio's buildings take ${kes1(layer.groundUpKes)} of damage. The insurer pays ${kes1(layer.grossKes)} of it and, after reinsurance, keeps ${kes1(layer.netKes)}.`
+          : "No flood scenario is loaded, so there is no loss to show."}
+      </StepHeader>
+      <OfferNotice offerFocus={offerFocus} what="its building followed through this step, flood by flood" onOpenStep={onOpenStep} />
+
       <div className="grid gap-4">
-        <Card title="Ground-up loss by scenario" aside={<Tag kind="synthetic">Synthetic portfolio</Tag>}>
-          <p className="-mt-2 mb-4 max-w-3xl text-sm leading-relaxed text-ink-2">
-            Each row is one flood scenario, from the most frequent to the rarest. The ground-up loss is the damage to the insured buildings before any insurance terms. The bar is that loss as a share of total insured value, drawn against the largest scenario.
-          </p>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-176 text-sm">
-              <thead className="text-xs text-muted">
-                <tr>
-                  <th className="pb-2 text-left font-medium">Return period (chance in any year)</th>
-                  <th className="pb-2 text-left font-medium">Scenario</th>
-                  <th className="pb-2 text-right font-medium">Buildings affected</th>
-                  <th className="pb-2 pl-3 text-right font-medium">Insured value in affected cells (KES)</th>
-                  <th className="pb-2 pl-3 text-right font-medium">Ground-up loss (KES)</th>
-                  <th className="w-[26%] pb-2 pl-4 text-left font-medium">Ground-up loss as a share of total insured value (%)</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line">
-                {r.scenarios.map((sc, i) => (
-                  <tr key={sc.id}>
-                    <td className="tabular py-2.5 pr-3 font-medium whitespace-nowrap text-ink">{rpWithChance(sc.returnPeriod)}</td>
-                    <td className="py-2.5 text-ink-2">{sc.id}</td>
-                    <td className="tabular py-2.5 text-right text-ink-2">{fmtInt(sc.affected)}</td>
-                    <td className="tabular py-2.5 text-right text-ink-2">{fmtKes(sc.tivExposedKes)}</td>
-                    <td className="tabular py-2.5 text-right font-semibold text-ink">{fmtKes(sc.lossKes, 2)}</td>
-                    <td className="py-2.5 pl-4">
-                      <div className="flex items-center gap-2">
-                        <div className="h-2 flex-1 rounded-r-full bg-surface-2">
-                          <motion.div className="h-2 rounded-r-full" style={{ background: "var(--accent)" }} initial={{ width: 0 }} animate={{ width: `${(sc.lossKes / maxLoss) * 100}%` }} transition={{ duration: 0.7, delay: 0.15 * i, ease: "easeOut" }} />
-                        </div>
-                        <span className="tabular w-14 text-right text-xs text-ink-2">{fmtPct(sc.lossKes / r.totalTivKes, 2)}</span>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <SourceLine sources={groundUpSources} className="mt-4 border-t border-line pt-3" />
-        </Card>
-
-        <Card title="Follow one building" aside={<Segmented label="Scenario" value={String(k)} onChange={(v) => setScenario(Number(v))} options={r.scenarios.map((sc, i) => ({ value: String(i), label: rpLabel(sc.returnPeriod) }))} />}>
-          {ranked.length === 0 || !t ? (
-            <p className="text-sm text-ink-2">No building takes a loss in this scenario.</p>
-          ) : (
-            <>
-              <p className="-mt-2 mb-4 max-w-3xl text-sm leading-relaxed text-ink-2">
-                One building in a {rpWithChance(s.returnPeriod)} flood, read in order: each stage takes the figure before it and shows the sum that gives the next. The badge beside a figure says where it comes from. Depths are in metres and amounts in KES.
-              </p>
-              <div className="mb-4 flex flex-wrap gap-1.5">
-                {ranked.map((x) => {
-                  const id = dataset.buildings[x.i].locId;
-                  return (
-                    <button key={id} onClick={() => setPicked(id)} className={`rounded-full border px-2.5 py-1 font-mono text-xs transition ${x.i === traceIndex ? "border-ink bg-ink text-surface" : "border-line text-ink-2 hover:border-axis"}`}>
-                      {id}
-                    </button>
-                  );
-                })}
-                <span className="self-center pl-1 text-xs text-muted">largest losses in this scenario</span>
-              </div>
-
-              {/* A list down the card, or on a wide step a row of stages read left to right; the building's name gets the widest one. */}
-              <motion.ol key={`${b.locId}-${k}`} className="flex flex-col gap-2 @7xl:grid @7xl:auto-cols-[minmax(0,1fr)] @7xl:grid-flow-col @7xl:grid-cols-[minmax(0,1.35fr)]" initial="hidden" animate="show" variants={{ show: { transition: { staggerChildren: 0.12 } } }}>
-                {[
-                  { label: "The building", value: `${b.locId} · ${HOUSING_LABELS[b.housingClass]}`, how: `Insured value ${fmtKes(b.tivKes, 2)}, at ${fmtNum(b.lat, 4)}, ${fmtNum(b.lon, 4)}`, tag: "synthetic" as const },
-                  { label: isScore ? "Hazard score" : "Flood depth", value: isScore ? fmtNum(t.hazard, 3) : `${fmtNum(t.hazard)} m`, how: `Read from the "${s.id}" map at the building's coordinates`, tag: (isScore ? "proxy" : "real") as "proxy" | "real" },
-                  ...(isScore ? [{ label: "Assumed depth", value: `${fmtNum(t.depthM)} m`, how: t.drainageM > 0 && t.drainageM >= t.depthM ? `Drainage ponding near a drain or in a settlement; the terrain gives ${fmtNum(t.hazard > 0 ? t.hazard * s.tierSlope * active.params.depthScaleM : 0)} m` : `${fmtNum(t.hazard, 3)} × tier slope ${fmtNum(s.tierSlope, 3)} × ${fmtNum(active.params.depthScaleM)} m`, tag: (usingAi ? "ai" : "assumption") as "ai" | "assumption" }] : []),
-                  { label: "Depth on the curve", value: `${fmtNum(t.effectiveDepthM)} m`, how: `${fmtNum(t.depthM)} m × fragility ${fmtNum(active.params.fragility[b.housingClass])}`, tag: (usingAi ? "ai" : "assumption") as "ai" | "assumption" },
-                  { label: "Damage ratio", value: fmtPct(t.damageRatio, 1), how: t.capped ? `JRC curve gives ${fmtPct(t.curveDamage, 1)}, limited by the ${fmtPct(active.params.cap[b.housingClass], 0)} cap` : `JRC curve at ${fmtNum(t.effectiveDepthM)} m; under the ${fmtPct(active.params.cap[b.housingClass], 0)} cap`, tag: "real" as const },
-                  { label: "Ground-up loss", value: fmtKes(t.lossKes, 2), how: `${fmtPct(t.damageRatio, 1)} × ${fmtKes(b.tivKes, 2)}`, tag: null },
-                ].map((row, i, all) => (
-                  // The figure sits beside its explanation where both fit, and drops to its own line where they do not.
-                  <motion.li key={row.label} variants={{ hidden: { opacity: 0, x: -8 }, show: { opacity: 1, x: 0 } }} className={`flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 rounded-xl px-3.5 py-2.5 @7xl:flex-col @7xl:flex-nowrap @7xl:items-start @7xl:justify-start @7xl:gap-y-3 @7xl:py-3.5 ${i === all.length - 1 ? "bg-ink text-surface" : "bg-surface-2"}`}>
-                    <div className="min-w-0">
-                      <div className={`text-xs ${i === all.length - 1 ? "opacity-70" : "text-muted"}`}>{row.label}</div>
-                      <div className={`text-sm ${i === all.length - 1 ? "opacity-80" : "text-ink-2"}`}>{row.how}</div>
-                    </div>
-                    <div className="ml-auto flex flex-wrap items-center justify-end gap-x-2.5 gap-y-1 text-right @7xl:mt-auto @7xl:ml-0 @7xl:justify-start @7xl:text-left">
-                      {row.tag && <Tag kind={row.tag}>{row.label === "Damage ratio" ? "JRC curve" : undefined}</Tag>}
-                      <span className="tabular text-base font-semibold">{row.value}</span>
-                    </div>
-                  </motion.li>
-                ))}
-              </motion.ol>
-            </>
-          )}
-        </Card>
-
-        <TermsPanel terms={terms} onChange={onTermsChange} />
-
-        <Card title="How the terms act on each event">
-          <p className="-mt-2 mb-4 max-w-3xl text-sm leading-relaxed text-ink-2">
-            Read each row from left to right. Ground-up loss less the deductibles{anyOverLimit ? " and anything over the policy limits" : ""} is the gross loss. Gross less the quota share recovery is what the insurer retains. Retained less the excess of loss recovery is the net loss.
-          </p>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-232 text-sm">
-              <thead className="text-xs text-muted">
-                <tr>
-                  <th className="pb-2 text-left font-medium">Event (chance in any year), amounts in KES</th>
-                  <th className="pb-2 pl-3 text-right font-medium">Ground-up</th>
-                  <th className="pb-2 pl-3 text-right font-medium">Deductibles</th>
-                  {anyOverLimit && <th className="pb-2 pl-3 text-right font-medium">Over limit</th>}
-                  <th className="pb-2 pl-3 text-right font-medium">Gross</th>
-                  <th className="pb-2 pl-3 text-right font-medium">Quota share recovery</th>
-                  <th className="pb-2 pl-3 text-right font-medium">Retained</th>
-                  <th className="pb-2 pl-3 text-right font-medium">Excess of loss recovery</th>
-                  <th className="pb-2 pl-3 text-right font-medium">Net</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line">
-                {layers.map((row) => (
-                  <tr key={row.id}>
-                    <th scope="row" className="tabular py-2.5 text-left font-medium whitespace-nowrap text-ink">{rpWithChance(row.returnPeriod)}</th>
-                    <td className="tabular py-2.5 pl-3 text-right text-ink-2">{kes1(row.groundUpKes)}</td>
-                    <td className="tabular py-2.5 pl-3 text-right text-ink-2">{kes1(row.deductiblesKes)}</td>
-                    {anyOverLimit && <td className="tabular py-2.5 pl-3 text-right text-ink-2">{kes1(row.overLimitKes)}</td>}
-                    <td className="tabular py-2.5 pl-3 text-right font-semibold text-ink">{kes1(row.grossKes)}</td>
-                    <td className="tabular py-2.5 pl-3 text-right text-ink-2">{kes1(row.quotaShareKes)}</td>
-                    <td className="tabular py-2.5 pl-3 text-right text-ink-2">{kes1(row.retainedKes)}</td>
-                    <td className="tabular py-2.5 pl-3 text-right text-ink-2">{kes1(row.xolKes)}</td>
-                    <td className="tabular py-2.5 pl-3 text-right font-semibold text-ink">{kes1(row.netKes)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p className="mt-3 text-xs leading-relaxed text-muted">
-            The excess of loss pays the part of the retained loss above {kes1(terms.xol.attachmentKes)}, up to {kes1(terms.xol.limitKes)} in one event.
-          </p>
-          <SourceLine sources={termsSources} className="mt-4 border-t border-line pt-3" />
-        </Card>
-
         {layer && (
-          <ChartFrame
-            title={waterfallTitle}
-            subtitle={`Read from left to right. A solid bar is a loss measured from zero; a striped bar is what a deductible or a reinsurer takes off the bar before it. A loss this size or larger has about a ${annualChance(layer.returnPeriod).replace(" a year", "")} chance in any year.`}
-            sources={termsSources}
-            aside={layers.length > 1 ? <Segmented label="Event" value={layer.id} onChange={setEvent} options={layers.map((row) => ({ value: row.id, label: rpLabel(row.returnPeriod) }))} /> : undefined}
+          <Card
+            title={`One flood, step by step: ${rpWithChance(layer.returnPeriod)}`}
+            aside={layers.length > 1 ? <Segmented label="Return period" value={layer.id} onChange={setEvent} options={layers.map((row) => ({ value: row.id, label: rpLabel(row.returnPeriod) }))} /> : undefined}
           >
-            <Waterfall
-              title={waterfallTitle}
-              yLabel={`Loss in a ${rpLabel(layer.returnPeriod)} event, KES`}
-              steps={steps}
-              totalLabel="Loss at this stage"
-              decreaseLabel="Taken off by a deductible or a reinsurer"
-            />
-          </ChartFrame>
+            <ol key={layer.id} className="grid gap-2">
+              <StoryStep
+                n={1}
+                title="The damage in full"
+                text={`${s ? `${fmtInt(s.affected)} insured buildings are affected. ` : ""}Called the ground-up loss: the damage before any insurance terms.`}
+                value={kes1(layer.groundUpKes)}
+              />
+              <StoryStep
+                n={2}
+                title="What the insurer pays"
+                text={`Less ${kes1(layer.deductiblesKes)} of deductibles, the part the policyholders keep${layer.overLimitKes > 0 ? `, and ${kes1(layer.overLimitKes)} above the policy limits` : ""}. Called the gross loss.`}
+                value={kes1(layer.grossKes)}
+              />
+              <StoryStep
+                n={3}
+                title="What the insurer keeps"
+                text={`Reinsurance pays back ${kes1(layer.quotaShareKes)} under the quota share and ${kes1(layer.xolKes)} under the excess of loss. Called the net loss: what the insurer keeps after reinsurance.`}
+                value={kes1(layer.netKes)}
+                final
+              />
+            </ol>
+            <SourceLine sources={[...groundUpSources, termsSource]} className="mt-4 border-t border-line pt-3" />
+          </Card>
         )}
 
-        <Card title="Checks on the arithmetic and the terms" aside={<ChecksSummary checks={checks} />}>
-          {/* Full width, the list runs down two columns so the right half of the card is not left empty. */}
-          <div className="@5xl:columns-2 @5xl:gap-10 @5xl:[&_li]:break-inside-avoid">
-            <CheckList checks={checks} />
+        <PortfolioDrivers session={session} active={active} judgement={judgement} />
+
+        <Card>
+          <div className="space-y-2">
+            <Fold summary="Every modelled flood, as a table">
+              <p className="mb-3 max-w-3xl text-sm leading-relaxed text-ink-2">
+                Read each row from left to right. Ground-up loss less the deductibles{anyOverLimit ? " and anything over the policy limits" : ""} is the gross loss. Gross less the quota share recovery is what the insurer retains. Retained less the excess of loss recovery is the net loss.
+              </p>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-232 text-sm">
+                  <thead className="text-xs text-muted">
+                    <tr>
+                      <th className="pb-2 text-left font-medium">Event (chance in any year), amounts in KES</th>
+                      <th className="pb-2 pl-3 text-right font-medium">Ground-up</th>
+                      <th className="pb-2 pl-3 text-right font-medium">Deductibles</th>
+                      {anyOverLimit && <th className="pb-2 pl-3 text-right font-medium">Over limit</th>}
+                      <th className="pb-2 pl-3 text-right font-medium">Gross</th>
+                      <th className="pb-2 pl-3 text-right font-medium">Quota share recovery</th>
+                      <th className="pb-2 pl-3 text-right font-medium">Retained</th>
+                      <th className="pb-2 pl-3 text-right font-medium">Excess of loss recovery</th>
+                      <th className="pb-2 pl-3 text-right font-medium">Net</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-line">
+                    {layers.map((row) => (
+                      <tr key={row.id}>
+                        <th scope="row" className="tabular py-2.5 text-left font-medium whitespace-nowrap text-ink">{rpWithChance(row.returnPeriod)}</th>
+                        <td className="tabular py-2.5 pl-3 text-right text-ink-2">{kes1(row.groundUpKes)}</td>
+                        <td className="tabular py-2.5 pl-3 text-right text-ink-2">{kes1(row.deductiblesKes)}</td>
+                        {anyOverLimit && <td className="tabular py-2.5 pl-3 text-right text-ink-2">{kes1(row.overLimitKes)}</td>}
+                        <td className="tabular py-2.5 pl-3 text-right font-semibold text-ink">{kes1(row.grossKes)}</td>
+                        <td className="tabular py-2.5 pl-3 text-right text-ink-2">{kes1(row.quotaShareKes)}</td>
+                        <td className="tabular py-2.5 pl-3 text-right text-ink-2">{kes1(row.retainedKes)}</td>
+                        <td className="tabular py-2.5 pl-3 text-right text-ink-2">{kes1(row.xolKes)}</td>
+                        <td className="tabular py-2.5 pl-3 text-right font-semibold text-ink">{kes1(row.netKes)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-3 text-xs leading-relaxed text-muted">
+                The excess of loss pays the part of the retained loss above {kes1(terms.xol.attachmentKes)}, up to {kes1(terms.xol.limitKes)} in one event.
+              </p>
+
+              <h4 className="mt-6 mb-2 flex flex-wrap items-center gap-2 text-sm font-semibold text-ink">Ground-up loss by scenario <Tag kind="synthetic">Synthetic portfolio</Tag></h4>
+              <p className="mb-3 max-w-3xl text-sm leading-relaxed text-ink-2">
+                The bar is the ground-up loss as a share of total insured value, drawn against the largest scenario.
+                {allDrivers && r.judgement && ` With ${LOSS_MODE_LABELS.all_drivers} a building counts as affected once any driver puts water at it, so every building is affected in a flood rarer than the ${rpLabel(r.judgement.drainDesignRp)} event the drains are taken to be designed for.`}
+              </p>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-176 text-sm">
+                  <thead className="text-xs text-muted">
+                    <tr>
+                      <th className="pb-2 text-left font-medium">Return period (chance in any year)</th>
+                      <th className="pb-2 text-left font-medium">Scenario</th>
+                      <th className="pb-2 text-right font-medium">Buildings affected</th>
+                      <th className="pb-2 pl-3 text-right font-medium">Insured value in affected cells (KES)</th>
+                      <th className="pb-2 pl-3 text-right font-medium">Ground-up loss (KES)</th>
+                      <th className="w-[26%] pb-2 pl-4 text-left font-medium">Ground-up loss as a share of total insured value (%)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-line">
+                    {r.scenarios.map((sc, i) => (
+                      <tr key={sc.id}>
+                        <td className="tabular py-2.5 pr-3 font-medium whitespace-nowrap text-ink">{rpWithChance(sc.returnPeriod)}</td>
+                        <td className="py-2.5 text-ink-2">{sc.id}</td>
+                        <td className="tabular py-2.5 text-right text-ink-2">{fmtInt(sc.affected)}</td>
+                        <td className="tabular py-2.5 text-right text-ink-2">{fmtKes(sc.tivExposedKes)}</td>
+                        <td className="tabular py-2.5 text-right font-semibold text-ink">{fmtKes(sc.lossKes, 2)}</td>
+                        <td className="py-2.5 pl-4">
+                          <div className="flex items-center gap-2">
+                            <div className="h-2 flex-1 rounded-r-full bg-surface-2">
+                              <motion.div className="h-2 rounded-r-full" style={{ background: "var(--accent)" }} initial={{ width: 0 }} animate={{ width: `${(sc.lossKes / maxLoss) * 100}%` }} transition={{ duration: 0.7, delay: 0.15 * i, ease: "easeOut" }} />
+                            </div>
+                            <span className="tabular w-14 text-right text-xs text-ink-2">{fmtPct(sc.lossKes / r.totalTivKes, 2)}</span>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Fold>
+
+            {layer && (
+              <Fold summary="The same steps as a chart" className={fold}>
+                <ChartFrame
+                  bare
+                  title={waterfallTitle}
+                  subtitle={`Read from left to right. A solid bar is a loss measured from zero; a striped bar is what a deductible or a reinsurer takes off the bar before it. A loss this size or larger has about a ${chanceOf(layer.returnPeriod)} chance in any year.`}
+                  sources={[
+                    { kind: "synthetic", text: "Portfolio of insured buildings and their insured values" },
+                    termsSource,
+                    { kind: isScore ? "assumption" : "real", text: isScore ? "Return periods attached to the hazard tiers" : "Return periods carried by the hazard maps" },
+                  ]}
+                >
+                  <Waterfall
+                    title={waterfallTitle}
+                    yLabel={`Loss in a ${rpLabel(layer.returnPeriod)} event, KES`}
+                    steps={steps}
+                    totalLabel="Loss at this stage"
+                    decreaseLabel="Taken off by a deductible or a reinsurer"
+                  />
+                </ChartFrame>
+              </Fold>
+            )}
+
+            <Fold summary="Follow one building through the arithmetic" className={fold}>
+              {ranked.length === 0 || !t ? (
+                <p className="text-sm text-ink-2">No building takes a loss in this scenario.</p>
+              ) : (
+                <>
+                  <p className="mb-4 max-w-3xl text-sm leading-relaxed text-ink-2">
+                    One building in a {rpWithChance(s.returnPeriod)} flood, read in order: each stage takes the figure before it and shows the sum that gives the next. The badge beside a figure says where it comes from. Depths are in metres and amounts in KES.
+                  </p>
+                  <div className="mb-4 flex flex-wrap gap-1.5">
+                    {ranked.map((x) => {
+                      const id = dataset.buildings[x.i].locId;
+                      return (
+                        <button key={id} onClick={() => setPicked(id)} className={`rounded-full border px-2.5 py-1 font-mono text-xs transition ${x.i === traceIndex ? "border-ink bg-ink text-surface" : "border-line text-ink-2 hover:border-axis"}`}>
+                          {id}
+                        </button>
+                      );
+                    })}
+                    <span className="self-center pl-1 text-xs text-muted">largest losses in this scenario</span>
+                  </div>
+
+                  {/* A list down the card, or on a wide step a row of stages read left to right; the building's name gets the widest one. */}
+                  <ol className="flex flex-col gap-2 @7xl:grid @7xl:auto-cols-[minmax(0,1fr)] @7xl:grid-flow-col @7xl:grid-cols-[minmax(0,1.35fr)]">
+                    {[
+                      { label: "The building", value: `${b.locId} · ${HOUSING_LABELS[b.housingClass]}`, how: `Insured value ${fmtKes(b.tivKes, 2)}, at ${fmtNum(b.lat, 4)}, ${fmtNum(b.lon, 4)}`, tag: "synthetic" as const },
+                      { label: isScore ? "Hazard score" : "Flood depth", value: isScore ? fmtNum(t.hazard, 3) : `${fmtNum(t.hazard)} m`, how: `Read from the "${s.id}" map at the building's coordinates`, tag: (isScore ? "proxy" : "real") as "proxy" | "real" },
+                      ...(isScore ? [{ label: t.drivers ? "Assumed depth at the point" : "Assumed depth", value: `${fmtNum(t.drivers ? t.drivers.pointM : t.depthM)} m`, how: !t.drivers && t.drainageM > 0 && t.drainageM >= t.depthM ? `Drainage ponding near a drain or in a settlement; the terrain gives ${fmtNum(t.hazard > 0 ? t.hazard * s.tierSlope * active.params.depthScaleM : 0)} m` : `${fmtNum(t.hazard, 3)} × tier slope ${fmtNum(s.tierSlope, 3)} × ${fmtNum(active.params.depthScaleM)} m`, tag: (usingAi ? "ai" : "assumption") as "ai" | "assumption" }] : []),
+                      ...(t.drivers ? [{ label: "Deepest water at the site", value: `${fmtNum(t.drivers.surfaceM)} m`, how: `At the point ${fmtNum(t.drivers.pointM)} m, within the buffer ${fmtNum(t.drivers.bufferM)} m, drainage ponding ${fmtNum(t.drivers.pondingM)} m, drain overload ${fmtNum(t.drivers.overloadM)} m: the deepest is used`, tag: "assumption" as const }] : []),
+                      { label: "Depth on the curve", value: `${fmtNum(t.effectiveDepthM)} m`, how: `${fmtNum(t.depthM)} m × fragility ${fmtNum(active.params.fragility[b.housingClass])}`, tag: (usingAi ? "ai" : "assumption") as "ai" | "assumption" },
+                      { label: "Damage ratio", value: fmtPct(t.damageRatio, 1), how: t.capped ? `JRC curve gives ${fmtPct(t.curveDamage, 1)}, limited by the ${fmtPct(active.params.cap[b.housingClass], 0)} cap` : `JRC curve at ${fmtNum(t.effectiveDepthM)} m; under the ${fmtPct(active.params.cap[b.housingClass], 0)} cap`, tag: "real" as const },
+                      { label: "Ground-up loss", value: fmtKes(t.lossKes, 2), how: `${fmtPct(t.damageRatio, 1)} × ${fmtKes(b.tivKes, 2)}`, tag: null },
+                    ].map((row, i, all) => (
+                      // The figure sits beside its explanation where both fit, and drops to its own line where they do not.
+                      <li key={row.label} className={`flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 rounded-xl px-3.5 py-2.5 @7xl:flex-col @7xl:flex-nowrap @7xl:items-start @7xl:justify-start @7xl:gap-y-3 @7xl:py-3.5 ${i === all.length - 1 ? "border border-ink bg-surface" : "bg-surface-2"}`}>
+                        <div className="min-w-0">
+                          <div className="text-xs text-muted">{row.label}</div>
+                          <div className="text-sm text-ink-2">{row.how}</div>
+                        </div>
+                        <div className="ml-auto flex flex-wrap items-center justify-end gap-x-2.5 gap-y-1 text-right @7xl:mt-auto @7xl:ml-0 @7xl:justify-start @7xl:text-left">
+                          {row.tag && <Tag kind={row.tag}>{row.label === "Damage ratio" ? "JRC curve" : undefined}</Tag>}
+                          <span className="tabular text-base font-semibold text-ink">{row.value}</span>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                </>
+              )}
+            </Fold>
+
+            <Fold summary="The insurance terms used" className={fold}>
+              <TermsPanel terms={terms} onChange={onTermsChange} />
+            </Fold>
+
+            <Fold summary={<span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">Checks on the arithmetic and the terms <ChecksSummary checks={checks} /></span>} className={fold}>
+              {/* Full width, the list runs down two columns so the right half of the card is not left empty. */}
+              <div className="@5xl:columns-2 @5xl:gap-10 @5xl:[&_li]:break-inside-avoid">
+                <CheckList checks={checks} />
+              </div>
+            </Fold>
           </div>
         </Card>
       </div>
-    </>
+    </div>
   );
 }

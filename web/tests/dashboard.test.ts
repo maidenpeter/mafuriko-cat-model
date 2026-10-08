@@ -7,13 +7,16 @@ import {
   checkGroups,
   classLossRows,
   dashboardStepId,
-  droppedFileKind,
+  driverParts,
   flagCountText,
   headlineFlags,
   hotspotCount,
+  judgementChanges,
   layerSteps,
   nearestEventIndex,
+  OFFER_FILE_TYPES_TEXT,
   paramChanges,
+  portfolioChangeParts,
   portfolioChangeText,
   rangePlacement,
   shadeLevel,
@@ -23,6 +26,7 @@ import {
 } from "../src/lib/dashboard";
 import { applyTerms, DEFAULT_TERMS } from "../src/lib/model/terms";
 import type { Dataset, ModelResult, ScenarioResult } from "../src/lib/model/types";
+import { ACCEPT } from "../src/lib/offerFiles/kind";
 import { STEP_IDS } from "../src/lib/steps";
 
 describe("signed percentages", () => {
@@ -233,6 +237,64 @@ describe("the agents' parameter changes", () => {
   });
 });
 
+describe("the agents' changes to the assumptions beyond depth", () => {
+  const ledger = [
+    { key: "bufferRadiusM", label: "Buffer (m)", reference: 250, agreed: 150, adjusted: false },
+    { key: "ingressThresholdM", label: "Ingress threshold (m)", reference: 0.1, agreed: 0.1, adjusted: false },
+    { key: "basementDamageSevere", label: "Basement damage, severe", reference: 0.25, agreed: 0.3, adjusted: true },
+    { key: "uncertaintyLoading", label: "Uncertainty loading", reference: 0.1, agreed: null },
+  ];
+
+  it("keeps the figures that moved and counts every figure argued", () => {
+    const changes = judgementChanges(ledger);
+    expect(changes.of).toBe(4);
+    expect(changes.moved.map((c) => c.key)).toEqual(["bufferRadiusM", "basementDamageSevere"]);
+    expect(changes.moved[0]).toMatchObject({ label: "Buffer (m)", reference: 250, agreed: 150, adjusted: false });
+    expect(changes.moved[0].fraction).toBeCloseTo(-0.4, 12);
+    expect(changes.moved[1].fraction).toBeCloseTo(0.2, 12);
+    expect(changes.moved[1].adjusted).toBe(true);
+  });
+
+  it("treats a figure the Chair did not decide as not moved", () => {
+    expect(judgementChanges([{ key: "uncertaintyLoading", label: "Uncertainty loading", reference: 0.1, agreed: null }])).toEqual({ moved: [], of: 1 });
+  });
+
+  it("has nothing to count when the agents ran with no offer", () => {
+    expect(judgementChanges([])).toEqual({ moved: [], of: 0 });
+  });
+
+  it("has no percentage when the reference is zero", () => {
+    expect(judgementChanges([{ key: "x", label: "X", reference: 0, agreed: 2 }]).moved[0].fraction).toBeNull();
+  });
+});
+
+describe("one loss split by driver", () => {
+  const order = ["surrounding", "ponding", "overload", "basement"] as const;
+  const labels = { surrounding: "Surrounding flooding", ponding: "Drainage ponding", overload: "Drain overload", basement: "Basement ingress" };
+
+  it("keeps the order asked for and gives each driver its share of the whole", () => {
+    const { parts, totalKes } = driverParts({ basement: 60, surrounding: 30, overload: 10, ponding: 0 }, order, labels);
+    expect(totalKes).toBe(100);
+    expect(parts.map((p) => p.id)).toEqual([...order]);
+    expect(parts.map((p) => p.label)).toEqual(["Surrounding flooding", "Drainage ponding", "Drain overload", "Basement ingress"]);
+    expect(parts.map((p) => p.share)).toEqual([0.3, 0, 0.1, 0.6]);
+    expect(parts.reduce((t, p) => t + p.share, 0)).toBeCloseTo(1, 12);
+  });
+
+  it("counts a missing, negative or broken amount as nothing", () => {
+    const { parts, totalKes } = driverParts({ surrounding: 50, ponding: -5, overload: Number.NaN }, order, labels);
+    expect(totalKes).toBe(50);
+    expect(parts.map((p) => p.kes)).toEqual([50, 0, 0, 0]);
+    expect(parts[0].share).toBe(1);
+  });
+
+  it("gives zero shares, not a division by zero, when there is no loss", () => {
+    const { parts, totalKes } = driverParts({}, order, labels);
+    expect(totalKes).toBe(0);
+    expect(parts.every((p) => p.share === 0 && p.kes === 0)).toBe(true);
+  });
+});
+
 describe("hotspots", () => {
   it("counts the flagged areas out of all of them", () => {
     expect(hotspotCount([{ hit: true }, { hit: false }, { hit: true }])).toEqual({ matched: 2, total: 3 });
@@ -300,30 +362,12 @@ describe("where the dashboard's links go", () => {
   });
 });
 
-describe("a file given to the offer card", () => {
-  const offers = [".docx", ".txt"];
-
-  it("takes a Word or text file as an offer, whatever the case of its name", () => {
-    expect(droppedFileKind("memo.docx", offers)).toBe("offer");
-    expect(droppedFileKind("MEMO.TXT", offers)).toBe("offer");
-    expect(droppedFileKind(" offer.v2.Docx ", offers)).toBe("offer");
-  });
-
-  it("takes a zip as model data, even if zips were listed as offers", () => {
-    expect(droppedFileKind("starter-kit.zip", offers)).toBe("model-data");
-    expect(droppedFileKind("starter-kit.ZIP", [...offers, ".zip"])).toBe("model-data");
-  });
-
-  it("tells the old Word format apart from .docx", () => {
-    expect(droppedFileKind("memo.doc", offers)).toBe("old-word");
-    expect(droppedFileKind("memo.doc", [...offers, ".doc"])).toBe("old-word");
-  });
-
-  it("turns away anything else until its type is added to the list", () => {
-    expect(droppedFileKind("memo.pdf", offers)).toBe("unsupported");
-    expect(droppedFileKind("memo.pdf", [...offers, ".pdf"])).toBe("offer");
-    expect(droppedFileKind("docx", offers)).toBe("unsupported");
-    expect(droppedFileKind("", offers)).toBe("unsupported");
+describe("the kinds of file an offer can be given as", () => {
+  it("names every extension the upload opens, and no other", () => {
+    const opened = ACCEPT.split(",").filter((part) => part.startsWith("."));
+    expect(opened.length).toBeGreaterThan(0);
+    for (const extension of opened) expect(OFFER_FILE_TYPES_TEXT).toContain(`(${extension})`);
+    expect(OFFER_FILE_TYPES_TEXT.match(/\(\.[a-z]+\)/g)).toHaveLength(opened.length);
   });
 });
 
@@ -368,6 +412,20 @@ describe("what an offer adds to the portfolio", () => {
     expect(portfolioChangeText(0.2, 0)).toBe("no change");
     expect(portfolioChangeText(null, null)).toBe("not modelled");
     expect(portfolioChangeText(Number.NaN)).toBe("not modelled");
+  });
+
+  it("gives the amount and its share apart, for a figure and the line under it", () => {
+    expect(portfolioChangeParts(1_200_000, 0.004)).toEqual({ amount: "+KES 1.2m", share: "+0.4%" });
+    expect(portfolioChangeParts(-1_200_000, -0.004)).toEqual({ amount: "-KES 1.2m", share: "-0.4%" });
+    expect(portfolioChangeParts(50_000, 0.0004)).toEqual({ amount: "+KES 50.0k", share: "+0.040%" });
+    expect(portfolioChangeParts(1_200_000, null)).toEqual({ amount: "+KES 1.2m", share: null });
+    expect(portfolioChangeParts(1_200_000)).toEqual({ amount: "+KES 1.2m", share: null });
+  });
+
+  it("gives no share where there is no amount to take a share of", () => {
+    expect(portfolioChangeParts(0.2, 0.5)).toEqual({ amount: "no change", share: null });
+    expect(portfolioChangeParts(null, 0.5)).toEqual({ amount: "not modelled", share: null });
+    expect(portfolioChangeParts(Number.NaN, 0.5)).toEqual({ amount: "not modelled", share: null });
   });
 });
 

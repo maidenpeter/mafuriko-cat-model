@@ -9,10 +9,64 @@
  *   kes1(4_200_000_000) "KES 4.2bn"                   every amount on a chart or a figure
  *   pct1(0.125)         "12.5%"                       takes a fraction, like fmtPct
  *   SOURCE_LABELS.real  "Real data"                   the word on a source badge
+ *   LOSS_MODE_LABELS    "Depth only", "All loss drivers"  the two settings of the header switch "Losses from"
+ *   selectMode(mode)    'Select All loss drivers under "Losses from" in the bar above'  the one way to point at that switch
+ *   shareText(0.125)    "12.5%", shareText(0.08) "8%"  a share inside a sentence that shows its arithmetic
+ *   perMille(8.02)      "8.02 per mille"              every rate per mille of the insured value
+ *   PORTFOLIO_DRIVERS_LINE  the one sentence on which loss drivers the portfolio carries
+ *   SETTER_WORDS        who set a figure, in a short form, a sentence form and a counted form
  *   EP_HELP             the one line of help under the exceedance curve
  *   axisTicks(max)      round tick values from zero   used by BarChart and Waterfall
  *   wrapLabel(text, n)  lines of at most n characters used for labels drawn inside SVG
  */
+
+import { fmtNum } from "./format";
+import type { LossMode } from "./model/drivers";
+
+/** The two settings of the header switch "Losses from", in its own words. The one place they are written. */
+export const LOSS_MODE_LABELS: Record<LossMode, string> = { depth_only: "Depth only", all_drivers: "All loss drivers" };
+
+/** How every screen points at the header switch: the mode by its own name, never in quotes, and the switch by its tag. */
+export const selectMode = (mode: LossMode): string => `Select ${LOSS_MODE_LABELS[mode]} under "Losses from" in the bar above`;
+
+/**
+ * Which loss drivers the portfolio carries, and why not the other two. The one sentence for it:
+ * shown once on screen, on the Loss engine's portfolio view, and once in each record, and nowhere else.
+ */
+export const PORTFOLIO_DRIVERS_LINE =
+  "The portfolio carries Surrounding flooding, Drainage ponding and Drain overload. Basement ingress and Business interruption are not modelled for it, because the synthetic portfolio has no basement or rent data.";
+
+/**
+ * A share as it is quoted in a sentence that shows its arithmetic: one decimal, trailing zeros
+ * dropped, so 0.125 reads "12.5%" and 0.08 reads "8%" and the sentence reproduces the figure beside it.
+ */
+export const shareText = (fraction: number): string => `${fmtNum(fraction * 100, 1)}%`;
+
+/** A rate per mille of the insured value: two decimals, four when it is under 0.1 so a small rate never reads as nothing. */
+export function perMille(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "n/a";
+  return `${fmtNum(value, value !== 0 && Math.abs(value) < 0.1 ? 4 : 2)} per mille`;
+}
+
+/** Who set a figure: the offer document, the agents, the underwriter on screen, or the reference set. "not recorded" only in a record made without the screen's own note of it. */
+export type SetterKind = "offer" | "agents" | "typed" | "reference" | "not recorded";
+
+/**
+ * The words for who set a figure, the one table every screen and record reads:
+ *   short     a table cell or a tag            "Agents"
+ *   sentence  after "set by" or "Set by:"      "agreed by the agents"
+ *   counted   after a count, or as a heading   "agreed by the agents" (3 agreed by the agents)
+ */
+export const SETTER_WORDS: Record<SetterKind, { short: string; sentence: string; counted: string }> = {
+  offer: { short: "Offer", sentence: "read from the offer", counted: "from the offer" },
+  agents: { short: "Agents", sentence: "agreed by the agents", counted: "agreed by the agents" },
+  typed: { short: "Typed", sentence: "typed by the underwriter", counted: "typed by the underwriter" },
+  reference: { short: "Reference", sentence: "the reference value", counted: "reference values" },
+  "not recorded": { short: "Not recorded", sentence: "not recorded", counted: "not recorded" },
+};
+
+/** The order setters are listed in, wherever more than one is named. */
+export const SETTER_ORDER: readonly SetterKind[] = ["offer", "agents", "typed", "reference", "not recorded"];
 
 /** "1-in-100". Whole years are written whole; anything else keeps up to two decimals. */
 export function rpLabel(returnPeriod: number): string {

@@ -1,16 +1,18 @@
-import { buildLedger, type Deliberation } from "./agents/orchestrate";
+import { buildLedger, judgementLedger, type Deliberation } from "./agents/orchestrate";
 import { ROLE_LABELS, ROLES } from "./agents/schema";
 import { costOf, fmtUsd, usageRows, usageTotals, type Prices, type UsageSource } from "./agents/usage";
 import type { Check } from "./checks";
 import { DECISION_LABELS, DEDUCTIBLE_LOSS_SHARE, EVIDENCE_LABELS, NEAR_WET_CELL_M, SEVERITY_LABELS, SUBLIMIT_LOSS_SHARE, type DecisionRecord } from "./decision";
 import { fmtInt, fmtKes, fmtNum, fmtPct } from "./format";
 import { DRAINAGE_DEFAULTS } from "./geo/drainage";
-import { kes1, rpLabel, rpWithChance } from "./labels";
+import { kes1, LOSS_MODE_LABELS, PORTFOLIO_DRIVERS_LINE, rpLabel, rpWithChance, SETTER_ORDER, SETTER_WORDS } from "./labels";
+import type { LossMode } from "./model/drivers";
 import { hotspotHits } from "./model/hotspots";
 import { BOUNDS, flattenParams, REFERENCE_PARAMS } from "./model/params";
 import { XOL_DEFAULT_ATTACHMENT_RP, XOL_DEFAULT_EXHAUSTION_RP, type TermsResult } from "./model/terms";
-import { HOUSING_CLASSES, HOUSING_LABELS, SCORE_TIERS, type ModelParams } from "./model/types";
+import { HOUSING_CLASSES, HOUSING_LABELS, SCORE_TIERS, type ModelParams, type ModelResult } from "./model/types";
 import { JRC_AFRICA_RESIDENTIAL } from "./model/vulnerability";
+import { DRIVER_IDS, DRIVER_LABELS, type DriverSource } from "./offer/drivers";
 import {
   ACCUMULATION_HIGH_SHARE,
   ACCUMULATION_MEDIUM_SHARE,
@@ -19,9 +21,14 @@ import {
   CONCENTRATION_MEDIUM_SHARE,
   FREQUENT_FLOOD_RP,
   NEIGHBOUR_RADIUS_M,
+  PORTFOLIO_KEYS,
+  type FocusJudgement,
+  type JudgementSetter,
   type OfferFocus,
 } from "./offer/focus";
 import { FOOTPRINT_RADIUS_M, OVERPASS_URL } from "./offer/footprint";
+import { AGENT_JUDGEMENT_KEYS, BASEMENT_LADDER, JUDGEMENT_BOUNDS, JUDGEMENT_KEYS, JUDGEMENT_LABELS, OUTAGE_LADDER, REFERENCE_JUDGEMENT, type OfferJudgement } from "./offer/judgement";
+import type { BrokerQuestion } from "./offer/types";
 import { slim, type Active, type LogEntry, type Session } from "./session";
 
 export const PARAM_LABELS: Record<string, string> = {
@@ -49,8 +56,14 @@ export const LIMITS = [
   "The building outline on the hazard map comes from a public OpenStreetMap Overpass server. The offer building's coordinates and the search radius are sent to it, and nothing else.",
   "A value marked verified was found written in the document. That shows it was written, not that it was understood, so the source sentence is kept beside every value.",
   "The fixed rules read one building per document. An offer with several buildings needs the model, or the underwriter's own entries.",
-  "An offer is priced on the residential damage curve whatever the building is used for, and water entering basements is not modelled.",
+  "An offer is priced on the residential damage curve whatever the building is used for.",
   "An offer has a ground-up and a gross loss only. Net loss is a portfolio figure and is not worked out for one offer.",
+  `With ${LOSS_MODE_LABELS.all_drivers}, a building takes the highest map depth within the buffer around it (${fmtNum(REFERENCE_JUDGEMENT.bufferRadiusM, 0)} m unless changed), not an average. One deep cell nearby sets the depth for the whole building, so this reading is high.`,
+  `Drain overload is an assumption applied to every building alike: once the event is rarer than the drain design return period (${rpLabel(REFERENCE_JUDGEMENT.drainDesignRp)} unless the offer states one), the site is taken to hold ${fmtNum(REFERENCE_JUDGEMENT.drainOverloadDepthM)} m of water, whether or not its own drains would cope.`,
+  "The basement damage ratios, the outage days, the value below ground and a year's rent or revenue when the offer does not state them, the uncertainty loading, the cost of capital and the minimum rate are assumptions, not measurements. Sump pumps, backup power, flood barriers and non-return valves are recorded and asked about, and change no figure.",
+  PORTFOLIO_DRIVERS_LINE,
+  `The comparison with Oasis LMF refers to ${LOSS_MODE_LABELS.depth_only} on reference assumptions. The loss drivers beyond depth are not in the Oasis run.`,
+  `With ${LOSS_MODE_LABELS.depth_only} selected, a point the maps show as dry gives a loss of zero. That is a statement about the maps at those coordinates, not a finding that the building cannot flood.`,
 ];
 
 /** The limits that only apply to the Nairobi susceptibility maps: left out for a dataset of measured depths. */
@@ -101,6 +114,193 @@ export interface ExportExtras {
   dataSource?: string | null;
   /** US dollar prices per million tokens when they are set. Without them no cost is written. */
   prices?: Prices | null;
+  /**
+   * The assumptions beyond flood depth and who set each: the `judgement` every step receives. Left
+   * out, the offer's own block is used, and without an offer the figures the portfolio was run on.
+   */
+  judgement?: FocusJudgement | null;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Losses beyond flood depth: the mode, the assumptions and the checks, as the record states them
+// ---------------------------------------------------------------------------------------------
+
+/** What the mode in force means, as one sentence to put after its name. */
+export function lossModeLine(mode: LossMode): string {
+  return mode === "all_drivers"
+    ? `A loss is the sum of the loss drivers (${DRIVER_IDS.map((id) => DRIVER_LABELS[id]).join(", ")}), then the deductible and the limit.`
+    : "A loss comes from the depth at the building's point and drainage ponding alone. The other loss drivers are off, so the assumptions beyond flood depth are listed but not in use.";
+}
+
+/** Why the portfolio carries three of the six drivers. The one sentence lives in labels.ts; it is in LIMITS, so each record says it once. */
+export { PORTFOLIO_DRIVERS_LINE };
+
+const METRE_KEYS: (keyof OfferJudgement)[] = ["bufferRadiusM", "ingressThresholdM", "drainOverloadDepthM"];
+const isLadder = (key: keyof OfferJudgement) => BASEMENT_LADDER.includes(key) || OUTAGE_LADDER.includes(key);
+
+/** One assumption beyond flood depth with its unit: "250 m", "15%", "10 days", "1-in-25 (4% a year)", "0.1 per mille". */
+export function judgementText(key: keyof OfferJudgement, value: number): string {
+  if (!Number.isFinite(value)) return "n/a";
+  if (key === "drainDesignRp") return rpWithChance(value);
+  if (key === "minimumRatePerMille") return `${fmtNum(value, 3)} per mille`;
+  if (METRE_KEYS.includes(key)) return `${fmtNum(value)} m`;
+  if (OUTAGE_LADDER.includes(key)) return `${fmtNum(value, 1)} ${value === 1 ? "day" : "days"}`;
+  return `${fmtNum(value * 100, 1)}%`;
+}
+
+/** The allowed range of one assumption, in the same unit as its value. */
+export function judgementRange(key: keyof OfferJudgement): string {
+  const { min, max } = JUDGEMENT_BOUNDS[key];
+  const range =
+    key === "drainDesignRp"
+      ? `${rpLabel(min)} to ${rpLabel(max)}`
+      : key === "minimumRatePerMille"
+        ? `${fmtNum(min, 3)} to ${fmtNum(max, 3)} per mille`
+        : METRE_KEYS.includes(key)
+          ? `${fmtNum(min)} to ${fmtNum(max)} m`
+          : OUTAGE_LADDER.includes(key)
+            ? `${fmtNum(min, 1)} to ${fmtNum(max, 1)} days`
+            : `${fmtNum(min * 100, 1)}% to ${fmtNum(max * 100, 1)}%`;
+  return isLadder(key) ? `${range}, never below the more frequent rung` : range;
+}
+
+/** Who set a figure. "not recorded" only when a run is exported without the screen's record of it. */
+export type AssumptionSetter = JudgementSetter | "not recorded";
+
+/** The short words for who set a figure, for a table cell: read from the one table in labels.ts (SETTER_WORDS). */
+export const SETTER_LABELS = Object.fromEntries(SETTER_ORDER.map((who) => [who, SETTER_WORDS[who].short])) as Record<AssumptionSetter, string>;
+
+/** One row of the table "Assumptions beyond flood depth". */
+export interface BeyondDepthRow {
+  key: keyof OfferJudgement;
+  /** The assumption's plain name, with its unit. Where the offer states the figure itself, what the offer states. */
+  label: string;
+  /** The figure in force, as the code uses it. */
+  inForce: number;
+  /** The same with its unit. */
+  value: string;
+  reference: number;
+  referenceText: string;
+  range: { min: number; max: number };
+  rangeText: string;
+  setBy: AssumptionSetter;
+  setByText: string;
+  /** Where the figure came from, in a sentence: the offer, the Chair's reason, the screen, or the reference set. */
+  source: string;
+  /** The offer's sentence when the offer set the figure. "" otherwise. */
+  quote: string;
+  /** True for the figures drivers 1 to 3 read, which reach the portfolio's buildings too. */
+  portfolio: boolean;
+  usedFor: string;
+  /** True for the figures the agents may argue. */
+  agentsArgue: boolean;
+}
+
+/**
+ * Every assumption beyond flood depth: its value in force, its allowed range, its source and who
+ * set it. `judgement` is the block every step receives; without one, the figures the portfolio
+ * was run on are listed, and a figure away from its reference value is marked "not recorded".
+ */
+export function beyondDepthAssumptions(judgement: FocusJudgement | null | undefined, deliberation: Deliberation | null, result?: ModelResult | null): BeyondDepthRow[] {
+  const ledger = new Map(judgementLedger(deliberation).map((row) => [row.key, row]));
+  const ran = result?.judgement ?? REFERENCE_JUDGEMENT;
+  return JUDGEMENT_KEYS.map((key) => {
+    const inForce = judgement ? judgement.inForce[key] : ran[key];
+    const setBy: AssumptionSetter = judgement ? judgement.setBy[key] : inForce === REFERENCE_JUDGEMENT[key] ? "reference" : "not recorded";
+    const portfolio = PORTFOLIO_KEYS.includes(key);
+    const agentsArgue = AGENT_JUDGEMENT_KEYS.includes(key);
+    const fromOffer = judgement?.fromOffer[key];
+    const argued = ledger.get(key);
+    const agreed = judgement?.agreed?.[key];
+    const raised = judgement?.raised?.[key];
+    let source: string;
+    if (raised && setBy !== "offer") {
+      // A rung code moved to keep the ladder rising: the figure in force is not its own setter's.
+      source = `${raised.reason} Its own value was ${judgementText(key, raised.from)}.`;
+    } else if (setBy === "offer") {
+      source = `Read from the offer, in place of the assumption.${fromOffer && !fromOffer.quote ? " Typed into the offer's values by the underwriter." : ""}${
+        portfolio && judgement ? ` The portfolio's buildings use the assumption: ${judgementText(key, judgement.assumed[key])}.` : ""
+      }`;
+    } else if (setBy === "agents") {
+      source = `Agreed by the agents.${argued?.reason ? ` The Chair's reason: ${argued.reason}` : ""}${argued?.adjusted ? " Code corrected the Chair's figure: it was outside its range, or below the more frequent rung." : ""}`;
+    } else if (setBy === "typed") {
+      source = "Typed over on screen by the underwriter.";
+    } else if (setBy === "not recorded") {
+      source = "Not the reference value. Who set it was not recorded with this run.";
+    } else if (!agentsArgue) {
+      source = "Reference value. Set on screen only: the agents do not argue it.";
+    } else if (judgement?.agents === "this_offer" && agreed !== undefined) {
+      source = `Reference value. "Reference, no AI" is selected, so the agents' figure of ${judgementText(key, agreed)} is not used.`;
+    } else if (judgement?.agents === "another_offer") {
+      source = "Reference value. The agents argued a different offer, so their figures are not used.";
+    } else {
+      source = "Reference value. The agents have not argued it for this offer.";
+    }
+    return {
+      key,
+      label: setBy === "offer" && fromOffer ? fromOffer.what : JUDGEMENT_LABELS[key],
+      inForce,
+      value: judgementText(key, inForce),
+      reference: REFERENCE_JUDGEMENT[key],
+      referenceText: judgementText(key, REFERENCE_JUDGEMENT[key]),
+      range: JUDGEMENT_BOUNDS[key],
+      rangeText: judgementRange(key),
+      setBy,
+      setByText: SETTER_LABELS[setBy],
+      source,
+      quote: setBy === "offer" ? (fromOffer?.quote ?? "") : "",
+      portfolio,
+      usedFor: portfolio ? "Offer and portfolio" : "Offer only",
+      agentsArgue,
+    };
+  });
+}
+
+/** How many of the assumptions each party set, in words: "2 from the offer, 14 by the agents, 3 reference". */
+export function settersLine(rows: BeyondDepthRow[]): string {
+  return SETTER_ORDER.map((who) => ({ who, n: rows.filter((r) => r.setBy === who).length }))
+    .filter((x) => x.n > 0)
+    .map((x) => `${x.n} ${SETTER_WORDS[x.who].counted}`)
+    .join(", ");
+}
+
+/** The portfolio's loss per event split by driver. null with Depth only, where there is no split. */
+export function portfolioDriverRows(result: ModelResult) {
+  if (result.mode !== "all_drivers") return null;
+  return result.scenarios.flatMap((s) =>
+    s.byDriver
+      ? [
+          {
+            id: s.id,
+            returnPeriod: s.returnPeriod,
+            /** Surrounding flooding: the loss at the depth at the point plus what the buffer adds. */
+            surroundingKes: s.byDriver.pointKes + s.byDriver.surroundingKes,
+            atThePointKes: s.byDriver.pointKes,
+            addedWithinTheBufferKes: s.byDriver.surroundingKes,
+            pondingKes: s.byDriver.pondingKes,
+            overloadKes: s.byDriver.overloadKes,
+            lossKes: s.lossKes,
+          },
+        ]
+      : [],
+  );
+}
+
+/**
+ * The questions for the broker as the record carries them. For an offer outside the maps the
+ * reason and what the model uses meanwhile are left out: both quote an assumption a price would
+ * use, and that offer has no price.
+ */
+export function brokerQuestionRows(offer: OfferFocus | null | undefined): { id: string; question: string; why: string; assumes: BrokerQuestion["assumes"] }[] {
+  if (!offer) return [];
+  return offer.questions.map((q) => ({ id: q.id, question: q.question, why: offer.outside ? "" : q.why, assumes: offer.outside ? null : q.assumes }));
+}
+
+/** What one figure rests on, in a few words: the offer with its sentence, an assumption, or the loaded data. */
+export function driverSourceText(source: DriverSource): string {
+  if (source.kind === "offer") return `Offer: ${source.what}${source.quote ? `, "${source.quote.replace(/\s+/g, " ").trim()}"` : ""}`;
+  if (source.kind === "assumption") return `Assumption: ${source.what}`;
+  return `Model data: ${source.what}`;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -177,8 +377,36 @@ function offerRecord(offer: OfferFocus, decision: DecisionRecord | null | undefi
       tivKes: b.tivKes,
       tivFrom: b.tivFrom,
     })),
-    modelUsed: { dataset: offer.datasetName, hazardKind: offer.hazardKind, drainageOn: offer.drainageOn, assumptionsInForce: offer.assumptionsInForce },
+    modelUsed: { dataset: offer.datasetName, hazardKind: offer.hazardKind, drainageOn: offer.drainageOn, assumptionsInForce: offer.assumptionsInForce, lossesFrom: offer.mode, lossesFromLabel: LOSS_MODE_LABELS[offer.mode] },
     terms: { deductible: offer.terms.deductible, limit: offer.terms.limit, asNumbers: offer.terms.policy, floodCover: offer.terms.floodCover },
+    // What to ask the broker: every value that matters to the price and is not stated. Never a guess.
+    brokerQuestions: brokerQuestionRows(offer),
+    // The loss drivers under the mode in force. null unless the offer is priced: an offer outside the maps carries no figure.
+    lossDrivers: offer.drivers
+      ? {
+          mode: offer.drivers.mode,
+          insuredValueKes: offer.drivers.tivKes,
+          buildings: offer.drivers.buildings,
+          // For an offer with several buildings: whose depths, damage ratios and components the rows below carry.
+          depthsFor: offer.drivers.depthsFor,
+          // The split of the insured value as the offer states it, its total, and whether that agrees with the insured value.
+          statedValueSplit: offer.drivers.valueSplit,
+          bufferRadiusM: offer.drivers.bufferRadiusM,
+          drainDesign: offer.drivers.drainDesign,
+          basement: offer.drivers.basement,
+          interruptionCover: offer.drivers.interruptionCover,
+          // Each driver: whether it applies, how it is worked out and what it rests on.
+          drivers: offer.drivers.lines,
+          // One row per return period: the water at the site, each driver's ground-up loss, then the deductible and the limit.
+          perReturnPeriod: offer.drivers.perReturnPeriod,
+          components: offer.drivers.components,
+          averageAnnualLossKes: offer.drivers.aal,
+          loss100: offer.drivers.loss100,
+          firstReturnPeriod: offer.drivers.firstReturnPeriod,
+          // Modelled average annual loss by driver, uncertainty, capital load, then the minimum rate as a floor.
+          premiumBuildUp: offer.drivers.premium,
+        }
+      : null,
     site: offer.site ? { ...offer.site, neighbours: { radiusM: offer.site.neighbours.radiusM, count: offer.site.neighbours.count, tivKes: offer.site.neighbours.tivKes, nearestM: offer.site.neighbours.nearestM } } : null,
     // No loss field exists unless the offer is priced: an offer outside the maps carries none.
     price: price
@@ -186,10 +414,30 @@ function offerRecord(offer: OfferFocus, decision: DecisionRecord | null | undefi
           pricedBuildings: price.pricedCount,
           building: price.building,
           total: price.total,
+          // The same offer with Depth only, whatever the mode in force.
+          depthOnly: price.depthOnly,
           portfolio: price.portfolio,
-          underEachSetOfAssumptions: price.assumptions.map((a) => ({ id: a.id, label: a.label, inForce: a.inForce, loss100GrossKes: a.loss100GrossKes, loss100GroundUpKes: a.loss100GroundUpKes, loss100Extrapolated: a.loss100Extrapolated, aalGrossKes: a.aalGrossKes, aalGroundUpKes: a.aalGroundUpKes, ratePerMilleGross: a.ratePerMilleGross })),
+          underEachSetOfAssumptions: price.assumptions.map((a) => ({
+            id: a.id,
+            label: a.label,
+            inForce: a.inForce,
+            beyondDepthAssumptions: a.judgement,
+            beyondDepthAssumptionsFromAgents: a.judgementFromAgents,
+            loss100GrossKes: a.loss100GrossKes,
+            loss100GroundUpKes: a.loss100GroundUpKes,
+            loss100Extrapolated: a.loss100Extrapolated,
+            aalGrossKes: a.aalGrossKes,
+            aalGroundUpKes: a.aalGroundUpKes,
+            ratePerMilleGross: a.ratePerMilleGross,
+            aalGrossByDriverKes: a.aalGrossByDriverKes,
+            floodPremiumKes: a.floodPremiumKes,
+            floodRatePerMille: a.floodRatePerMille,
+            premiumSetBy: a.premiumSetBy,
+            depthOnly: a.depthOnly,
+          })),
         }
       : null,
+    // The offer's checks, its three loss driver checks among them once it is priced.
     checks: offer.checks,
     flags: offer.flags,
     suggestedConditions: offer.conditions,
@@ -200,17 +448,34 @@ function offerRecord(offer: OfferFocus, decision: DecisionRecord | null | undefi
 /** The complete record of a run: inputs, assumptions, prompts, replies, results and checks, and the offer when one has been read. */
 export function buildAudit(session: Session, active: Active, deliberation: Deliberation | null, checks: Check[], log: LogEntry[], terms: TermsResult, extras: ExportExtras = {}) {
   const { offer, decision, oasis, dataSource, prices } = extras;
+  const mode = active.result.mode ?? "depth_only";
+  const judgement = extras.judgement ?? offer?.judgement ?? null;
   return {
     generatedAt: new Date().toISOString(),
     notice: "Synthetic portfolio. Hazard is a proxy unless the dataset carries measured depths. Not a real client's holdings.",
     dataset: { name: session.dataset.name, hazardKind: session.dataset.hazardKind, scenarios: session.dataset.scenarios, buildings: session.dataset.buildings.length, source: dataSource ?? null },
+    // The header switch "Losses from": what a loss comes from in every figure of this file.
+    lossesFrom: { mode, label: LOSS_MODE_LABELS[mode], meaning: lossModeLine(mode), portfolio: mode === "all_drivers" ? PORTFOLIO_DRIVERS_LINE : null },
     // The offer with its extraction record, without the document's text. null when no offer has been read.
     offer: offer ? offerRecord(offer, decision) : null,
     ingest: session.report,
     assumptions: { source: active.source, applied: active.params, reference: REFERENCE_PARAMS, jrcCurve: JRC_AFRICA_RESIDENTIAL },
+    // Every assumption beyond flood depth: its value in force, its allowed range, its source and who set it.
+    assumptionsBeyondFloodDepth: {
+      inUse: mode === "all_drivers",
+      rows: beyondDepthAssumptions(judgement, deliberation, active.result),
+      // What the portfolio's buildings were run on. null with Depth only, where none of these is read.
+      portfolioRunOn: active.result.judgement ?? null,
+      // The agents' side of the figures they may argue, with the Chair's reason. Empty when they ran without an offer.
+      agentsLedger: judgementLedger(deliberation),
+      typedByTheUnderwriter: judgement?.typed ?? {},
+      statedByTheOffer: judgement?.fromOffer ?? {},
+    },
     results: {
       totalInsuredValueKes: active.result.totalTivKes,
       averageAnnualLossKes: active.result.aalKes,
+      // Per event, drivers 1 to 3 for the portfolio. null with Depth only. Basement ingress and business interruption are not modelled for it.
+      lossByDriver: portfolioDriverRows(active.result),
       scenarios: active.result.scenarios,
       standardLosses: active.result.standardLosses,
       referenceScenarios: session.reference.scenarios.map((s) => ({ id: s.id, returnPeriod: s.returnPeriod, lossKes: s.lossKes })),
@@ -260,26 +525,41 @@ function offerSection(offer: OfferFocus, decision: DecisionRecord | null | undef
   const lines: string[] = [`## The offer`, ``, `**${offer.line.text || offer.documentName}**`, ``, `Document: ${offer.documentName}. ${offer.document.why}`, ``];
   const { price } = offer;
 
+  const drivers = offer.drivers;
+  const questions = brokerQuestionRows(offer);
+  const questionLines = (): string[] => (questions.length === 0 ? [] : [`### Questions for the broker`, ``, `Each is a value that matters to the price and that the document does not state. Nothing is guessed in its place.`, ``, ...questions.map((q) => `- ${cell(q.question)}${q.why ? ` *${cell(q.why)}*` : ""}`), ``]);
+
   if (offer.outside) {
     lines.push(`**${offer.outsideMessage}.** ${offer.coverage ?? ""} No loss figure exists for this offer.`.trim(), ``);
+    lines.push(...questionLines());
     return lines;
   }
-  if (!price) {
+  if (!price || !drivers) {
     lines.push(`**The offer is not priced.** ${offer.statusLine}`, ``);
     for (const w of offer.waiting) lines.push(`- ${cell(w.text)}`);
     if (offer.waiting.length) lines.push(``);
+    lines.push(...questionLines());
     return lines;
   }
 
   const { total, portfolio, building } = price;
+  const all = offer.mode === "all_drivers";
+  const premium = drivers.premium;
   const gross = portfolio.gross;
   if (offer.severalLine) lines.push(offer.severalLine, ``);
   if (offer.building) lines.push(`Location: ${offer.building.locationHow}`, ``);
+  lines.push(`Losses from: **${LOSS_MODE_LABELS[offer.mode]}**. ${lossModeLine(offer.mode)}`, ``);
   lines.push(`| Figure | Value |`, `|---|---|`);
   lines.push(`| Sum insured | ${kes1(total.tivKes)} |`);
   lines.push(`| ${rpWithChance(100)} gross loss${total.loss100Extrapolated ? ", held flat beyond the rarest flood modelled" : ""} | ${orNa(total.loss100GrossKes)} |`);
   lines.push(`| Average annual loss, gross | ${kes1(total.aalGrossKes)} |`);
-  lines.push(`| Pure flood rate, gross | ${fmtNum(total.ratePerMilleGross, 3)} per mille of sum insured, before expense, profit and uncertainty loadings |`);
+  lines.push(`| Pure flood rate, gross | ${fmtNum(total.ratePerMilleGross, 3)} per mille of sum insured: average annual loss over sum insured, before the capital load, expenses and profit |`);
+  if (all) lines.push(`| Flood premium | ${kes1(premium.floodPremiumKes)}, ${fmtNum(premium.floodRatePerMille, 3)} per mille of sum insured, set by ${premium.setBy === "modelled" ? "the modelled figures" : "the minimum rate"} (built up below) |`);
+  if (premium.stated)
+    lines.push(
+      `| The offer's own premium, all risks | ${kes1(premium.stated.premiumKes)}, ${fmtNum(premium.stated.ratePerMille, 3)} per mille of ${premium.stated.partlyPriced ? `the whole offer's sum insured of ${kes1(premium.stated.onTivKes)}` : "sum insured"}${premium.stated.quote ? `: "${cell(premium.stated.quote)}"` : " (typed by the underwriter)"} |`,
+    );
+  if (all) lines.push(`| The same offer with ${LOSS_MODE_LABELS.depth_only} | ${rpLabel(100)} gross loss ${orNa(price.depthOnly.loss100GrossKes)}; average annual loss ${kes1(price.depthOnly.aalGrossKes)} gross |`);
   lines.push(
     gross
       ? `| Change to the portfolio's ${rpLabel(100)} gross loss | ${signedKes(gross.change100Kes)}${gross.change100Share !== null ? ` (${fmtPct(gross.change100Share, 2)})` : ""}: from ${orNa(gross.without100Kes)} to ${orNa(gross.with100Kes)} |`
@@ -287,18 +567,77 @@ function offerSection(offer: OfferFocus, decision: DecisionRecord | null | undef
   );
   lines.push(`| Share of the portfolio's insured value, with the offer in it | ${fmtPct(portfolio.tivShare, 1)} |`, ``);
   if (building.dryAtEveryReturnPeriod) {
-    lines.push(`The model shows no water at this point in any flood modelled${offer.drainageOn ? ", terrain and drainage ponding both" : ""}, so every loss above is zero. That is a statement about the maps at these coordinates, not a finding that the building cannot flood: read the flags below.`, ``);
+    lines.push(`The model shows no water at this site in any flood modelled${offer.drainageOn ? ", terrain and drainage ponding both" : ""}, so every loss above is zero. That is a statement about the maps at these coordinates, not a finding that the building cannot flood: read the flags below.`, ``);
+  } else if (all && building.dryAtPointEveryReturnPeriod) {
+    lines.push(`The maps show no water at the point itself in any flood modelled, so ${LOSS_MODE_LABELS.depth_only} prices this building at zero. The losses above come from the loss drivers that act when the point is dry, set out below.`, ``);
   }
 
   lines.push(`Terms used for the gross loss:`, ``, `- Deductible: ${offer.terms.deductible.text} (${offer.terms.deductible.source})`, `- Limit: ${offer.terms.limit.text} (${offer.terms.limit.source})`, ``);
 
-  lines.push(`The building, flood by flood (${offer.building?.housingLabel ?? HOUSING_LABELS[building.housingClass]}: fragility ${fmtNum(building.fragility)}, damage cap ${fmtNum(building.cap)}):`, ``);
-  lines.push(`| Return period | Depth used | From | Damage ratio | Ground-up | Deductible | Over the limit | Gross |`, `|---|---|---|---|---|---|---|---|`);
-  for (const r of building.perReturnPeriod) {
-    const from = r.depthFrom === "dry" ? "dry on both" : r.depthFrom === "drainage" ? `drainage ponding (terrain ${depth(r.terrainM)})` : `terrain map${r.drainageM > 0 ? ` (ponding ${depth(r.drainageM)})` : ""}`;
-    lines.push(`| ${rpWithChance(r.returnPeriod)} | ${depth(r.depthM)} | ${from} | ${fmtPct(r.damageRatio, 1)}${r.capped ? " (at the cap)" : ""} | ${kes1(r.groundUpKes)} | ${kes1(r.deductibleKes)} | ${kes1(r.overLimitKes)} | ${kes1(r.grossKes)} |`);
+  const rows = drivers.perReturnPeriod;
+  const several = drivers.buildings > 1;
+  lines.push(
+    `### Water at the site`,
+    ``,
+    `Depth in metres at ${offer.building?.name ?? "the building"}, flood by flood (${offer.building?.housingLabel ?? HOUSING_LABELS[building.housingClass]}: fragility ${fmtNum(building.fragility)}, damage cap ${fmtNum(building.cap)}). ${
+      all
+        ? `The buffer is ${fmtInt(drivers.bufferRadiusM)} m around the building; the drains are taken as designed for ${rpWithChance(drivers.drainDesign.returnPeriod)} (${cell(driverSourceText(drivers.drainDesign.source))}).`
+        : "Only the depth at the point and drainage ponding are counted."
+    }`,
+    ``,
+  );
+  lines.push(`| Return period | At the point | Within the buffer | Drainage ponding | Drains overloaded | Depth used | From | Structure's damage ratio |`, `|---|---|---|---|---|---|---|---|`);
+  const fromWords = { point: "depth at the point", buffer: "depth within the buffer", ponding: "drainage ponding", overload: "drain overload", dry: "dry" } as const;
+  for (const r of rows) {
+    const d = r.depths;
+    lines.push(
+      `| ${rpWithChance(r.returnPeriod)} | ${depth(d.pointM)} | ${all ? depth(d.bufferM) : "not counted"} | ${depth(d.pondingM)} | ${all ? (d.overloaded ? `yes (${depth(d.overloadM)})` : "no") : "not counted"} | ${depth(d.surfaceM)} | ${fromWords[r.surfaceFrom]} | ${fmtPct(r.building.damageRatio, 1)}${r.building.capped ? " (at the cap)" : ""} |`,
+    );
   }
   lines.push(``);
+
+  // One column per driver in force, under the name its line carries: with Depth only the first is the depth at the point.
+  const inForce = drivers.lines.filter((line) => line.on);
+  const notInForce = drivers.lines.filter((line) => !line.on);
+  lines.push(`### Loss by driver`, ``, `Ground-up loss of each driver in force${several ? `, the offer's ${drivers.buildings} priced buildings added up` : ""}, then the deductible and the limit on their sum.${notInForce.length > 0 ? ` Not in this price: ${notInForce.map((line) => line.label).join(", ")}.` : ""}`, ``);
+  lines.push(`| Return period | ${inForce.map((line) => line.label).join(" | ")} | Ground-up | Deductible | Over the limit | Gross |`, `|---|${inForce.map(() => "---|").join("")}---|---|---|---|`);
+  for (const r of rows) lines.push(`| ${rpWithChance(r.returnPeriod)} | ${inForce.map((line) => kes1(r.groundUpKes[line.id])).join(" | ")} | ${kes1(r.groundUpTotalKes)} | ${kes1(r.deductibleKes)} | ${kes1(r.overLimitKes)} | ${kes1(r.grossKes)} |`);
+  lines.push(`| Average annual loss | ${inForce.map((line) => kes1(drivers.aal.groundUpKes[line.id])).join(" | ")} | ${kes1(drivers.aal.groundUpTotalKes)} | | | ${kes1(drivers.aal.grossTotalKes)} |`, ``);
+  if (all) {
+    lines.push(
+      `${DRIVER_LABELS.surrounding} is the structure's loss at the depth at the point plus what the deeper water within the buffer adds: ${rows.map((r) => `${rpLabel(r.returnPeriod)} ${kes1(r.pointKes)} + ${kes1(r.bufferAddedKes)}`).join("; ")}. The structure is read once on the damage curve, at the deepest water, so no loss is counted twice.`,
+      ``,
+    );
+  }
+  lines.push(`What each driver rests on:`, ``);
+  for (const line of drivers.lines) lines.push(`- **${line.label}** (${line.on ? "in force" : "off"}). ${cell(line.text)} ${line.sources.map((s) => cell(driverSourceText(s))).join("; ")}.`);
+  lines.push(``);
+
+  if (all) {
+    // What each driver rests on is listed once, above: its premium line carries the figure alone.
+    const isDriver = (id: string) => (DRIVER_IDS as readonly string[]).includes(id);
+    lines.push(`### Premium build-up`, ``, premium.caption, ``, `| Line | KES a year | Per mille of sum insured | How |`, `|---|---|---|---|`);
+    for (const line of premium.lines) {
+      const how = isDriver(line.id) ? cell(line.text) : `${cell(line.text)} ${line.sources.map((s) => cell(driverSourceText(s))).join("; ")}`;
+      lines.push(`| ${line.id === "flood_premium" || line.id === "technical" ? `**${line.label}**` : line.label} | ${kes1(line.kes)} | ${fmtNum(line.ratePerMille, 3)} | ${how.trim()} |`);
+    }
+    lines.push(``);
+    lines.push(
+      premium.stated
+        ? `Beside it, the offer's own premium for all risks: ${kes1(premium.stated.premiumKes)}, ${fmtNum(premium.stated.ratePerMille, 3)} per mille. The flood rate above is ${fmtNum(premium.floodRatePerMille, 3)} per mille, ${fmtNum(premium.stated.floodShareOfAllRisks * 100, 1)}% of it.${premium.stated.note ? ` ${premium.stated.note}` : ""}`
+        : `The document states no premium, so no all-risks rate can be set beside the flood rate. It is a question for the broker.`,
+      ``,
+    );
+    const h = premium.history;
+    lines.push(
+      h.usable && h.lossPerYearKes !== null && h.years !== null
+        ? `Sense check, not blended in: the document's own flood loss history is ${kes1(h.totalKes)} over ${fmtNum(h.years, 1)} years (${fmtInt(h.losses.length)} ${h.losses.length === 1 ? "loss" : "losses"}), or ${kes1(h.lossPerYearKes)} a year, beside a modelled average annual loss of ${kes1(h.modelledAalKes)} gross.`
+        : `Sense check: the document's own flood loss history cannot be set beside the modelled loss. ${h.why ?? ""}`.trim(),
+      ``,
+    );
+  }
+
+  lines.push(...questionLines());
 
   lines.push(`### Points to weigh`, ``);
   if (offer.flags.length === 0) lines.push(`No flag was raised.`, ``);
@@ -331,9 +670,11 @@ function offerSection(offer: OfferFocus, decision: DecisionRecord | null | undef
 }
 
 /**
- * The short written note the hackathon asks for: data sources, assumptions, AI features, drainage,
- * insurance terms, the Oasis check and the limits. When a priced offer is passed in, the note
- * opens with it. Works with no extras at all.
+ * The short written note the hackathon asks for: data sources, assumptions (the model's and the
+ * ones beyond flood depth, with who set each), AI features, drainage, insurance terms, the Oasis
+ * check and the limits. When a priced offer is passed in, the note opens with it: its loss by
+ * driver per return period, the premium build-up and the questions for the broker. Works with no
+ * extras at all.
  */
 export function buildNote(session: Session, active: Active, deliberation: Deliberation | null, checks: Check[], terms: TermsResult, extras: ExportExtras = {}): string {
   const { offer, decision, oasis, dataSource, prices } = extras;
@@ -342,8 +683,13 @@ export function buildNote(session: Session, active: Active, deliberation: Delibe
   const p: ModelParams = active.params;
   const isScore = dataset.hazardKind === "score";
   const ledger = deliberation ? buildLedger(REFERENCE_PARAMS, deliberation).filter((row) => isScore || !unusedForDepth(row.path)) : [];
+  const mode: LossMode = r.mode ?? "depth_only";
+  const allDrivers = mode === "all_drivers";
+  const beyond = beyondDepthAssumptions(extras.judgement ?? offer?.judgement ?? null, deliberation, r);
+  const agentsBeyond = judgementLedger(deliberation);
   // The offer's checks are added once, whether or not the caller already put them in the list.
-  const allChecks = [...checks, ...(offer?.checks ?? []).filter((c) => !checks.some((x) => x.id === c.id))];
+  const offerChecks = offer?.checks ?? [];
+  const allChecks = [...checks, ...offerChecks.filter((c) => !checks.some((x) => x.id === c.id))];
   const counts = { pass: allChecks.filter((c) => c.status === "pass").length, warn: allChecks.filter((c) => c.status === "warn").length, fail: allChecks.filter((c) => c.status === "fail").length };
   const rarest = r.scenarios[r.scenarios.length - 1];
   const fromAgents = active.source === "ai";
@@ -400,11 +746,21 @@ export function buildNote(session: Session, active: Active, deliberation: Delibe
   if (isScore) lines.push(`- Depth (m) = score × tier slope × depth scale. Each tier map is rescaled to run 0 to 1, so the tier slope (${r.scenarios.map((s) => `${s.id} ${fmtNum(s.tierSlope, 3)}`).join(", ")}) puts every tier back on the widest tier's scale and depth grows as the event gets rarer. The slopes are fitted from the maps. The score is a susceptibility proxy, so this conversion is assumed.`);
   lines.push(`- Damage ratio = the lower of the damage curve read at depth × fragility, and the cap. Curve points (depth in m: damage): ${JRC_AFRICA_RESIDENTIAL.depthsM.map((d, i) => `${fmtNum(d)}: ${fmtNum(JRC_AFRICA_RESIDENTIAL.damage[i])}`).join(", ")}, with straight lines between them. Fragility and cap per class are our adaptation of that curve.`);
   lines.push(`- Return periods: ${r.scenarios.map((s) => `${s.id} = ${s.returnPeriod} years`).join(", ")}${isScore ? " (assumed)" : " (from the data)"}.`);
-  lines.push(`- Ground-up loss = damage ratio × insured value. Insured values are used as they appear in the file.`);
+  lines.push(`- Ground-up loss = damage ratio × insured value. Insured values are used as they appear in the file.${allDrivers ? ` With ${LOSS_MODE_LABELS.all_drivers} the damage ratio is read at the deepest water the drivers put at the building; the assumptions behind that are in the next table.` : ""}`);
   lines.push(`- Losses at 10, 25, 50, 100 and 250 years are read off the curve by interpolating against the logarithm of the return period. Average annual loss is the area under loss against annual chance, with no loss from events more frequent than the shortest return period and a flat loss beyond the longest.`);
   if (report.tivRatio && Math.abs(report.tivRatio.median - 1) >= 0.05) {
     lines.push(`- **Data discrepancy:** insured values are ${fmtNum(report.tivRatio.median, 1)}× floor area × cost per m². The portfolio totals ${fmtKes(r.totalTivKes)}; the documented formula would give ${fmtKes(r.totalTivKes / report.tivRatio.median)}.`);
   }
+  lines.push(``, `### Assumptions beyond flood depth`, ``);
+  lines.push(
+    `Read at one point, a dry building prices at zero even when the ground around it floods, its drains are overloaded and its plant sits in a basement. So the header switch "Losses from" chooses between ${LOSS_MODE_LABELS.depth_only} and ${LOSS_MODE_LABELS.all_drivers}, which is the default. In force for this note: **${LOSS_MODE_LABELS[mode]}**. ${lossModeLine(mode)}`,
+    ``,
+    `Every figure below is an assumption with a reference value and an allowed range; code keeps each in range and the two ladders rising with rarity. Who set them: ${settersLine(beyond)}.${offer ? "" : " No offer was read, so only the three the portfolio uses matter here."}`,
+    ``,
+    `| Assumption | Value in force | Reference value | Allowed range | Who set it | Source | Used for |`,
+    `|---|---|---|---|---|---|---|`,
+  );
+  for (const row of beyond) lines.push(`| ${row.label} | ${row.value} | ${row.referenceText} | ${row.rangeText} | ${row.setByText} | ${cell(row.source)}${row.quote ? ` "${cell(row.quote)}"` : ""} | ${row.usedFor} |`);
   lines.push(``, `Thresholds behind the points raised on an offer (all assumptions of this app):`, ``);
   lines.push(
     `- Water at the building in a flood of ${rpLabel(FREQUENT_FLOOD_RP)} or more frequent is marked high; rarer water is medium.`,
@@ -440,7 +796,21 @@ export function buildNote(session: Session, active: Active, deliberation: Delibe
   // --- Portfolio results ----------------------------------------------------------------------
   lines.push(heading("Portfolio results"), ``, `| Return period | Scenario | Buildings affected | Ground-up loss | Share of insured value |`, `|---|---|---|---|---|`);
   for (const s of r.scenarios) lines.push(`| ${rpWithChance(s.returnPeriod)} | ${s.id} | ${fmtInt(s.affected)} of ${fmtInt(r.buildingCount)} | ${fmtKes(s.lossKes, 2)} | ${fmtPct(s.lossKes / r.totalTivKes, 2)} |`);
-  lines.push(``, `Total insured value ${fmtKes(r.totalTivKes)} · average annual loss ${fmtKes(r.aalKes, 2)}, ground-up.`, ``);
+  lines.push(``, `Total insured value ${fmtKes(r.totalTivKes)} · average annual loss ${fmtKes(r.aalKes, 2)}, ground-up. Losses from: ${LOSS_MODE_LABELS[mode]}.`, ``);
+  const byDriver = portfolioDriverRows(r);
+  if (byDriver && byDriver.length > 0) {
+    const ran = r.judgement ?? REFERENCE_JUDGEMENT;
+    lines.push(
+      `Loss by driver, ground-up. Every building is read with a buffer of ${judgementText("bufferRadiusM", ran.bufferRadiusM)}, drains designed for ${judgementText("drainDesignRp", ran.drainDesignRp)} and ${judgementText("drainOverloadDepthM", ran.drainOverloadDepthM)} of water when they are overloaded. Each building's loss is read once on its damage curve, at the deepest water, and each driver is credited with what it adds.`,
+      ``,
+      `| Return period | ${DRIVER_LABELS.surrounding} | of which at the point | of which added within the buffer | ${DRIVER_LABELS.ponding} | ${DRIVER_LABELS.overload} | Ground-up loss |`,
+      `|---|---|---|---|---|---|---|`,
+    );
+    for (const row of byDriver) lines.push(`| ${rpWithChance(row.returnPeriod)} | ${fmtKes(row.surroundingKes, 2)} | ${fmtKes(row.atThePointKes, 2)} | ${fmtKes(row.addedWithinTheBufferKes, 2)} | ${fmtKes(row.pondingKes, 2)} | ${fmtKes(row.overloadKes, 2)} | ${fmtKes(row.lossKes, 2)} |`);
+    lines.push(``);
+  } else {
+    lines.push(`With ${LOSS_MODE_LABELS.depth_only} each building's loss comes from the depth at its point and drainage ponding, so there is no split by driver.`, ``);
+  }
 
   // --- Insurance terms ------------------------------------------------------------------------
   lines.push(heading("Insurance terms"), ``, `**${TERMS_NOTICE}.** They apply to the portfolio, and to an offer wherever its document states no term of its own.`, ``);
@@ -486,14 +856,39 @@ export function buildNote(session: Session, active: Active, deliberation: Delibe
       }
       lines.push(``);
     }
+    if (agentsBeyond.length > 0) {
+      const argued = agentsBeyond.filter((row) => row.agreed !== null);
+      const movedBeyond = argued.filter((row) => Math.abs(row.agreed! - row.reference) > 1e-9);
+      const inForce = beyond.filter((row) => row.setBy === "agents").length;
+      lines.push(
+        `With an offer loaded the agents also argued the ${agentsBeyond.length} assumptions beyond flood depth that are theirs to argue: the buffer, the ingress threshold, the basement damage ladder, the share of value below ground, the outage days and the uncertainty loading. ${
+          argued.length === 0
+            ? "The Chair settled none of them, so the reference values stand."
+            : `The Chair settled ${argued.length}; ${movedBeyond.length} moved from the reference value. ${inForce} are in force for the figures in this note.`
+        }`,
+        ``,
+        `| Assumption | Reference | Optimist | Cautious | Agreed | Reason |`,
+        `|---|---|---|---|---|---|`,
+      );
+      const view = (key: keyof OfferJudgement, v: number | null) => (v === null ? "-" : judgementText(key, v));
+      for (const row of agentsBeyond) lines.push(`| ${row.label} | ${judgementText(row.key, row.reference)} | ${view(row.key, row.optimist)} | ${view(row.key, row.cautious)} | ${view(row.key, row.agreed)}${row.adjusted ? " (corrected by code)" : ""} | ${cell(row.reason)} |`);
+      lines.push(``);
+    }
     const failed = ROLES.filter((role) => deliberation.runs[role].status === "error");
     if (failed.length) lines.push(`Agents that did not return a valid reply: ${failed.map((f) => ROLE_LABELS[f]).join(", ")}.`, ``);
   } else {
     lines.push(`The agent panel was not run for this result, so it changed nothing: every figure uses reference values, and the rarest scenario loss is ${fmtKes(rarest.lossKes, 2)}.`, ``);
   }
   if (offer?.price && offer.price.assumptions.length > 1) {
-    lines.push(`The same offer priced under each set of assumptions (gross):`, ``, `| Assumptions | ${rpLabel(100)} loss | Average annual loss | Pure rate per mille |`, `|---|---|---|---|`);
-    for (const a of offer.price.assumptions) lines.push(`| ${a.label}${a.inForce ? " (in force)" : ""} | ${orNa(a.loss100GrossKes)} | ${kes1(a.aalGrossKes)} | ${fmtNum(a.ratePerMilleGross, 3)} |`);
+    lines.push(
+      `The same offer priced under each set of assumptions (gross, ${LOSS_MODE_LABELS[offer.mode]}):`,
+      ``,
+      `| Assumptions | ${rpLabel(100)} loss | Average annual loss | Pure rate per mille | Flood premium | Flood rate per mille | Average annual loss with ${LOSS_MODE_LABELS.depth_only} |`,
+      `|---|---|---|---|---|---|---|`,
+    );
+    for (const a of offer.price.assumptions) {
+      lines.push(`| ${a.label}${a.inForce ? " (in force)" : ""} | ${orNa(a.loss100GrossKes)} | ${kes1(a.aalGrossKes)} | ${fmtNum(a.ratePerMilleGross, 3)} | ${kes1(a.floodPremiumKes)} | ${fmtNum(a.floodRatePerMille, 3)} | ${kes1(a.depthOnly.aalGrossKes)} |`);
+    }
     lines.push(``);
   }
 
@@ -526,6 +921,7 @@ export function buildNote(session: Session, active: Active, deliberation: Delibe
 
   // --- Oasis ----------------------------------------------------------------------------------
   lines.push(heading("Independent check with Oasis LMF"), ``);
+  lines.push(`The comparison refers to ${LOSS_MODE_LABELS.depth_only} on reference assumptions. The loss drivers beyond depth are not in the Oasis run${allDrivers ? ", so its figures are not the ones in the portfolio results above" : ""}.`, ``);
   if (oasis && oasis.dataset === dataset.name) {
     lines.push(
       `The portfolio and the reference assumptions were written as Oasis model files and run through the open-source Oasis engine (oasislmf ${oasis.oasislmfVersion}, run saved ${oasis.generatedAt.slice(0, 10)}). Ground-up, terrain maps only, no insurance terms.`,

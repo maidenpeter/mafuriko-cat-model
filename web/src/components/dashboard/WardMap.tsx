@@ -173,7 +173,7 @@ export function WardMap({ title, wards, rows, top, valueLabel, format = kes1, ma
             {hovered.subcounty ? `, ${hovered.subcounty}` : ""}: {valueLabel.toLowerCase()} <span className="tabular font-medium text-ink">{format(hovered.lossKes)}</span>, {fmtInt(hovered.flooded)} of {fmtInt(hovered.buildings)} buildings flooded
           </>
         ) : (
-          "Point at a ward to read its loss. The numbers match the bars."
+          "Point at a ward to read its loss."
         )}
       </p>
 

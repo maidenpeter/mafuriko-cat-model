@@ -8,12 +8,15 @@
  *   layerSteps(row)               one event from ground-up to net, as waterfall steps
  *   aalChange(reference, agents)  what the agents' assumptions did to the average annual loss
  *   paramChanges(ledger)          the parameters the agents moved away from the reference
+ *   judgementChanges(ledger)      the beyond-depth assumptions the agents moved away from the reference
+ *   driverParts(byDriver, order)  one loss split by driver, as the parts of a stacked bar
  *   hotspotCount(hits)            how many named flood areas the hazard layer flags
  *   chainStatus(checks)           the five stages of the model chain with their check counts
  *   dashboardStepId(step)         which walkthrough step a link on the dashboard opens
- *   droppedFileKind(name, exts)   whether a file given to the offer card is an offer, model data, or neither
+ *   OFFER_FILE_TYPES_TEXT         the kinds of file an offer can be given as, in words
  *   headlineFlags(flags, max)     the few worst points to weigh on an offer, with how many are left over
- *   portfolioChangeText(kes, share)  what an offer adds to a portfolio figure, in words
+ *   portfolioChangeParts(kes, share) what an offer adds to a portfolio figure: the amount and its share, apart
+ *   portfolioChangeText(kes, share)  the same in one phrase
  *   rangePlacement(value, values) where one value sits in a list: below, within or above its range
  *   checkGroups(checks, offer)    every check sorted into the six groups of the Audit step
  */
@@ -187,6 +190,54 @@ export function paramChanges(ledger: { path: string; reference: number; final: n
     .map((row) => ({ path: row.path, reference: row.reference, agreed: row.final, fraction: row.reference !== 0 ? row.final / row.reference - 1 : null, adjusted: row.adjusted ?? false }));
 }
 
+export interface JudgementChange {
+  /** Which beyond-depth assumption. */
+  key: string;
+  /** Its plain name, with the unit. */
+  label: string;
+  reference: number;
+  agreed: number;
+  /** (agreed - reference) / reference. null when the reference value is zero. */
+  fraction: number | null;
+  /** True when code corrected the agents' figure: back into its range, or up so its ladder does not fall. */
+  adjusted: boolean;
+}
+
+/**
+ * The beyond-depth assumptions the agents agreed away from the reference, in the order given.
+ * A figure the Chair did not decide (agreed null) has not moved. JudgementLedgerRow from the agents fits.
+ */
+export function judgementChanges(ledger: { key: string; label: string; reference: number; agreed: number | null; adjusted?: boolean }[]): { moved: JudgementChange[]; of: number } {
+  const moved = ledger.flatMap((row) =>
+    row.agreed !== null && Number.isFinite(row.agreed) && Math.abs(row.agreed - row.reference) > 1e-9
+      ? [{ key: row.key, label: row.label, reference: row.reference, agreed: row.agreed, fraction: row.reference !== 0 ? row.agreed / row.reference - 1 : null, adjusted: row.adjusted ?? false }]
+      : [],
+  );
+  return { moved, of: ledger.length };
+}
+
+export interface DriverPart<Id extends string = string> {
+  id: Id;
+  label: string;
+  kes: number;
+  /** The part's share of the parts added up, 0 to 1. 0 when they add up to nothing. */
+  share: number;
+}
+
+/**
+ * One loss split by driver, as the parts of a stacked bar: each driver in the order asked for, with
+ * its share of the whole. A part that is missing, negative or not a number counts as nothing, so the
+ * shares always add up to 1 (or to 0 when there is no loss).
+ */
+export function driverParts<Id extends string>(byDriverKes: Partial<Record<Id, number>>, order: readonly Id[], labels: Record<Id, string>): { parts: DriverPart<Id>[]; totalKes: number } {
+  const amount = (id: Id) => {
+    const v = byDriverKes[id];
+    return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0;
+  };
+  const totalKes = order.reduce((t, id) => t + amount(id), 0);
+  return { parts: order.map((id) => ({ id, label: labels[id], kes: amount(id), share: totalKes > 0 ? amount(id) / totalKes : 0 })), totalKes };
+}
+
 /** How many of the named flood areas the hazard layer flags. */
 export function hotspotCount(hits: { hit: boolean }[]): { matched: number; total: number } {
   return { matched: hits.filter((h) => h.hit).length, total: hits.length };
@@ -265,19 +316,12 @@ export function dashboardStepId(step: DashboardStep): StepId {
   return DASHBOARD_STEP_IDS[step];
 }
 
-/** What a file given to the offer card is: an offer to read, a zip of model data, an old Word file, or none of these. */
-export type DroppedFileKind = "offer" | "model-data" | "old-word" | "unsupported";
-
 /**
- * Sorts a file by the end of its name, whatever its case. A .zip is model data and a .doc is the old Word
- * format, whatever the list of offer types says. `offerExtensions` are written with their dot: [".docx", ".txt"].
+ * The kinds of file an offer can be given as, as the reader is told them: on the Dashboard's call-out
+ * and on the upload card of the "Price an offer" step. Which files are opened is decided in
+ * lib/offerFiles/kind.ts; this only names them.
  */
-export function droppedFileKind(fileName: string, offerExtensions: readonly string[]): DroppedFileKind {
-  const name = fileName.trim().toLowerCase();
-  if (name.endsWith(".zip")) return "model-data";
-  if (name.endsWith(".doc")) return "old-word";
-  return offerExtensions.some((ext) => name.endsWith(ext.toLowerCase())) ? "offer" : "unsupported";
-}
+export const OFFER_FILE_TYPES_TEXT = "Word (.docx), PDF (.pdf) or text (.txt)";
 
 /** How serious a point to weigh is. The same three words as Severity in lib/decision. */
 type FlagSeverity = "high" | "medium" | "low";
@@ -308,16 +352,23 @@ export function flagCountText(counts: Record<FlagSeverity, number>): string {
 }
 
 /**
- * What an offer adds to a portfolio loss, in words: "+KES 1.2m (+0.4%)", "no change" when the
- * amount is under half a shilling, "not modelled" when there is no figure. The share is left out
- * when it is not known, and written with three decimals when it is under a tenth of a percent.
+ * What an offer adds to a portfolio loss, as two parts for a figure and the line under it:
+ * the amount ("+KES 1.2m", "no change" when it is under half a shilling, "not modelled" when there
+ * is no figure) and its share ("+0.4%", with three decimals when it is under a tenth of a percent).
+ * The share is null when it is not known or there is no amount to take a share of.
  */
-export function portfolioChangeText(changeKes: number | null | undefined, share?: number | null): string {
-  if (changeKes === null || changeKes === undefined || !Number.isFinite(changeKes)) return "not modelled";
-  if (Math.abs(changeKes) < 0.5) return "no change";
+export function portfolioChangeParts(changeKes: number | null | undefined, share?: number | null): { amount: string; share: string | null } {
+  if (changeKes === null || changeKes === undefined || !Number.isFinite(changeKes)) return { amount: "not modelled", share: null };
+  if (Math.abs(changeKes) < 0.5) return { amount: "no change", share: null };
   const sign = changeKes < 0 ? "-" : "+";
-  const part = share !== null && share !== undefined && Number.isFinite(share) ? ` (${sign}${(Math.abs(share) * 100).toFixed(Math.abs(share) < 0.001 ? 3 : 1)}%)` : "";
-  return `${sign}${kes1(Math.abs(changeKes))}${part}`;
+  const known = share !== null && share !== undefined && Number.isFinite(share);
+  return { amount: `${sign}${kes1(Math.abs(changeKes))}`, share: known ? `${sign}${(Math.abs(share) * 100).toFixed(Math.abs(share) < 0.001 ? 3 : 1)}%` : null };
+}
+
+/** The same in one phrase: "+KES 1.2m (+0.4%)", "+KES 1.2m" when the share is not known, "no change", "not modelled". */
+export function portfolioChangeText(changeKes: number | null | undefined, share?: number | null): string {
+  const parts = portfolioChangeParts(changeKes, share);
+  return parts.share ? `${parts.amount} (${parts.share})` : parts.amount;
 }
 
 export interface RangePlacement {

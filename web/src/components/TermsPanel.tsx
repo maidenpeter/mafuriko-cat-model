@@ -13,8 +13,9 @@
  */
 
 import { useId, useState, type ReactNode } from "react";
+import { TERMS_NOTICE } from "@/lib/export";
 import { fmtInt, fmtNum } from "@/lib/format";
-import { kes1 } from "@/lib/labels";
+import { kes1, rpLabel } from "@/lib/labels";
 import { DEFAULT_TERMS, sanitiseTerms, XOL_DEFAULT_ATTACHMENT_RP, XOL_DEFAULT_EXHAUSTION_RP, type InsuranceTerms, type TermsResult } from "@/lib/model/terms";
 import { SourceBadge } from "./charts/ChartFrame";
 import { Button, Card } from "./ui";
@@ -114,7 +115,7 @@ export function TermsPanel({ terms: result, onChange, className = "" }: { terms:
   return (
     <Card title="Insurance terms" aside={<SourceBadge kind="assumption" />} className={className}>
       <div className="@container">
-        <p className="-mt-2 mb-4 text-sm font-medium text-ink">Example terms, not from any real policy or treaty</p>
+        <p className="-mt-2 mb-4 text-sm font-medium text-ink">{TERMS_NOTICE}</p>
 
         <div className="grid gap-6 @5xl:grid-cols-2 @5xl:gap-10">
           <Group title="Each policy" note="Applied building by building. Ground-up loss less the deductible, capped at the limit, is the gross loss.">
@@ -167,8 +168,8 @@ export function TermsPanel({ terms: result, onChange, className = "" }: { terms:
               placeholder={fmtInt(xol.attachmentKes)}
               hint={
                 xol.attachmentIsDefault
-                  ? `default: the retained 1-in-${XOL_DEFAULT_ATTACHMENT_RP} loss, ${kes1(xol.attachmentKes)}`
-                  : `Typed in: ${kes1(xol.attachmentKes)}. The default is the retained 1-in-${XOL_DEFAULT_ATTACHMENT_RP} loss.`
+                  ? `Default: the retained ${rpLabel(XOL_DEFAULT_ATTACHMENT_RP)} loss, ${kes1(xol.attachmentKes)}.`
+                  : `Typed in: ${kes1(xol.attachmentKes)}. The default is the retained ${rpLabel(XOL_DEFAULT_ATTACHMENT_RP)} loss.`
               }
               action={xol.attachmentIsDefault ? undefined : <UseDefault what="excess of loss attachment" onClick={() => set({ xolAttachmentKes: null })} />}
             />
@@ -181,8 +182,8 @@ export function TermsPanel({ terms: result, onChange, className = "" }: { terms:
               placeholder={fmtInt(xol.limitKes)}
               hint={
                 xol.limitIsDefault
-                  ? `default: the retained 1-in-${XOL_DEFAULT_EXHAUSTION_RP} loss less the attachment, ${kes1(xol.limitKes)}`
-                  : `Typed in: ${kes1(xol.limitKes)}. The default is the retained 1-in-${XOL_DEFAULT_EXHAUSTION_RP} loss less the attachment.`
+                  ? `Default: the retained ${rpLabel(XOL_DEFAULT_EXHAUSTION_RP)} loss less the attachment, ${kes1(xol.limitKes)}.`
+                  : `Typed in: ${kes1(xol.limitKes)}. The default is the retained ${rpLabel(XOL_DEFAULT_EXHAUSTION_RP)} loss less the attachment.`
               }
               action={xol.limitIsDefault ? undefined : <UseDefault what="excess of loss limit" onClick={() => set({ xolLimitKes: null })} />}
             />

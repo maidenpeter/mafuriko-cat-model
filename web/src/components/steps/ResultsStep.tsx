@@ -2,18 +2,23 @@
 
 import { useMemo, useState } from "react";
 import type { Deliberation } from "@/lib/agents/orchestrate";
+import { countFlags, emptyDecision, EVIDENCE_LABELS, SEVERITY_LABELS, SEVERITY_ORDER, sortFlags, toggleCondition, type DecisionRecord, type Severity } from "@/lib/decision";
+import { buildDecisionNoteHtml, decisionNoteFileName, type DecisionNoteInput } from "@/lib/decisionNote";
 import { fmtInt, fmtKes, fmtNum, fmtPct } from "@/lib/format";
+import { isPriced, type OfferFocusProps, type PricedFocus } from "@/lib/offer/focus";
 import { EP_HELP, annualChance, kes1, pct1, rpLabel, rpWithChance } from "@/lib/labels";
 import { lossAtReturnPeriod, STANDARD_RETURN_PERIODS } from "@/lib/model/financial";
 import type { TermsResult } from "@/lib/model/terms";
 import { HOUSING_CLASSES, HOUSING_LABELS, type ModelResult } from "@/lib/model/types";
 import type { Active, Session } from "@/lib/session";
-import { STEP_NAMES, stepKicker } from "@/lib/steps";
+import { STEP_NAMES, stepKicker, type StepId } from "@/lib/steps";
+import pkg from "../../../package.json";
 import { ChartFrame, SourceBadge, SourceLine, type ChartSource } from "../charts/ChartFrame";
 import { Figure } from "../charts/Figure";
 import { LineChart, valueAt, type Point } from "../charts/LineChart";
+import { DecisionPanel } from "../DecisionPanel";
 import { OasisCheck } from "../OasisCheck";
-import { Card, Note, Segmented, StepHeader, Tag } from "../ui";
+import { Button, Card, Note, Segmented, StepHeader, Tag } from "../ui";
 import { CLASS_COLORS } from "./DataStep";
 
 const curve = (r: ModelResult): Point[] => r.scenarios.map((s) => ({ x: s.returnPeriod, y: s.lossKes }));
@@ -22,14 +27,7 @@ const RP_TICKS = [2, 5, ...STANDARD_RETURN_PERIODS, 500, 1000];
 const ticksBetween = (xs: number[]) => RP_TICKS.filter((x) => x >= Math.min(...xs) && x <= Math.max(...xs));
 const snapPoints = (xs: number[], ticks: number[]) => [...new Set([...xs, ...ticks])].sort((a, b) => a - b);
 
-export function ResultsStep({
-  session,
-  active,
-  deliberation,
-  engineSession,
-  terrainResult,
-  terms,
-}: {
+interface PortfolioProps {
   session: Session;
   active: Active;
   deliberation: Deliberation | null;
@@ -39,7 +37,440 @@ export function ResultsStep({
   terrainResult?: ModelResult | null;
   /** The insurance terms applied to the result in force: ground-up, gross and net for every event. */
   terms: TermsResult;
+}
+
+interface Props extends PortfolioProps, OfferFocusProps {
+  /** The underwriter's decision on the offer, kept by the walkthrough so it survives leaving the step. */
+  decision?: DecisionRecord;
+  onDecision?: (next: DecisionRecord) => void;
+  /** Where the model data came from, for the foot of the decision note. */
+  dataSource?: string;
+  /** Opens another step of the walkthrough. */
+  onOpenStep?: (id: StepId) => void;
+}
+
+type View = "offer" | "portfolio";
+
+/**
+ * With a priced offer in Offer mode this is the underwriter's decision page, and the portfolio's
+ * results are the second view of the same step. Without one it shows the portfolio's results.
+ */
+export function ResultsStep({ focus, offerFocus, decision, onDecision, dataSource, onOpenStep, ...portfolio }: Props) {
+  const [view, setView] = useState<View>("offer");
+  // The walkthrough owns the record. This one only stands in if the step is ever used without it.
+  const [ownDecision, setOwnDecision] = useState<DecisionRecord>(emptyDecision);
+  const onOffer = Boolean(focus) && view === "offer";
+
+  return (
+    <div>
+      <StepHeader kicker={stepKicker("results")} title={STEP_NAMES.results}>
+        {onOffer
+          ? "Whether to take this business, and on what terms: the figures, the points to weigh, and the decision you record."
+          : "What an underwriter needs: how large the loss could be at each level of rarity, what an average year costs, and where the loss comes from."}
+      </StepHeader>
+
+      {focus && (
+        <div className="mb-4">
+          <Segmented<View> label="View" value={view} onChange={setView} options={[{ value: "offer", label: "This offer" }, { value: "portfolio", label: "Portfolio" }]} />
+        </div>
+      )}
+      {!focus && offerFocus && (
+        <div className="mb-4">
+          <Note tone={offerFocus.outside || offerFocus.waiting.length > 0 ? "warn" : "info"}>
+            <span className="font-semibold text-ink">{offerFocus.line.insured ?? offerFocus.documentName}. </span>
+            {offerFocus.outside
+              ? `${offerFocus.outsideMessage}. There is no decision page for it; the portfolio's results are below.`
+              : isPriced(offerFocus)
+                ? "This offer is priced. Switch to Offer in the header for its decision page."
+                : `${offerFocus.statusLine} Its decision page opens once it is priced; the portfolio's results are below.`}
+            {!offerFocus.outside && !isPriced(offerFocus) && onOpenStep && (
+              <> <StepLink id="offer" onOpenStep={onOpenStep} /></>
+            )}
+          </Note>
+        </div>
+      )}
+
+      {focus && onOffer ? (
+        <OfferDecision
+          focus={focus}
+          decision={decision ?? ownDecision}
+          onDecision={onDecision ?? setOwnDecision}
+          dataSource={dataSource}
+          onOpenStep={onOpenStep}
+        />
+      ) : (
+        <PortfolioResults {...portfolio} />
+      )}
+    </div>
+  );
+}
+
+/** A step's name as a link that opens it. */
+function StepLink({ id, onOpenStep }: { id: StepId; onOpenStep?: (id: StepId) => void }) {
+  if (!onOpenStep) return <span className="font-medium text-ink">{STEP_NAMES[id]}</span>;
+  return (
+    <button type="button" onClick={() => onOpenStep(id)} className="font-medium text-ink underline underline-offset-2 hover:opacity-80">
+      {STEP_NAMES[id]}
+    </button>
+  );
+}
+
+const SEVERITY_COLOR: Record<Severity, string> = { high: "var(--critical)", medium: "var(--warning)", low: "var(--muted)" };
+
+/** Severity as a shape and its word: a triangle for high, a diamond for medium, a ring for low. */
+function SeverityMark({ severity }: { severity: Severity }) {
+  const color = SEVERITY_COLOR[severity];
+  return (
+    <span className="inline-flex w-20 shrink-0 items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-ink">
+      <svg viewBox="0 0 16 16" aria-hidden className="shrink-0" style={{ width: "1rem", height: "1rem" }}>
+        {severity === "high" && <path d="M8 1.5l7 12.5H1z" fill={color} />}
+        {severity === "medium" && <path d="M8 1.5l6.5 6.5L8 14.5 1.5 8z" fill={color} />}
+        {severity === "low" && <circle cx="8" cy="8" r="5.5" fill="none" stroke={color} strokeWidth="2" />}
+      </svg>
+      {SEVERITY_LABELS[severity]}
+    </span>
+  );
+}
+
+const ratePerMille = (rate: number) => `${fmtNum(rate, rate !== 0 && Math.abs(rate) < 0.1 ? 4 : 2)} per mille`;
+const signedKes = (v: number) => (Math.abs(v) < 0.5 ? "no change" : `${v < 0 ? "-" : "+"}${kes1(Math.abs(v))}`);
+const signedShare = (f: number) => `${f < 0 ? "-" : "+"}${fmtPct(Math.abs(f), Math.abs(f) < 0.001 ? 3 : 1)}`;
+
+/** The decision page for one priced offer. Every figure is read from the focus; nothing is priced here. */
+function OfferDecision({
+  focus,
+  decision,
+  onDecision,
+  dataSource,
+  onOpenStep,
+}: {
+  focus: PricedFocus;
+  decision: DecisionRecord;
+  onDecision: (next: DecisionRecord) => void;
+  dataSource?: string;
+  onOpenStep?: (id: StepId) => void;
 }) {
+  const { line, terms, conditions } = focus;
+  const { total, portfolio, building } = focus.price;
+  const [printBlocked, setPrintBlocked] = useState(false);
+
+  const usingAi = focus.assumptionsInForce === "ai";
+  const basis = usingAi ? "ai" : "assumption";
+  const basisText = usingAi ? "Assumptions agreed by the agents" : "Reference assumptions";
+  const exampleTerms = terms.deductible.source === "example terms" || terms.limit.source === "example terms";
+  const flags = sortFlags(focus.flags);
+  const counts = countFlags(flags);
+  const flagTitle = new Map(flags.map((f) => [f.id, f.title]));
+  const subject = focus.several ? "this offer" : "this building";
+
+  // The portfolio comparison after policy terms where it could be worked out, otherwise before them.
+  const change = portfolio.gross
+    ? { basis: "gross", kes: portfolio.gross.change100Kes, share: portfolio.gross.change100Share, without: portfolio.gross.without100Kes, withOffer: portfolio.gross.with100Kes }
+    : { basis: "ground-up", kes: portfolio.loss100ChangeKes, share: portfolio.loss100ChangeShare, without: portfolio.without.loss100Kes, withOffer: portfolio.with.loss100Kes };
+
+  const groundUp: Point[] = total.curve.map((p) => ({ x: p.returnPeriod, y: p.groundUpKes }));
+  const gross: Point[] = total.curve.map((p) => ({ x: p.returnPeriod, y: p.grossKes }));
+  const xs = total.curve.map((p) => p.returnPeriod);
+  const ticks = ticksBetween(xs);
+  const noLoss = total.curve.every((p) => !(p.groundUpKes > 0));
+  const anyHeldFlat = total.standard.some((l) => l.extrapolated);
+
+  const sources: ChartSource[] = [
+    { kind: "real", text: focus.hazardKind === "score" ? "Hazard maps; depth is an assumed scale on their score" : "Flood depth maps" },
+    { kind: basis, text: usingAi ? "Hazard and damage assumptions agreed by the agents" : "Reference hazard and damage assumptions" },
+    focus.document.path === "model"
+      ? { kind: "ai", text: "Sum insured and terms read from the offer document, each checked against its text by code" }
+      : { kind: "real", text: "Sum insured and terms read from the offer document by fixed rules" },
+    ...(exampleTerms ? [{ kind: "assumption" as const, text: "Example terms where the document states none" }] : []),
+  ];
+
+  const note = (): DecisionNoteInput => ({
+    offer: {
+      insured: line.insured ?? focus.documentName,
+      location: line.location ?? "location not stated",
+      sumInsuredKes: line.sumInsuredKes,
+      coverSought: [line.cover, line.period].filter(Boolean).join(", ") || "not stated",
+    },
+    figures: {
+      grossLoss100Kes: total.loss100GrossKes,
+      averageAnnualLossKes: total.aalGrossKes,
+      pureRatePerMille: total.ratePerMilleGross,
+      portfolioChange100Kes: change.kes,
+      portfolioChange100Fraction: change.share,
+    },
+    lossByReturnPeriod: total.standard.filter((l) => l.groundUpKes !== null).map((l) => ({ returnPeriodYears: l.returnPeriod, groundUpKes: l.groundUpKes, grossKes: l.grossKes })),
+    flags,
+    conditions: conditions.map((c) => ({ id: c.id, text: c.text })),
+    // A draft is not a decision: until it is recorded the note says so, and keeps the note text and the ticks.
+    decision: decision.recordedAt ? decision : { ...decision, choice: null },
+    terms: {
+      source: exampleTerms ? "example" : "document",
+      lines: [
+        { label: `Deductible (${terms.deductible.source})`, value: terms.deductible.text },
+        { label: `Limit (${terms.limit.source})`, value: terms.limit.text },
+        ...(line.cover ? [{ label: "Flood cover asked for", value: line.cover }] : []),
+        ...(line.period ? [{ label: "Policy period", value: line.period }] : []),
+      ],
+    },
+    footer: {
+      modelVersion: pkg.version,
+      dataSource: `${dataSource ?? focus.datasetName}${focus.drainageOn ? ", drainage ponding on" : ", terrain flooding only"}`,
+      assumptions: usingAi ? "agents" : "reference",
+    },
+  });
+
+  const download = () => {
+    const input = note();
+    const url = URL.createObjectURL(new Blob([buildDecisionNoteHtml(input)], { type: "text/html;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = decisionNoteFileName(input.offer.insured, new Date());
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const print = () => {
+    const win = window.open("", "_blank");
+    setPrintBlocked(!win);
+    if (!win) return;
+    win.document.open();
+    win.document.write(buildDecisionNoteHtml(note()));
+    win.document.close();
+    win.focus();
+    win.print();
+  };
+
+  return (
+    <div>
+      <Card>
+        <dl className="grid grid-cols-[repeat(auto-fit,minmax(min(14rem,100%),1fr))] gap-x-8 gap-y-3">
+          {[
+            { label: "Insured", value: line.insured ?? "Not stated" },
+            { label: "Location", value: line.location ?? "Not stated" },
+            { label: "Sum insured", value: line.sumInsuredKes !== null ? fmtKes(line.sumInsuredKes) : "Not stated" },
+            { label: "Cover sought", value: [line.cover, line.period].filter(Boolean).join(", ") || "Not stated" },
+          ].map((item) => (
+            <div key={item.label} className="min-w-0">
+              <dt className="text-xs text-muted">{item.label}</dt>
+              <dd className="tabular wrap-anywhere text-base font-semibold text-ink">{item.value}</dd>
+            </div>
+          ))}
+        </dl>
+        {focus.severalLine && <p className="mt-3 max-w-3xl text-sm leading-relaxed text-ink-2">{focus.severalLine}</p>}
+      </Card>
+
+      <div className="mt-4 grid grid-cols-[repeat(auto-fit,minmax(min(15rem,100%),1fr))] gap-4">
+        <Figure
+          strong
+          label={`Gross loss in a ${rpWithChance(100)} flood`}
+          value={total.loss100GrossKes !== null ? kes1(total.loss100GrossKes) : "not modelled"}
+          sub={
+            total.loss100GrossKes === null
+              ? "A 1-in-100 flood is more frequent than anything modelled under these assumptions."
+              : `${pct1(total.tivKes > 0 ? total.loss100GrossKes / total.tivKes : 0)} of the sum insured${total.loss100Extrapolated ? ", held flat beyond the rarest flood modelled" : ""}. Ground-up ${kes1(total.loss100GroundUpKes)}.`
+          }
+          source={basis}
+          sourceText={`${basisText}. Terms: ${terms.summary.toLowerCase()}`}
+        />
+        <Figure
+          label="Average annual loss, gross"
+          value={kes1(total.aalGrossKes)}
+          sub={`Ground-up ${kes1(total.aalGroundUpKes)}.`}
+          source={basis}
+          sourceText={basisText}
+        />
+        <Figure
+          label="Pure flood rate, gross"
+          value={ratePerMille(total.ratePerMilleGross)}
+          sub="Before expense, profit and uncertainty loadings."
+          source={basis}
+          sourceText={basisText}
+        />
+        <Figure
+          label={`Change to the portfolio's 1-in-100 loss, ${change.basis}`}
+          value={change.kes === null ? "not modelled" : `${signedKes(change.kes)}${change.share !== null && Math.abs(change.kes) >= 0.5 ? ` (${signedShare(change.share)})` : ""}`}
+          sub={
+            change.kes === null
+              ? "A 1-in-100 loss cannot be read for the portfolio under these assumptions."
+              : `From ${kes1(change.without)} to ${kes1(change.withOffer)} with the offer added.${portfolio.gross && portfolio.loss100ChangeKes !== null ? ` Ground-up: ${signedKes(portfolio.loss100ChangeKes)}.` : ""}`
+          }
+          source="synthetic"
+          sourceText={portfolio.gross ? "Synthetic portfolio on example terms" : "Synthetic portfolio"}
+        />
+      </div>
+
+      <ChartFrame
+        className="mt-4"
+        title={`Loss by return period for ${subject}: ground-up and gross`}
+        subtitle="Each point is the loss from one flood of that rarity. The gap between the two lines is what the deductible and the limit take off. Further right is rarer."
+        help={noLoss ? undefined : EP_HELP}
+        sources={sources}
+        aside={<Tag kind={basis}>{usingAi ? "Agreed assumptions in force" : "Reference assumptions in force"}</Tag>}
+      >
+        <div className="grid gap-x-8 gap-y-4 @6xl:grid-cols-[minmax(0,1fr)_minmax(26rem,0.7fr)]">
+          <div className="min-w-0">
+            {noLoss ? (
+              <Note>
+                <span className="font-semibold text-ink">No loss at any modelled return period, so there is no curve to draw.</span>{" "}
+                {building.dryAtEveryReturnPeriod
+                  ? `The depth used at ${subject === "this offer" ? "the building followed" : "the building"} is zero in every flood modelled${building.nearestWetM !== null && building.nearestWetM > 0 ? `, with mapped flood water ${fmtInt(building.nearestWetM)} m away` : ""}.`
+                  : "The damage curve gives no loss at the depths read."}{" "}
+                The depths are in <StepLink id="hazard" onOpenStep={onOpenStep} />. A figure of KES 0 is the model&rsquo;s answer at this exact point, not proof that the site cannot flood: weigh the points below.
+              </Note>
+            ) : (
+              <LineChart
+                height={300}
+                endLabels
+                xScale="log"
+                xTicks={ticks}
+                xFormat={rpLabel}
+                xSubFormat={annualChance}
+                tooltipTitle={(x) => `${rpWithChance(x)} flood`}
+                yFormat={kes1}
+                yLabel="Loss from one event (KES)"
+                xLabel="Return period (years), with the chance of a loss this large or larger in any year. Further right is rarer."
+                ariaLabel={`Ground-up and gross loss to ${subject} in KES against return period in years`}
+                hoverXs={snapPoints(xs, ticks)}
+                series={[
+                  { id: "ground-up", label: "Ground-up loss", endLabel: "Ground-up", color: "var(--series-3)", points: groundUp, dash: "2 6", marker: "triangle" },
+                  { id: "gross", label: "Gross loss, after the deductible and limit", endLabel: "Gross", color: "var(--series-2)", points: gross, marker: "square" },
+                ]}
+              />
+            )}
+          </div>
+          <div className="flex min-w-0 flex-col">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-96 text-sm">
+                <caption className="pb-2 text-left text-sm font-medium text-ink">Loss at each standard return period, KES</caption>
+                <thead className="text-xs text-muted">
+                  <tr>
+                    <th className="pb-2 text-left font-medium">Return period (chance a year)</th>
+                    <th className="pb-2 pl-3 text-right font-medium">Ground-up</th>
+                    <th className="pb-2 pl-3 text-right font-medium">Gross</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {total.standard.map((l) => {
+                    const cell = (v: number | null) => (v === null ? "not modelled" : `${kes1(v)}${l.extrapolated ? " †" : ""}`);
+                    return (
+                      <tr key={l.returnPeriod}>
+                        <td className="tabular py-2 text-ink">{rpWithChance(l.returnPeriod)}</td>
+                        <td className="tabular whitespace-nowrap py-2 pl-3 text-right text-ink-2">{cell(l.groundUpKes)}</td>
+                        <td className="tabular whitespace-nowrap py-2 pl-3 text-right font-semibold text-ink">{cell(l.grossKes)}</td>
+                      </tr>
+                    );
+                  })}
+                  <tr>
+                    <td className="py-2 text-ink">Average annual loss</td>
+                    <td className="tabular whitespace-nowrap py-2 pl-3 text-right text-ink-2">{kes1(total.aalGroundUpKes)}</td>
+                    <td className="tabular whitespace-nowrap py-2 pl-3 text-right font-semibold text-ink">{kes1(total.aalGrossKes)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-2 max-w-3xl text-xs leading-relaxed text-muted">
+              {total.standard.some((l) => l.groundUpKes === null) ? "“Not modelled” means the event is more frequent than the most frequent flood modelled. " : ""}
+              {anyHeldFlat ? "† held flat beyond the rarest flood modelled. " : ""}
+              The depth, damage ratio, deductible and limit behind each figure are in <StepLink id="loss" onOpenStep={onOpenStep} />.
+            </p>
+          </div>
+        </div>
+      </ChartFrame>
+
+      {/* On a wide screen the points to weigh sit beside what the underwriter does about them. */}
+      <div className="mt-4 grid items-start gap-4 @6xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+        <Card
+          title="Points for the underwriter"
+          aside={
+            <span className="text-xs text-muted">
+              {flags.length === 0 ? "None raised" : SEVERITY_ORDER.filter((s) => counts[s] > 0).map((s) => `${counts[s]} ${SEVERITY_LABELS[s].toLowerCase()}`).join(" · ")}, most severe first
+            </span>
+          }
+        >
+          {flags.length === 0 ? (
+            <p className="text-sm leading-relaxed text-ink-2">The checks and the document raise no point on this offer.</p>
+          ) : (
+            <ul className="-mt-2 divide-y divide-line">
+              {flags.map((flag) => (
+                <li key={flag.id} className="flex flex-wrap gap-x-3 gap-y-1 py-3 @xl:flex-nowrap">
+                  <span className="mt-0.5"><SeverityMark severity={flag.severity} /></span>
+                  <div className="min-w-0 basis-full wrap-anywhere @xl:basis-auto">
+                    <div className="text-sm font-semibold text-ink">{flag.title}</div>
+                    {flag.detail && flag.detail !== flag.evidence.text && <p className="mt-0.5 max-w-3xl text-sm leading-relaxed text-ink-2">{flag.detail}</p>}
+                    <p className="mt-1.5 max-w-3xl border-l-2 border-axis pl-3 text-sm leading-relaxed text-ink-2">
+                      <span className="mr-1.5 text-xs font-semibold uppercase tracking-wide text-muted">{EVIDENCE_LABELS[flag.evidence.kind]}</span>
+                      {flag.evidence.kind === "quote" ? <q className="italic">{flag.evidence.text}</q> : flag.evidence.text}
+                    </p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-3 border-t border-line pt-3 text-xs leading-relaxed text-muted">
+            Every check behind these points, passed or not, is listed in <StepLink id="audit" onOpenStep={onOpenStep} />.
+          </p>
+        </Card>
+
+        <div className="grid min-w-0 gap-4">
+          <Card title="Suggested conditions" aside={<span className="text-xs text-muted">Suggestions, not requirements</span>}>
+            {conditions.length === 0 ? (
+              <p className="text-sm leading-relaxed text-ink-2">The points on this offer suggest no condition.</p>
+            ) : (
+              <>
+                <p className="-mt-2 mb-2 max-w-3xl text-sm leading-relaxed text-ink-2">Tick the ones to apply. Ticked suggestions are printed on the decision note as selected.</p>
+                <ul className="divide-y divide-line">
+                  {conditions.map((c) => {
+                    const answers = c.because.map((id) => flagTitle.get(id)).filter((t): t is string => Boolean(t));
+                    // The points are named below, so the sentence that only counts them is left out.
+                    const reason = answers.length > 0 ? c.why.replace(/\s*(A flag|\d+ flags) on this page point to it\.$/, "") : c.why;
+                    return (
+                      <li key={c.id} className="py-3">
+                        <label className="flex cursor-pointer items-start gap-3">
+                          <input
+                            type="checkbox"
+                            checked={decision.conditions.includes(c.id)}
+                            onChange={() => onDecision(toggleCondition(decision, c.id))}
+                            className="mt-0.5 size-4 shrink-0 accent-accent"
+                          />
+                          <span className="min-w-0 wrap-anywhere text-sm font-medium leading-relaxed text-ink">{c.text}</span>
+                        </label>
+                        <div className="ml-7 mt-1 text-sm leading-relaxed text-ink-2">
+                          {reason && <p>{reason}</p>}
+                          {answers.length > 0 && (
+                            <p><span className="text-xs font-semibold uppercase tracking-wide text-muted">Answers </span>{answers.join("; ")}.</p>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            )}
+          </Card>
+
+          <DecisionPanel decision={decision} onDecision={onDecision} conditionIds={conditions.map((c) => c.id)}>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="secondary" onClick={download}>Download decision note</Button>
+              <Button variant="secondary" onClick={print}>Print or save as PDF</Button>
+            </div>
+            <p className="mt-2 max-w-3xl text-xs leading-relaxed text-muted">
+              One page with everything above: the offer, the figures, the points, the conditions, the terms used and the decision.
+              {decision.recordedAt ? "" : " Until a decision is recorded, the note says that none is."}
+            </p>
+            {printBlocked && (
+              <p role="alert" className="mt-2 text-sm leading-relaxed text-ink">
+                The browser blocked the new window. Allow pop-ups for this page, or download the note and print the file.
+              </p>
+            )}
+          </DecisionPanel>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** The portfolio's results: the step as it stands without an offer, and the second view with one. */
+function PortfolioResults({ session, active, deliberation, engineSession, terrainResult, terms }: PortfolioProps) {
   const { dataset, reference } = session;
   const r = active.result;
   const isScore = dataset.hazardKind === "score";
@@ -117,10 +548,6 @@ export function ResultsStep({
 
   return (
     <div>
-      <StepHeader kicker={stepKicker("results")} title={STEP_NAMES.results}>
-        What an underwriter needs: how large the loss could be at each level of rarity, what an average year costs, and where the loss comes from.
-      </StepHeader>
-
       {/* The columns follow the room the step has at the chosen text size, not the screen width. */}
       <div className="grid gap-4 @3xl:grid-cols-[1.4fr_1fr_1fr]">
         <Figure

@@ -1,18 +1,23 @@
 "use client";
 
 /**
- * The dashboard: the whole model on one page, for a reader with two minutes.
+ * The dashboard: the offer first, then the model that prices it, on one page.
  *
- *   Top    what the page is (step 0 of the walkthrough) and the return period selector
- *   Row 1  six headline figures, then the offer card and the path a demo follows
+ *   Top    the offer. With none read: the card that takes one, beside the path a demo follows.
+ *          With one read: its one line, its four figures, how it was read, the worst points to
+ *          weigh, the decision recorded, and the way on through the steps. An offer outside the
+ *          hazard maps, or one waiting for a value, says so here and shows no loss figure.
+ *   Then   "The model behind every price": the portfolio the offer would join
+ *   Row 1  the return period selector and six headline figures of the portfolio
  *   Row 2  the loss curve (ground-up, gross, net) and one event taken through the insurance layers
- *   Row 3  where the loss falls: by housing class, and by ward with a small map
- *   Row 4  what the AI did: the agents' parameter changes and the latest priced offer,
- *          then the model chain with the checks on each stage
+ *   Row 3  where the loss falls: by housing class, and by ward with a small map (the offer's
+ *          building is marked on it)
+ *   Row 4  what the agents changed, then the model chain with the checks on each stage
  *
- * The return period selector at the top drives every chart: the readout under the loss curve, the
+ * The return period selector drives every portfolio chart: the readout under the loss curve, the
  * waterfall, the class bars, the ward bars and the map. The headline figures defined at 1-in-100
- * stay at 1-in-100 and say so.
+ * stay at 1-in-100 and say so. Every offer figure comes from the focus (lib/offer/focus):
+ * nothing is priced here.
  *
  * How to mount it (Walkthrough.tsx already holds every value):
  *   <Dashboard
@@ -22,9 +27,10 @@
  *     deliberation={viewDeliberation}
  *     checks={checks.all}
  *     drainageOn={drainageOn}
- *     offer={offerSummary}              or null when no offer has been priced
+ *     offerFocus={offerFocus}           the offer as every step sees it, or null when none has been read
+ *     decision={decision}               the underwriter's decision record, when the walkthrough hands it over
  *     onOpenStep={(step) => ...}        open dashboardStepId(step) from lib/dashboard, a StepId
- *     offerCard={<OfferDropCard />}     the offer drop zone, shown under the headline figures
+ *     offerCard={<OfferDropCard />}     the offer drop zone: first on the page until an offer is read
  *   />
  *
  * The calculations live in lib/dashboard.ts; this file only lays them out.
@@ -39,15 +45,20 @@ import {
   chainSummary,
   classLossRows,
   dashboardStepId,
+  flagCountText,
+  headlineFlags,
   hotspotCount,
   layerSteps,
   nearestEventIndex,
   paramChanges,
+  portfolioChangeText,
   signedPct,
   standardAt,
   topWards,
   type DashboardStep,
 } from "@/lib/dashboard";
+import { DECISION_LABELS, SEVERITY_LABELS, type DecisionRecord } from "@/lib/decision";
+import { fmtNoteDate } from "@/lib/decisionNote";
 import { PARAM_LABELS, unusedForDepth } from "@/lib/export";
 import { fmtInt, fmtNum } from "@/lib/format";
 import { loadGeo, type GeoLayers } from "@/lib/geo/layers";
@@ -55,8 +66,10 @@ import { assignPoints, wardAccumulation } from "@/lib/geo/spatial";
 import { annualChance, EP_HELP, kes1, pct1, rpLabel, rpWithChance, type SourceKind } from "@/lib/labels";
 import { STANDARD_RETURN_PERIODS } from "@/lib/model/financial";
 import type { TermsResult } from "@/lib/model/terms";
+import { isPriced, type OfferFocus, type OfferFocusProps, type PricedFocus } from "@/lib/offer/focus";
+import { plural } from "@/lib/offer/shared";
 import type { Active, Session } from "@/lib/session";
-import { STEP_IDS, STEP_NAMES, stepIndex, stepKicker } from "@/lib/steps";
+import { STEP_IDS, STEP_NAMES, stepIndex, stepKicker, type StepId } from "@/lib/steps";
 import { BarChart } from "../charts/BarChart";
 import { ChartFrame, SourceBadge, type ChartSource } from "../charts/ChartFrame";
 import { Figure } from "../charts/Figure";
@@ -84,7 +97,7 @@ export interface OfferSummary {
   outside: boolean;
 }
 
-export interface DashboardProps {
+export interface DashboardProps extends OfferFocusProps {
   /** The view session: the dataset with the drainage setting applied. */
   session: Session;
   /** The parameters and result in force. */
@@ -95,7 +108,10 @@ export interface DashboardProps {
   /** Every check; the model chain groups them by stage. */
   checks: Check[];
   drainageOn: boolean;
-  offer: OfferSummary | null;
+  /** The offer's summary. The page now reads the offer from `offerFocus`; this stays so an older caller still compiles. */
+  offer?: OfferSummary | null;
+  /** The underwriter's decision on the offer, as recorded on the Results step. Left out, the page says none is recorded. */
+  decision?: DecisionRecord | null;
   onOpenStep: (step: DashboardStep) => void;
   /** A slot for the offer drop zone card. */
   offerCard?: ReactNode;
@@ -113,9 +129,8 @@ const stepRef = (step: DashboardStep) => {
 
 /** Columns that fit as many as the row has room for; the minimum is in rem, so it follows the text size. */
 const FIGURE_GRID = "grid gap-4 grid-cols-[repeat(auto-fit,minmax(min(12rem,100%),1fr))]";
-const PANEL_GRID = "grid gap-4 grid-cols-[repeat(auto-fit,minmax(min(26rem,100%),1fr))]";
 
-export function Dashboard({ session, active, terms, deliberation, checks, drainageOn, offer, onOpenStep, offerCard }: DashboardProps) {
+export function Dashboard({ session, active, terms, deliberation, checks, drainageOn, offerFocus, decision, onOpenStep, offerCard }: DashboardProps) {
   const { dataset, reference } = session;
   const result = active.result;
   const usingAi = active.source === "ai";
@@ -160,6 +175,13 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
   const assumptions = usingAi ? "Agreed assumptions" : "Reference assumptions";
   const lossSource: SourceKind = usingAi ? "ai" : "assumption";
 
+  // The offer, once the ward map has placed it. Priced or not, it leads the page.
+  const offer = offerFocus && offerFocus.status !== "locating" ? offerFocus : null;
+  const priced = isPriced(offer) ? offer : null;
+  const offerPoint = offer && !offer.outside && offer.building && offer.building.lat !== null && offer.building.lon !== null ? { lat: offer.building.lat, lon: offer.building.lon, label: "This offer" } : null;
+  // Where the path leads next: the offer step until an offer is priced, then on through the model.
+  const nextStep: StepId = priced ? "hazard" : "offer";
+
   // Row 1.
   const at100 = standardAt(terms.standard, 100);
   const net100 = at100?.netKes ?? null;
@@ -195,8 +217,24 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
   return (
     <div className="min-w-0">
       <StepHeader kicker={stepKicker("dashboard")} title={STEP_NAMES.dashboard}>
-        A flood catastrophe model for Nairobi: hazard, vulnerability, exposure and a financial engine, with every assumption shown. This page says what a flood could cost the portfolio, how often, and where the loss falls.
+        Should we take this business, and on what terms? Give the model a broker&apos;s offer: it reads the document, finds the building on the flood maps, and prices it against the portfolio already held. Every assumption is shown.
       </StepHeader>
+
+      {/* The offer leads the page: the card that takes one, or the one that has been read. */}
+      {offer ? (
+        <OfferPanel offer={offer} priced={priced} decision={decision ?? null} lossSource={lossSource} assumptions={assumptions} onOpenStep={onOpenStep} />
+      ) : (
+        <div className="flex flex-wrap gap-4">
+          {offerCard && <div className="min-w-0 flex-[2_1_30rem]">{offerCard}</div>}
+          <DemoPath next={nextStep} hasCard={!!offerCard} onOpenStep={onOpenStep} />
+        </div>
+      )}
+
+      <h3 className="mt-8 text-lg font-semibold text-ink">The model behind every price</h3>
+      <p className="mt-1 mb-3 max-w-3xl text-sm leading-relaxed text-ink-2">
+        {priced ? "The portfolio this offer would join: " : offer ? "The portfolio an offer is priced against: " : "The portfolio every offer is priced against: "}
+        what a flood could cost it, how often, and where the loss falls.
+      </p>
 
       {/* The selector sits above everything it drives. */}
       <div className="mb-5 flex flex-wrap items-center justify-between gap-x-8 gap-y-3 rounded-2xl border border-line bg-surface px-5 py-3.5">
@@ -273,31 +311,6 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
         <SourceBadge kind="assumption" />
         <span className="min-w-0 wrap-anywhere">{NET_MEANS} {TERMS_NOTE}.</span>
       </p>
-
-      {/* The offer card sits high on the page, so the path "Dashboard, then Read the offer" is the first thing to do. */}
-      <div className="mt-4 flex flex-wrap gap-4">
-        {offerCard && <div className="min-w-0 flex-[2_1_30rem]">{offerCard}</div>}
-        <Card title="The demo path" className="flex-[1_1_20rem]" aside={<span className="text-sm text-ink-2">Then follow the steps on the left</span>}>
-          <p className="max-w-3xl text-sm leading-relaxed text-ink-2">
-            Start here, {offerCard ? "give the model an offer in the card beside this one" : "price an offer"}, then follow the steps on the left in order. Each one opens a stage of the model and shows how its numbers were made.
-          </p>
-          <ol className="mt-3 grid gap-x-6 gap-y-1.5 text-sm grid-cols-[repeat(auto-fit,minmax(min(11rem,100%),1fr))]">
-            {STEP_IDS.map((id) => (
-              <li key={id} className="flex min-w-0 items-baseline gap-2" aria-current={id === "dashboard" ? "step" : undefined}>
-                <span className="tabular w-5 shrink-0 text-right text-muted">{stepIndex(id)}</span>
-                <span className={`min-w-0 wrap-anywhere ${id === "dashboard" ? "font-semibold text-ink" : "text-ink-2"}`}>
-                  {STEP_NAMES[id]}
-                  {id === "dashboard" && <span className="font-normal text-muted"> (you are here)</span>}
-                  {id === "offer" && <span className="text-muted"> (next)</span>}
-                </span>
-              </li>
-            ))}
-          </ol>
-          <Button variant="secondary" className="mt-4" onClick={() => onOpenStep("offer")}>
-            Open {stepRef("offer")}
-          </Button>
-        </Card>
-      </div>
 
       {/* Row 2: how large a loss, how often, and who bears it. The curve takes the larger share of a wide row. */}
       <div className="mt-4 flex flex-wrap gap-4">
@@ -391,7 +404,7 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
         <ChartFrame
           className="flex-[2_1_34rem]"
           title={`The ten wards with the most loss in a ${event} event`}
-          subtitle={`Each bar is the ground-up loss to the insured buildings in that ward in a ${event} event. The numbers beside the ward names are the numbers on the map.`}
+          subtitle={`Each bar is the ground-up loss to the insured buildings in that ward in a ${event} event. The numbers beside the ward names are the numbers on the map.${offerPoint ? " The diamond on the map is the offer's building." : ""}`}
           sources={[...lossSources, { kind: "real", text: "Ward boundaries: Omare and Omare 2017, CC BY 4.0" }]}
         >
           {geo === null ? (
@@ -412,7 +425,7 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
                 />
               </div>
               <div className="min-w-0">
-                <WardMap title={`Wards shaded by ground-up loss in a ${event} event`} wards={wards} rows={wardRows} top={wardTop} valueLabel="Ground-up loss" />
+                <WardMap title={`Wards shaded by ground-up loss in a ${event} event`} wards={wards} rows={wardRows} top={wardTop} valueLabel="Ground-up loss" marker={offerPoint} />
               </div>
             </div>
           )}
@@ -424,10 +437,8 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
         </ChartFrame>
       </div>
 
-      {/* Row 4: what the AI did, then the chain the figures came through. */}
-      <h3 className="mt-8 text-lg font-semibold text-ink">What the AI did</h3>
-      <p className="mt-1 max-w-3xl text-sm leading-relaxed text-ink-2">The agents choose and explain the assumptions, and the model reads an offer into rows. Code does every calculation and checks both.</p>
-      <div className={`mt-3 ${PANEL_GRID}`}>
+      {/* Row 4: what the agents changed, then the chain the figures came through. */}
+      <div className="mt-4">
         <Card title="What the agents changed" aside={<SourceBadge kind="ai" />}>
           {changes === null ? (
             <div>
@@ -477,46 +488,6 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
           )}
         </Card>
 
-        <Card title="Latest priced offer" aside={<SourceBadge kind="ai" />}>
-          {offer === null ? (
-            <div>
-              <p className="max-w-3xl text-sm leading-relaxed text-ink-2">
-                No offer has been priced yet. Give the model a broker&apos;s offer {offerCard ? "in the card near the top of this page" : `in ${stepRef("offer")}`}: it reads the fields, code checks each one against the document, and code prices the risk.
-              </p>
-              <Button variant="secondary" className="mt-3" onClick={() => onOpenStep("offer")}>Open {stepRef("offer")}</Button>
-            </div>
-          ) : (
-            <div>
-              <p className="mb-3 wrap-anywhere text-sm font-medium text-ink">{offer.name}</p>
-              <dl className="grid gap-x-6 gap-y-3 grid-cols-[repeat(auto-fit,minmax(min(11rem,100%),1fr))]">
-                <div className="min-w-0 border-l-2 border-line pl-3">
-                  <dt className="text-sm text-ink-2">Fields read from the document</dt>
-                  <dd className="tabular text-lg font-semibold text-ink">{fmtInt(offer.fieldsRead)}</dd>
-                </div>
-                <div className="min-w-0 border-l-2 border-line pl-3">
-                  <dt className="text-sm text-ink-2">Verified against the document by code</dt>
-                  <dd className="tabular text-lg font-semibold text-ink">{fmtInt(offer.fieldsVerified)} of {fmtInt(offer.fieldsRead)}</dd>
-                </div>
-                <div className="min-w-0 border-l-2 border-line pl-3">
-                  <dt className="text-sm text-ink-2">Gross loss, {rpWithChance(100)}</dt>
-                  <dd className="tabular text-lg font-semibold text-ink">{kes1(offer.loss100Kes)}</dd>
-                </div>
-                <div className="min-w-0 border-l-2 border-line pl-3">
-                  <dt className="text-sm text-ink-2">Average annual loss, gross</dt>
-                  <dd className="tabular text-lg font-semibold text-ink">{kes1(offer.aalKes)}</dd>
-                </div>
-              </dl>
-              {offer.outside && (
-                <p className="mt-3 flex max-w-3xl gap-2 text-sm leading-relaxed text-ink-2">
-                  <span className="mt-0.5"><StatusIcon status="warn" size={16} /></span>
-                  <span className="min-w-0">This risk lies outside the area the hazard maps cover, so the model cannot say how deep the water would be there.</span>
-                </p>
-              )}
-              <p className="mt-3 max-w-3xl text-xs leading-relaxed text-muted">The fields were read by the model and found again in the document by code. The loss figures are worked out by code, gross of reinsurance.</p>
-              <Button variant="secondary" className="mt-3" onClick={() => onOpenStep("offer")}>Open the offer in {stepRef("offer")}</Button>
-            </div>
-          )}
-        </Card>
       </div>
 
       <Card title="Model chain" className="mt-4" aside={<span className="text-sm text-ink-2">Each stage with the checks code ran on it, and the step that shows its working</span>}>
@@ -539,6 +510,212 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
           ))}
         </ol>
       </Card>
+
+      {/* With an offer at the top, the card that takes another one and the full list of steps close the page. */}
+      {offer && (
+        <div className="mt-4 flex flex-wrap gap-4">
+          {offerCard && <div className="min-w-0 flex-[2_1_30rem]">{offerCard}</div>}
+          <DemoPath next={nextStep} hasCard={!!offerCard} another onOpenStep={onOpenStep} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The steps of the walkthrough in order, with the one to open next picked out. */
+function DemoPath({ next, hasCard, another = false, onOpenStep }: { next: StepId; hasCard: boolean; another?: boolean; onOpenStep: (step: DashboardStep) => void }) {
+  const nextLink: DashboardStep = next === "hazard" ? "hazard" : "offer";
+  return (
+    <Card title="The demo path" className="flex-[1_1_20rem]" aside={<span className="text-sm text-ink-2">The steps on the left, in order</span>}>
+      <p className="max-w-3xl text-sm leading-relaxed text-ink-2">
+        {another
+          ? `${next === "hazard" ? `The offer above runs through every step from ${STEP_NAMES.hazard} to ${STEP_NAMES.audit}.` : `The offer above is not priced yet: ${STEP_NAMES.offer} says what it is waiting for.`}${hasCard ? " To price a different offer, give it in the card beside this one." : ""}`
+          : `Start here: ${hasCard ? "give the model an offer in the card beside this one" : "price an offer"}. Each step after that is about the offer's building, with the portfolio as its context.`}
+      </p>
+      <ol className="mt-3 grid gap-x-6 gap-y-1.5 text-sm grid-cols-[repeat(auto-fit,minmax(min(11rem,100%),1fr))]">
+        {STEP_IDS.map((id) => (
+          <li key={id} className="flex min-w-0 items-baseline gap-2" aria-current={id === "dashboard" ? "step" : undefined}>
+            <span className="tabular w-5 shrink-0 text-right text-muted">{stepIndex(id)}</span>
+            <span className={`min-w-0 wrap-anywhere ${id === "dashboard" ? "font-semibold text-ink" : "text-ink-2"}`}>
+              {STEP_NAMES[id]}
+              {id === "dashboard" && <span className="font-normal text-muted"> (you are here)</span>}
+              {id === next && <span className="text-muted"> (next)</span>}
+            </span>
+          </li>
+        ))}
+      </ol>
+      <Button variant="secondary" className="mt-4" onClick={() => onOpenStep(nextLink)}>
+        Open {stepRef(nextLink)}
+      </Button>
+    </Card>
+  );
+}
+
+/** A flag's severity as a word in a small box, so it never rests on colour. */
+function SeverityWord({ severity }: { severity: "high" | "medium" | "low" }) {
+  return (
+    <span className={`inline-block w-16 shrink-0 rounded-md border px-1.5 py-0.5 text-center text-xs font-semibold uppercase tracking-wide ${severity === "high" ? "border-ink bg-ink text-surface" : severity === "medium" ? "border-ink text-ink" : "border-line text-ink-2"}`}>
+      {SEVERITY_LABELS[severity]}
+    </span>
+  );
+}
+
+/**
+ * The offer at the top of the page. Priced: its line, the four figures, how it was read, the worst
+ * points to weigh, the decision and the way on. Not priced: why, in the focus's own words, and no loss figure.
+ */
+function OfferPanel({
+  offer,
+  priced,
+  decision,
+  lossSource,
+  assumptions,
+  onOpenStep,
+}: {
+  offer: OfferFocus;
+  priced: PricedFocus | null;
+  decision: DecisionRecord | null;
+  lossSource: SourceKind;
+  assumptions: string;
+  onOpenStep: (step: DashboardStep) => void;
+}) {
+  const { summary, counts } = offer;
+  const typed = counts.confirmed + counts.edited;
+  const reading = [
+    `${fmtInt(summary.fieldsVerified)} of ${plural(summary.fieldsRead, "value")} read from the document were found again in its text by code`,
+    ...(typed > 0 ? [`${fmtInt(typed)} confirmed or typed by the underwriter`] : []),
+    ...(counts.unverified > 0 ? [`${fmtInt(counts.unverified)} not verified`] : []),
+  ].join("; ");
+  const readBy = offer.document.path === "model" ? `Read by ${offer.document.model ?? "the model"}, checked by code.` : "Read by the fixed rules, with no model.";
+  const top = headlineFlags(offer.flags, 3);
+  const recorded = decision && decision.recordedAt && decision.choice ? { ...decision, choice: decision.choice } : null;
+  const after = STEP_IDS.slice(stepIndex("hazard") + 1).map((id) => STEP_NAMES[id]);
+
+  return (
+    <section aria-label="The offer" className="min-w-0 rounded-2xl border border-line border-l-4 border-l-brand bg-surface p-5">
+      <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted">The offer</div>
+      <h3 className="mt-1 wrap-anywhere text-xl font-semibold leading-snug text-ink">{offer.line.text || offer.documentName}</h3>
+      <p className="mt-1 wrap-anywhere text-sm leading-relaxed text-ink-2">
+        From {offer.documentName}. {readBy} {reading}.
+      </p>
+      {offer.severalLine && <p className="mt-1 wrap-anywhere text-sm leading-relaxed text-ink-2">{offer.severalLine}</p>}
+
+      {priced ? (
+        <PricedOffer focus={priced} lossSource={lossSource} assumptions={assumptions} />
+      ) : (
+        <div className="mt-4">
+          <Note tone="warn">
+            {offer.outside ? (
+              <>
+                <strong className="font-semibold text-ink">{offer.outsideMessage}.</strong> {offer.coverage} No loss figure exists for this offer.
+              </>
+            ) : (
+              <>
+                <strong className="font-semibold text-ink">{offer.statusLine}</strong>
+                {offer.waiting.length > 0 && (
+                  <ul className="mt-2 space-y-1">
+                    {offer.waiting.slice(0, 4).map((w) => (
+                      <li key={w.fieldId} className="wrap-anywhere">{w.text}</li>
+                    ))}
+                    {offer.waiting.length > 4 && <li>And {fmtInt(offer.waiting.length - 4)} more.</li>}
+                  </ul>
+                )}
+              </>
+            )}
+          </Note>
+        </div>
+      )}
+
+      {priced && (
+        <div className="mt-4 grid gap-x-8 gap-y-4 grid-cols-[repeat(auto-fit,minmax(min(24rem,100%),1fr))]">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-ink">
+              Points to weigh <span className="font-normal text-ink-2">({flagCountText(top.counts)})</span>
+            </div>
+            {top.shown.length === 0 ? (
+              <p className="mt-1.5 text-sm leading-relaxed text-ink-2">The checks raised no point on this offer.</p>
+            ) : (
+              <ul className="mt-2 space-y-2">
+                {top.shown.map((flag) => (
+                  <li key={flag.id} className="flex min-w-0 items-start gap-2.5 text-sm leading-snug text-ink">
+                    <SeverityWord severity={flag.severity} />
+                    <span className="min-w-0 wrap-anywhere pt-0.5">{flag.title}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="mt-2 text-sm leading-relaxed text-ink-2">
+              {top.more > 0 ? `${plural(top.more, "more point")}, and the ` : "The "}evidence for each and the suggested conditions are in {stepRef("results")}.
+            </p>
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-ink">Decision</div>
+            <p className="mt-1.5 wrap-anywhere text-sm leading-relaxed text-ink-2">
+              {recorded ? (
+                <>
+                  <span className="font-semibold text-ink">{DECISION_LABELS[recorded.choice]}</span>, recorded {fmtNoteDate(recorded.recordedAt)}
+                  {recorded.conditions.length > 0 ? `, with ${plural(recorded.conditions.length, "condition")}` : ""}.
+                </>
+              ) : (
+                <>None recorded yet. The underwriter records Accept, Accept with conditions, Refer or Decline in {stepRef("results")}.</>
+              )}
+            </p>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2">
+        {priced ? (
+          <>
+            <Button onClick={() => onOpenStep("hazard")}>Continue: {STEP_NAMES.hazard}</Button>
+            <span className="min-w-0 wrap-anywhere text-sm text-ink-2">Then {after.join(", ")}.</span>
+            <Button variant="ghost" className="ml-auto" onClick={() => onOpenStep("offer")}>Open the document in {stepRef("offer")}</Button>
+          </>
+        ) : (
+          <Button onClick={() => onOpenStep("offer")}>Open {stepRef("offer")}</Button>
+        )}
+      </div>
+    </section>
+  );
+}
+
+/** The four figures an underwriter looks for first. Gross is after the policy deductible and limit. */
+function PricedOffer({ focus, lossSource, assumptions }: { focus: PricedFocus; lossSource: SourceKind; assumptions: string }) {
+  const { total, portfolio, building } = focus.price;
+  const loss100 = total.loss100GrossKes;
+  const rate = total.ratePerMilleGross;
+  const madeBy = `${assumptions}, priced by code. Terms: ${focus.terms.summary.toLowerCase()}.`;
+  return (
+    <div className={`mt-4 ${FIGURE_GRID}`}>
+      <Figure
+        strong
+        label={`Gross loss, ${rpWithChance(100)}`}
+        value={loss100 === null ? "Not modelled" : kes1(loss100)}
+        sub={
+          loss100 === null
+            ? "1-in-100 is more frequent than any flood the model covers."
+            : building.dryAtEveryReturnPeriod
+              ? "The maps show the building dry at every return period modelled."
+              : `${pct1(loss100 / (total.tivKes || 1))} of the sum insured of ${kes1(total.tivKes)}${total.loss100Extrapolated ? ". Held flat beyond the rarest flood modelled." : ""}`
+        }
+        source={lossSource}
+        sourceText={madeBy}
+      />
+      <Figure label="Average annual loss, gross" value={kes1(total.aalGrossKes)} sub={`A year on average. Ground-up ${kes1(total.aalGroundUpKes)}`} source={lossSource} sourceText={madeBy} />
+      <Figure
+        label="Pure flood rate, gross"
+        value={`${fmtNum(rate, rate !== 0 && Math.abs(rate) < 0.1 ? 4 : 2)} per mille`}
+        sub="Per KES 1,000 of sum insured, before expenses and loadings"
+        source={lossSource}
+        sourceText={madeBy}
+      />
+      <Figure
+        label={`Change to the portfolio's ${rpLabel(100)} loss`}
+        value={portfolioChangeText(portfolio.loss100ChangeKes, portfolio.loss100ChangeShare)}
+        sub={`Ground-up, on ${kes1(portfolio.without.loss100Kes)} without the offer${portfolio.gross ? `. Gross: ${portfolioChangeText(portfolio.gross.change100Kes, portfolio.gross.change100Share)}` : ""}`}
+        source="synthetic"
+        sourceText="Against the synthetic portfolio"
+      />
     </div>
   );
 }

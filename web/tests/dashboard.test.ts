@@ -4,13 +4,18 @@ import {
   aalChange,
   chainStatus,
   chainSummary,
+  checkGroups,
   classLossRows,
   dashboardStepId,
   droppedFileKind,
+  flagCountText,
+  headlineFlags,
   hotspotCount,
   layerSteps,
   nearestEventIndex,
   paramChanges,
+  portfolioChangeText,
+  rangePlacement,
   shadeLevel,
   signedPct,
   standardAt,
@@ -319,5 +324,94 @@ describe("a file given to the offer card", () => {
     expect(droppedFileKind("memo.pdf", [...offers, ".pdf"])).toBe("offer");
     expect(droppedFileKind("docx", offers)).toBe("unsupported");
     expect(droppedFileKind("", offers)).toBe("unsupported");
+  });
+});
+
+describe("the worst flags of an offer", () => {
+  const flags = [
+    { id: "a", severity: "low" as const },
+    { id: "b", severity: "high" as const },
+    { id: "c", severity: "medium" as const },
+    { id: "d", severity: "high" as const },
+    { id: "e", severity: "medium" as const },
+  ];
+
+  it("shows high before medium before low and keeps the given order within a severity", () => {
+    const top = headlineFlags(flags, 3);
+    expect(top.shown.map((f) => f.id)).toEqual(["b", "d", "c"]);
+    expect(top.more).toBe(2);
+    expect(top.counts).toEqual({ high: 2, medium: 2, low: 1 });
+  });
+
+  it("copes with no flags and with fewer flags than asked for", () => {
+    expect(headlineFlags([], 3)).toEqual({ shown: [], more: 0, counts: { high: 0, medium: 0, low: 0 } });
+    expect(headlineFlags(flags.slice(0, 1), 3).more).toBe(0);
+    expect(headlineFlags(flags, 0).shown).toEqual([]);
+  });
+
+  it("counts the flags in words", () => {
+    expect(flagCountText({ high: 2, medium: 0, low: 1 })).toBe("2 high, 1 low");
+    expect(flagCountText({ high: 0, medium: 0, low: 0 })).toBe("none");
+  });
+});
+
+describe("what an offer adds to the portfolio", () => {
+  it("writes the amount with its sign and its share", () => {
+    expect(portfolioChangeText(1_200_000, 0.004)).toBe("+KES 1.2m (+0.4%)");
+    expect(portfolioChangeText(-1_200_000, -0.004)).toBe("-KES 1.2m (-0.4%)");
+    expect(portfolioChangeText(50_000, 0.0004)).toBe("+KES 50.0k (+0.040%)");
+    expect(portfolioChangeText(1_200_000, null)).toBe("+KES 1.2m");
+  });
+
+  it("says no change for a dry building and not modelled when there is no figure", () => {
+    expect(portfolioChangeText(0, 0)).toBe("no change");
+    expect(portfolioChangeText(0.2, 0)).toBe("no change");
+    expect(portfolioChangeText(null, null)).toBe("not modelled");
+    expect(portfolioChangeText(Number.NaN)).toBe("not modelled");
+  });
+});
+
+describe("where a value sits in a range", () => {
+  const values = [100, 300, 200, 400, null, 0, Number.NaN];
+
+  it("reads the range from the usable values only", () => {
+    const r = rangePlacement(250, values);
+    expect(r).toMatchObject({ count: 4, min: 100, median: 250, max: 400, position: "within", shareAtOrBelow: 0.5 });
+    expect(r.at).toBeCloseTo(0.5, 12);
+  });
+
+  it("marks a value outside the range and holds it at the end", () => {
+    expect(rangePlacement(50, values)).toMatchObject({ position: "below", shareAtOrBelow: 0, at: 0 });
+    expect(rangePlacement(4000, values)).toMatchObject({ position: "above", shareAtOrBelow: 1, at: 1 });
+    expect(rangePlacement(100, values).position).toBe("within");
+    expect(rangePlacement(400, values).position).toBe("within");
+  });
+
+  it("says unknown without a value or without a range", () => {
+    expect(rangePlacement(null, values)).toMatchObject({ count: 4, min: 100, max: 400, position: "unknown", at: null });
+    expect(rangePlacement(10, [])).toEqual({ count: 0, min: null, median: null, max: null, position: "unknown", shareAtOrBelow: null, at: null });
+  });
+
+  it("places a value against a range of one", () => {
+    expect(rangePlacement(5, [5])).toMatchObject({ position: "within", at: 0.5, median: 5 });
+    expect(rangePlacement(6, [5])).toMatchObject({ position: "above", at: 1 });
+  });
+});
+
+describe("the groups of the Audit step", () => {
+  const make = (group: CheckGroup, id: string, status: CheckStatus = "pass"): Check => ({ group, id, status, title: id, detail: "" });
+
+  it("sorts every check into its group, in the order the model runs", () => {
+    const groups = checkGroups([make("financial", "f"), make("ai", "a"), make("data", "d"), make("vulnerability", "v"), make("hazard", "h")], [make("data", "offer-values"), make("hazard", "offer-coordinates", "warn")]);
+    expect(groups.map((g) => g.id)).toEqual(["data", "hazard", "vulnerability", "financial", "agents", "offer"]);
+    expect(groups.find((g) => g.id === "offer")?.checks.map((c) => c.id)).toEqual(["offer-values", "offer-coordinates"]);
+    expect(groups.find((g) => g.id === "data")?.checks.map((c) => c.id)).toEqual(["d"]);
+  });
+
+  it("leaves out a group with no checks and loses none", () => {
+    const checks = [make("data", "d1"), make("data", "d2"), make("financial", "f")];
+    const groups = checkGroups(checks);
+    expect(groups.map((g) => g.id)).toEqual(["data", "financial"]);
+    expect(groups.reduce((n, g) => n + g.checks.length, 0)).toBe(checks.length);
   });
 });

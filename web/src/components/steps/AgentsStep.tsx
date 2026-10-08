@@ -1,19 +1,22 @@
 "use client";
 
 import { motion } from "motion/react";
-import type { CSSProperties, ReactNode } from "react";
-import { buildLedger, type AgentRun, type Deliberation, type Scored } from "@/lib/agents/orchestrate";
+import { useState, type CSSProperties, type ReactNode } from "react";
+import { buildLedger, type AgentRun, type Deliberation, type LedgerRow, type Scored } from "@/lib/agents/orchestrate";
 import { BASIS_LABELS, reasonAt, ROLE_LABELS, type Basis, type Proposal, type Role } from "@/lib/agents/schema";
-import type { Check } from "@/lib/checks";
+import { costOf, fmtUsd, usageRows, usageTotals, type Prices } from "@/lib/agents/usage";
+import { summarise, type Check } from "@/lib/checks";
 import { PARAM_LABELS, unusedForDepth } from "@/lib/export";
 import { fmtNum, fmtPct } from "@/lib/format";
-import { kes1, rpWithChance } from "@/lib/labels";
+import { kes1, rpLabel, rpWithChance } from "@/lib/labels";
 import { flattenParams, REFERENCE_PARAMS } from "@/lib/model/params";
+import { HOUSING_LABELS, SCORE_TIERS } from "@/lib/model/types";
+import type { AssumptionPrice, OfferFocus, PricedFocus } from "@/lib/offer/focus";
 import type { Session } from "@/lib/session";
-import { STEP_NAMES, stepKicker } from "@/lib/steps";
+import { STEP_NAMES, stepKicker, type StepId } from "@/lib/steps";
 import { SourceBadge, SourceLine } from "../charts/ChartFrame";
 import { Figure } from "../charts/Figure";
-import { Button, Card, CheckList, ChecksSummary, Note, StatusIcon, StepHeader, Tag } from "../ui";
+import { Button, Card, Note, Segmented, StatusIcon, StepHeader, Tag } from "../ui";
 
 const ROLE_BLURB: Record<Role, string> = {
   optimist: "Argues for the least severe assumptions that can still be defended.",
@@ -71,32 +74,114 @@ function Thinking() {
   );
 }
 
-function RunMeta({ run }: { run: AgentRun }) {
-  if (run.status !== "done" && run.status !== "error") return null;
+/** A step's name inside a sentence, as a link that opens it. */
+export function StepLink({ to, onOpenStep }: { to: StepId; onOpenStep?: (id: StepId) => void }) {
+  if (!onOpenStep) return <>{STEP_NAMES[to]}</>;
   return (
-    <details className="mt-3 text-xs text-muted">
-      <summary className="cursor-pointer select-none hover:text-ink-2">
-        {run.model ?? "model"} · {run.ms ? `${(run.ms / 1000).toFixed(1)} s` : "-"}{run.usage?.outputTokens ? ` · ${run.usage.outputTokens.toLocaleString("en-KE")} tokens written${run.usage.thinkingTokens ? `, ${run.usage.thinkingTokens.toLocaleString("en-KE")} thinking` : ""}` : ""}{run.usage?.firstTextS !== undefined ? ` · first text after ${run.usage.firstTextS} s` : ""}{run.usage?.padded ? " · cut off after the reply was complete" : ""}{(run.attempts ?? 1) > 1 ? " · needed a retry" : ""} · show the exact prompt and reply
-      </summary>
-      {run.prompt && (
-        <>
-          <div className="mt-2 font-semibold text-ink-2">Instructions</div>
-          <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap wrap-break-word rounded-lg bg-surface-2 p-2.5 font-mono text-xs leading-relaxed text-ink-2">{run.prompt.system}</pre>
-          <div className="mt-2 font-semibold text-ink-2">Input</div>
-          <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap wrap-break-word rounded-lg bg-surface-2 p-2.5 font-mono text-xs leading-relaxed text-ink-2">{run.prompt.user}</pre>
-        </>
-      )}
-      {run.raw && (
-        <>
-          <div className="mt-2 font-semibold text-ink-2">Reply, unedited</div>
-          <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap wrap-break-word rounded-lg bg-surface-2 p-2.5 font-mono text-xs leading-relaxed text-ink-2">{run.raw}</pre>
-        </>
-      )}
-    </details>
+    <button type="button" onClick={() => onOpenStep(to)} className="font-medium text-ink underline underline-offset-2 hover:text-brand">
+      {STEP_NAMES[to]}
+    </button>
   );
 }
 
-function AgentCard({ run, className = "", children }: { run: AgentRun; className?: string; children?: ReactNode }) {
+/** A step's checks in one line. The lists themselves are on the Audit step. */
+export function ChecksLine({ checks, what, onOpenStep, className = "" }: { checks: Check[]; what: string; onOpenStep?: (id: StepId) => void; className?: string }) {
+  if (checks.length === 0) return null;
+  const s = summarise(checks);
+  const passed = s.pass === checks.length ? `${s.pass} ${s.pass === 1 ? "check" : "checks"} on ${what} ${s.pass === 1 ? "passes" : "pass"}` : `${s.pass} of ${checks.length} checks on ${what} pass`;
+  const rest = [s.warn > 0 ? `${s.warn} ${s.warn === 1 ? "warning" : "warnings"}` : "", s.fail > 0 ? `${s.fail} failed` : ""].filter(Boolean).join(", ");
+  return (
+    <p className={`flex items-start gap-2 text-sm leading-relaxed text-ink-2 ${className}`}>
+      <span className="mt-0.5"><StatusIcon status={s.fail > 0 ? "fail" : s.warn > 0 ? "warn" : "pass"} size={16} /></span>
+      <span className="min-w-0">{passed}{rest ? `, ${rest}` : ""}. See <StepLink to="audit" onOpenStep={onOpenStep} />.</span>
+    </p>
+  );
+}
+
+/**
+ * Shown while a step is on its portfolio view although an offer has been read: why the step is not
+ * following the building. `what` finishes the sentence "Switch to Offer in the header to see ...".
+ */
+export function OfferNotice({ offerFocus, what, onOpenStep }: { offerFocus: OfferFocus | null | undefined; what: string; onOpenStep?: (id: StepId) => void }) {
+  if (!offerFocus) return null;
+  const held = offerFocus.outside || offerFocus.waiting.length > 0;
+  return (
+    <div className="mb-5 max-w-4xl">
+      <Note tone={held ? "warn" : "info"}>
+        {offerFocus.outside ? (
+          <><strong className="font-semibold text-ink">{offerFocus.outsideMessage}.</strong> {offerFocus.coverage} This step shows the portfolio.</>
+        ) : offerFocus.waiting.length > 0 ? (
+          <>{offerFocus.statusLine} That is settled in the <StepLink to="offer" onOpenStep={onOpenStep} /> step. Until then this step shows the portfolio.</>
+        ) : offerFocus.status === "priced" ? (
+          <>An offer is loaded: {offerFocus.line.insured ?? offerFocus.documentName}. Switch to Offer in the header to see {what}.</>
+        ) : (
+          <>{offerFocus.statusLine} This step shows the portfolio.</>
+        )}
+      </Note>
+    </div>
+  );
+}
+
+const tokens = (value: number | null) => (value === null ? "not reported" : value.toLocaleString("en-KE"));
+const seconds = (value: number | null) => (value === null ? "not reported" : `${value.toFixed(1)} s`);
+
+const COST_NOTE = "Estimated from the prices set in .env.local";
+
+/** A row of small label and value pairs. */
+function Pairs({ items, className = "" }: { items: [string, string][]; className?: string }) {
+  return (
+    <dl className={`flex flex-wrap gap-x-4 gap-y-1 ${className}`}>
+      {items.map(([label, value]) => (
+        <div key={label} className="min-w-0">
+          <dt className="inline text-muted">{label}: </dt>
+          <dd className="tabular inline wrap-anywhere font-medium text-ink-2">{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** What one agent used, then its exact prompt and reply behind a disclosure. A cost appears only when prices are set. */
+function RunMeta({ run, prices }: { run: AgentRun; prices: Prices | null }) {
+  if (run.status !== "done" && run.status !== "error") return null;
+  const used = usageRows([run])[0];
+  const cost = costOf(used, prices);
+  return (
+    <div className="mt-3 border-t border-line pt-3 text-xs text-muted">
+      <Pairs
+        items={[
+          ["Model", used.model ?? "not reported"],
+          ["Tokens in", tokens(used.inputTokens)],
+          ["Tokens out", tokens(used.outputTokens)],
+          ["Thinking tokens", tokens(used.thinkingTokens)],
+          ["Time", seconds(used.seconds)],
+          ...(cost !== null ? [["Cost", fmtUsd(cost)] as [string, string]] : []),
+        ]}
+      />
+      <details className="mt-2">
+        <summary className="cursor-pointer select-none hover:text-ink-2">
+          Show the exact prompt and reply{run.usage?.firstTextS !== undefined ? ` · first text after ${run.usage.firstTextS} s` : ""}{run.usage?.padded ? " · cut off after the reply was complete" : ""}{(run.attempts ?? 1) > 1 ? " · needed a retry" : ""}
+        </summary>
+        {run.prompt && (
+          <>
+            <div className="mt-2 font-semibold text-ink-2">Instructions</div>
+            <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap wrap-break-word rounded-lg bg-surface-2 p-2.5 font-mono text-xs leading-relaxed text-ink-2">{run.prompt.system}</pre>
+            <div className="mt-2 font-semibold text-ink-2">Input</div>
+            <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap wrap-break-word rounded-lg bg-surface-2 p-2.5 font-mono text-xs leading-relaxed text-ink-2">{run.prompt.user}</pre>
+          </>
+        )}
+        {run.raw && (
+          <>
+            <div className="mt-2 font-semibold text-ink-2">Reply, unedited</div>
+            <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap wrap-break-word rounded-lg bg-surface-2 p-2.5 font-mono text-xs leading-relaxed text-ink-2">{run.raw}</pre>
+          </>
+        )}
+      </details>
+    </div>
+  );
+}
+
+function AgentCard({ run, prices, className = "", children }: { run: AgentRun; prices: Prices | null; className?: string; children?: ReactNode }) {
   return (
     <motion.section layout className={`flex min-w-0 flex-col rounded-2xl border border-line bg-surface p-5 ${className}`}>
       <header className="flex items-start justify-between gap-3">
@@ -110,7 +195,7 @@ function AgentCard({ run, className = "", children }: { run: AgentRun; className
         {run.status === "error" && <p className="text-sm leading-relaxed text-ink-2"><strong className="font-semibold text-ink">No valid reply.</strong> {run.error}</p>}
         {run.status === "done" && <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}>{children}</motion.div>}
       </div>
-      <RunMeta run={run} />
+      <RunMeta run={run} prices={prices} />
     </motion.section>
   );
 }
@@ -164,6 +249,206 @@ function ProposalBody({ proposal, scored, session }: { proposal: Proposal; score
   );
 }
 
+/** What the whole run used, added up. The per-agent figures sit under each agent's card. */
+function RunTotals({ d, prices }: { d: Deliberation; prices: Prices | null }) {
+  const rows = usageRows(Object.values(d.runs).filter((run) => run.status === "done" || run.status === "error"));
+  if (rows.length === 0) return null;
+  const totals = usageTotals(rows);
+  const cost = costOf(totals, prices);
+  const caveats = [
+    "Seconds are added across the agents. The first three ran side by side, so the wait was shorter.",
+    totals.unreported > 0 ? `${totals.unreported} ${totals.unreported === 1 ? "agent" : "agents"} reported no token counts, so the totals leave ${totals.unreported === 1 ? "it" : "them"} out.` : "",
+    totals.retried > 0 ? `${totals.retried} ${totals.retried === 1 ? "agent was" : "agents were"} asked twice; only the tokens of the last request are counted.` : "",
+    cost !== null ? `${COST_NOTE}.` : "",
+  ].filter(Boolean);
+  return (
+    <Card title="What the run used, all agents" className="mt-4">
+      <Pairs
+        className="text-sm"
+        items={[
+          [totals.models.length > 1 ? "Models" : "Model", totals.models.join(", ") || "not reported"],
+          ["Tokens in", totals.reported > 0 ? tokens(totals.inputTokens) : "not reported"],
+          ["Tokens out", totals.reported > 0 ? tokens(totals.outputTokens) : "not reported"],
+          ["Thinking tokens", totals.reported > 0 ? tokens(totals.thinkingTokens) : "not reported"],
+          ["Time worked", seconds(totals.seconds)],
+          ...(cost !== null ? [["Cost", fmtUsd(cost)] as [string, string]] : []),
+        ]}
+      />
+      <p className="mt-2 max-w-4xl text-xs leading-relaxed text-muted">{caveats.join(" ")}</p>
+    </Card>
+  );
+}
+
+const ROLES: Role[] = ["optimist", "cautious", "critic", "chair"];
+const RUN_WORD: Record<AgentRun["status"], string> = { idle: "waiting", running: "working", done: "replied", error: "no valid reply" };
+
+const SET_BLURB: Record<AssumptionPrice["id"], string> = {
+  reference: "The model's starting values",
+  optimist: "Least severe that can be defended",
+  cautious: "Most severe that is still credible",
+  agreed: "What the Chair settled",
+};
+
+/** An amount with a bar beside it, so the sets can be compared by eye. The bar is left out where the table is narrow. */
+function BarValue({ value, max, text }: { value: number | null; max: number; text: string }) {
+  const share = value !== null && max > 0 ? Math.min(1, value / max) : 0;
+  return (
+    <div className="flex items-center justify-end gap-3">
+      <span aria-hidden className="hidden h-2 w-24 shrink-0 overflow-hidden rounded-full border border-line bg-surface-2 @2xl:block">
+        <span className="block h-full rounded-full" style={{ width: `${share * 100}%`, background: "var(--series-1)" }} />
+      </span>
+      <span className="tabular whitespace-nowrap">{text}</span>
+    </div>
+  );
+}
+
+const kesRange = (a: number, b: number) => (a === b ? kes1(a) : `${kes1(Math.min(a, b))} to ${kes1(Math.max(a, b))}`);
+
+/**
+ * The offer priced by code under each set of assumptions, and the assumptions that reach this
+ * building. Every figure comes from the offer focus: nothing is priced here.
+ */
+function OfferJudgement({ focus, d, ledger, busy, onOpenStep }: { focus: PricedFocus; d: Deliberation | null; ledger: LedgerRow[]; busy: boolean; onOpenStep?: (id: StepId) => void }) {
+  const { assumptions, building } = focus.price;
+  const cls = building.housingClass;
+  const isScore = focus.hazardKind === "score";
+  const optimist = assumptions.find((a) => a.id === "optimist");
+  const cautious = assumptions.find((a) => a.id === "cautious");
+  const max100 = Math.max(0, ...assumptions.map((a) => a.loss100GrossKes ?? 0));
+  const maxAal = Math.max(0, ...assumptions.map((a) => a.aalGrossKes));
+  const notModelled = assumptions.some((a) => a.loss100GrossKes === null);
+  const heldFlat = assumptions.some((a) => a.loss100GrossKes !== null && a.loss100Extrapolated);
+
+  let range: ReactNode;
+  if (!d) {
+    range = <><strong className="font-semibold text-ink">Only the reference price is shown.</strong> Run the agents with the button above to see how much judgement moves this price.</>;
+  } else if (busy) {
+    range = "The agents are working. The price under each set appears here as the replies come in.";
+  } else if (!optimist || !cautious) {
+    range = "The range needs both the Optimist's and the Cautious proposal, and one of them did not return a valid reply.";
+  } else if (optimist.aalGrossKes === 0 && cautious.aalGrossKes === 0 && !optimist.loss100GrossKes && !cautious.loss100GrossKes) {
+    range = (
+      <>
+        <strong className="font-semibold text-ink">The agents&apos; judgement does not move this price.</strong> The Optimist&apos;s and the Cautious assumptions both give no loss at this building. What would move it is the depth of water at the building: see the <StepLink to="hazard" onOpenStep={onOpenStep} /> step.
+      </>
+    );
+  } else {
+    const both100 = optimist.loss100GrossKes !== null && cautious.loss100GrossKes !== null;
+    range = (
+      <>
+        <strong className="font-semibold text-ink">Uncertainty to carry.</strong> Between the Optimist&apos;s and the Cautious assumptions the average annual loss runs from {kesRange(optimist.aalGrossKes, cautious.aalGrossKes)}
+        {both100 ? <> and the 1-in-100 gross loss from {kesRange(optimist.loss100GrossKes!, cautious.loss100GrossKes!)}</> : null}. That range, not the single agreed figure, is the uncertainty an underwriter should carry into the price.
+      </>
+    );
+  }
+
+  // The assumptions that reach this building: its own class's two values, and on a score map the depth scale and the return periods.
+  const paths = [`fragility.${cls}`, `cap.${cls}`, ...(isScore ? ["depthScaleM", ...SCORE_TIERS.map((t) => `returnPeriods.${t}`)] : [])];
+  const reference = new Map(flattenParams(REFERENCE_PARAMS).map((p) => [p.path, p.value]));
+  const agreed = new Map(ledger.map((row) => [row.path, row]));
+  const capped = building.perReturnPeriod.filter((r) => r.capped);
+  const effect = (path: string): string => {
+    if (path.startsWith("fragility.")) return "Multiplies the depth at the building before the damage curve is read.";
+    if (path.startsWith("cap.")) return capped.length > 0 ? `Reached here: it sets the damage in the ${capped.map((r) => rpLabel(r.returnPeriod)).join(", ")} ${capped.length === 1 ? "flood" : "floods"}.` : "The most this class can lose. Not reached at this building.";
+    if (path === "depthScaleM") return "Turns the hazard score at the building into a depth of water.";
+    const tier = building.perReturnPeriod.find((r) => `returnPeriods.${r.id}` === path);
+    return tier ? `How often this flood comes. ${tier.depthM > 0 ? "Water reaches the building in it." : "The building is dry in it."}` : "How often this flood comes.";
+  };
+
+  return (
+    <Card title="What the agents' judgement does to this offer">
+      <div className="@container">
+        <p className="-mt-2 mb-4 max-w-3xl text-sm leading-relaxed text-ink-2">
+          The same building and the same policy terms, priced by code under each set of assumptions. Only the assumptions differ between the rows.
+        </p>
+        {d && (
+          <ul aria-label="Agents" className="mb-4 flex flex-wrap gap-x-5 gap-y-1 text-sm text-ink-2">
+            {ROLES.map((role) => {
+              const status = d.runs[role].status;
+              return (
+                <li key={role} className="inline-flex items-center gap-1.5">
+                  <StatusIcon size={14} status={status === "done" ? "pass" : status === "error" ? "fail" : status === "running" ? "running" : "idle"} />
+                  {ROLE_LABELS[role]}: {RUN_WORD[status]}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        <div className="grid items-start gap-x-8 gap-y-4 @5xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-120 text-left text-sm">
+              <thead className="text-xs text-muted">
+                <tr>
+                  <th className="pb-2 font-medium">Assumptions</th>
+                  <th className="pb-2 pl-4 text-right font-medium">Gross loss, {rpWithChance(100)}</th>
+                  <th className="pb-2 pl-4 text-right font-medium">Average annual loss, gross</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {assumptions.map((a) => (
+                  <tr key={a.id} className={a.inForce ? "font-semibold text-ink" : "text-ink-2"}>
+                    <td className="py-2 pr-3">
+                      <div className="text-ink">{a.label}{a.inForce && <span className="ml-2 text-xs font-semibold uppercase tracking-wide text-muted">In force</span>}</div>
+                      <div className="text-xs font-normal text-muted">{SET_BLURB[a.id]}</div>
+                    </td>
+                    <td className="py-2 pl-4"><BarValue value={a.loss100GrossKes} max={max100} text={a.loss100GrossKes === null ? "Not modelled" : `${kes1(a.loss100GrossKes)}${a.loss100Extrapolated ? "*" : ""}`} /></td>
+                    <td className="py-2 pl-4"><BarValue value={a.aalGrossKes} max={maxAal} text={kes1(a.aalGrossKes)} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {heldFlat && <p className="mt-2 text-xs leading-relaxed text-muted">* The rarest flood modelled under this set is more frequent than 1-in-100, so its loss stands in.</p>}
+            {notModelled && <p className="mt-2 text-xs leading-relaxed text-muted">Not modelled: under this set a 1-in-100 flood is more frequent than any flood modelled.</p>}
+          </div>
+          <Note>{range}</Note>
+        </div>
+
+        <h4 className="mt-6 text-sm font-semibold text-ink">The assumptions that reach this building</h4>
+        <p className="mt-1 max-w-3xl text-sm leading-relaxed text-ink-2">
+          Its class is {HOUSING_LABELS[cls]}, so of the fragility and cap values only that class&apos;s pair applies.{isScore ? " The depth scale and the return periods apply to every building." : ""} Every other assumption leaves this price alone.
+        </p>
+        <div className="mt-3 overflow-x-auto">
+          <table className={`w-full text-left text-sm ${ledger.length > 0 ? "min-w-176" : "min-w-120"}`}>
+            <thead className="text-xs text-muted">
+              <tr>
+                <th className="pb-2 font-medium">Assumption</th>
+                <th className="pb-2 pl-4 text-right font-medium">Reference</th>
+                {ledger.length > 0 && <th className="pb-2 pl-4 text-right font-medium">Agreed</th>}
+                <th className="pb-2 pl-5 font-medium">What it does to this building</th>
+                {ledger.length > 0 && <th className="pb-2 pl-5 font-medium">Why the Chair chose it</th>}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line align-top">
+              {paths.map((path) => {
+                const row = agreed.get(path);
+                return (
+                  <tr key={path}>
+                    <td className="py-2 pr-3 text-ink">{PARAM_LABELS[path]}</td>
+                    <td className="tabular py-2 pl-4 text-right text-ink-2">{fmtNum(reference.get(path) ?? NaN)}</td>
+                    {ledger.length > 0 && <td className="tabular py-2 pl-4 text-right font-semibold text-ink">{row ? `${fmtNum(row.final)}${row.adjusted ? "*" : ""}` : "-"}</td>}
+                    <td className="py-2 pl-5 leading-relaxed text-ink-2">{effect(path)}</td>
+                    {ledger.length > 0 && <td className="py-2 pl-5 leading-relaxed text-ink-2">{row?.reason || "No reason given."}</td>}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {paths.some((path) => agreed.get(path)?.adjusted) && <p className="mt-2 text-xs text-muted">* Outside the allowed range as proposed; corrected by code.</p>}
+        <SourceLine
+          className="mt-4 border-t border-line pt-3"
+          sources={[
+            { kind: "assumption", text: "Reference set: the model's starting assumptions" },
+            ...(d ? [{ kind: "ai" as const, text: "Optimist, Cautious and agreed sets, and the reasons: written by the agents, range-checked by code" }] : []),
+            { kind: focus.document.path === "model" ? ("ai" as const) : ("real" as const), text: `Building and terms: read from the offer document, see ${STEP_NAMES.offer}` },
+          ]}
+        />
+      </div>
+    </Card>
+  );
+}
+
 interface Props {
   session: Session;
   deliberation: Deliberation | null;
@@ -175,9 +460,18 @@ interface Props {
   onRun: () => void;
   onReplay: () => void;
   onImport: (file: File) => void;
+  /** US dollars per million tokens, when both prices are set in .env.local. null shows no cost at all. */
+  prices?: Prices | null;
+  /** The priced offer while the header switch is on Offer. */
+  focus?: PricedFocus | null;
+  /** The offer whatever the switch says, priced or not. */
+  offerFocus?: OfferFocus | null;
+  onOpenStep?: (id: StepId) => void;
 }
 
-export function AgentsStep({ session, deliberation: d, busy, checks, status, hasSaved, replayed, onRun, onReplay, onImport }: Props) {
+export function AgentsStep({ session, deliberation: d, busy, checks, status, hasSaved, replayed, onRun, onReplay, onImport, prices = null, focus = null, offerFocus = null, onOpenStep }: Props) {
+  const [view, setView] = useState<"offer" | "portfolio">("offer");
+  const onOffer = focus !== null && view === "offer";
   const isScore = session.dataset.hazardKind === "score";
   const missingKeys = status ? (Object.keys(status.configured) as Role[]).filter((r) => !status.configured[r]) : [];
   const ledger = d ? buildLedger(REFERENCE_PARAMS, d).filter((row) => isScore || !unusedForDepth(row.path)) : [];
@@ -211,15 +505,30 @@ export function AgentsStep({ session, deliberation: d, busy, checks, status, has
         </div>
       )}
 
-      {d && (
+      {focus ? (
+        <div className="mb-5">
+          <Segmented label="What this step shows" value={view} onChange={setView} options={[{ value: "offer", label: "This offer" }, { value: "portfolio", label: "Portfolio" }]} />
+        </div>
+      ) : (
+        <OfferNotice offerFocus={offerFocus} what="what the agents' judgement does to its price" onOpenStep={onOpenStep} />
+      )}
+
+      {onOffer && focus && (
+        <>
+          <OfferJudgement focus={focus} d={d} ledger={ledger} busy={busy} onOpenStep={onOpenStep} />
+          {d && !busy && <ChecksLine checks={checks} what="the agents" onOpenStep={onOpenStep} className="mt-4" />}
+        </>
+      )}
+
+      {!onOffer && d && (
         <>
           <RoundLabel>{ROUND_1}</RoundLabel>
           {/* The two proposals sit side by side to be compared. The Critic takes the full width below them, so its
               challenges can sit in a row and no card is left with a tall blank under a short reply. */}
           <div className="grid gap-4 @3xl:grid-cols-2">
-            <AgentCard run={d.runs.optimist}>{d.runs.optimist.output && <ProposalBody proposal={d.runs.optimist.output} scored={d.optimist} session={session} />}</AgentCard>
-            <AgentCard run={d.runs.cautious}>{d.runs.cautious.output && <ProposalBody proposal={d.runs.cautious.output} scored={d.cautious} session={session} />}</AgentCard>
-            <AgentCard run={d.runs.critic} className="@3xl:col-span-2">
+            <AgentCard run={d.runs.optimist} prices={prices}>{d.runs.optimist.output && <ProposalBody proposal={d.runs.optimist.output} scored={d.optimist} session={session} />}</AgentCard>
+            <AgentCard run={d.runs.cautious} prices={prices}>{d.runs.cautious.output && <ProposalBody proposal={d.runs.cautious.output} scored={d.cautious} session={session} />}</AgentCard>
+            <AgentCard run={d.runs.critic} prices={prices} className="@3xl:col-span-2">
               {critic && (
                 <div>
                   <p className="max-w-3xl text-sm leading-relaxed text-ink">{critic.summary}</p>
@@ -241,7 +550,7 @@ export function AgentsStep({ session, deliberation: d, busy, checks, status, has
           </div>
 
           <RoundLabel className="mt-6">{ROUND_2}</RoundLabel>
-          <AgentCard run={d.runs.chair}>
+          <AgentCard run={d.runs.chair} prices={prices}>
             {chair && (
               <div>
                 {/* The three figures stay in view under the heading. The summary and the answers to the challenges
@@ -322,19 +631,12 @@ export function AgentsStep({ session, deliberation: d, busy, checks, status, has
             </Card>
           )}
 
-          {checks.length > 0 && !busy && (
-            <Card title="Checks on the agents" aside={<ChecksSummary checks={checks} />} className="mt-4">
-              {/* Two lists side by side where there is room: the lines are short, and one list leaves most of a wide card blank. */}
-              <div className="grid gap-x-10 @4xl:grid-cols-2">
-                <CheckList checks={checks.slice(0, Math.ceil(checks.length / 2))} />
-                {checks.length > 1 && <div className="border-t border-line @4xl:border-t-0"><CheckList checks={checks.slice(Math.ceil(checks.length / 2))} /></div>}
-              </div>
-            </Card>
-          )}
+          {!busy && <RunTotals d={d} prices={prices} />}
+          {!busy && <ChecksLine checks={checks} what="the agents" onOpenStep={onOpenStep} className="mt-4" />}
         </>
       )}
 
-      {!d && (
+      {!onOffer && !d && (
         <>
           <Card title="Reference assumptions" aside={<SourceBadge kind="assumption" />}>
           <p className="mb-3 text-sm leading-relaxed text-ink-2">These are in force until the agents have run. They are also the &ldquo;without AI&rdquo; side of the comparison in the {STEP_NAMES.results} step.</p>

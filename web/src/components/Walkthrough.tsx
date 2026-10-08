@@ -1,25 +1,31 @@
 "use client";
 
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties } from "react";
 import { aiChecks, deliberate, replay, type Deliberation } from "@/lib/agents/orchestrate";
 import { buildProfile } from "@/lib/agents/profile";
 import { ROLE_LABELS, ROLES, type Role } from "@/lib/agents/schema";
+import type { Prices } from "@/lib/agents/usage";
 import { dataChecks, financialChecks, hazardChecks, summarise, vulnerabilityChecks } from "@/lib/checks";
 import { termsChecks } from "@/lib/checks/terms";
-import { fmtInt, fmtKes } from "@/lib/format";
+import { emptyDecision, type DecisionRecord } from "@/lib/decision";
+import { fmtInt, fmtKes, fmtNum, fmtPct } from "@/lib/format";
 import { prepareDrainage, withDrainage, type DrainageState } from "@/lib/geo/drainageView";
+import { loadGeo, type GeoLayers } from "@/lib/geo/layers";
 import { detectDatasets, loadDataset, type DatasetCandidate, type FileInfo, type FileSource } from "@/lib/ingest";
 import { filesFromUpload } from "@/lib/ingest/zip";
+import { kes1 } from "@/lib/labels";
 import { hotspotHits } from "@/lib/model/hotspots";
 import { REFERENCE_PARAMS } from "@/lib/model/params";
 import { runModel } from "@/lib/model/pipeline";
 import { applyTerms, DEFAULT_TERMS, type InsuranceTerms } from "@/lib/model/terms";
 import type { Dataset } from "@/lib/model/types";
 import { loadModelFiles, pickNairobi } from "@/lib/modelData/client";
+import { buildOfferFocus, isPriced, type OfferFocusProps, type PricedFocus } from "@/lib/offer/focus";
+import type { ExtractionRun, OfferState } from "@/lib/offer/types";
 import { loadRun, saveRun, type Active, type LogEntry, type Session } from "@/lib/session";
 import { STEP_IDS, STEP_NAMES, stepIndex, type StepId } from "@/lib/steps";
-import { Dashboard, type DashboardStep, type OfferSummary } from "./dashboard/Dashboard";
+import { Dashboard, type DashboardStep } from "./dashboard/Dashboard";
 import { OfferDropCard } from "./dashboard/OfferDropCard";
 import { DisplayControls } from "./DisplayControls";
 import { AgentsStep } from "./steps/AgentsStep";
@@ -27,14 +33,17 @@ import { AuditStep } from "./steps/AuditStep";
 import { DataStep } from "./steps/DataStep";
 import { HazardStep } from "./steps/HazardStep";
 import { LossStep } from "./steps/LossStep";
-import { MapStep } from "./steps/MapStep";
-import { OfferStep, type OfferState } from "./steps/OfferStep";
+import { OfferStep } from "./steps/OfferStep";
 import { ResultsStep } from "./steps/ResultsStep";
 import { ReplaceDataPanel } from "./steps/UploadStep";
 import { VulnerabilityStep } from "./steps/VulnerabilityStep";
 import { Button, Note, Segmented, StatusIcon, Tag } from "./ui";
 
-type AgentStatus = { model: string; configured: Record<Role, boolean> };
+/** What /api/agents/status answers: the model, which agents have a key, and the token prices when both are set. Never a key. */
+type AgentStatus = { model: string; configured: Record<Role, boolean>; prices?: Prices | null };
+
+/** Which view every step shows: the priced offer's building, or the whole portfolio as before. */
+type Mode = "offer" | "portfolio";
 
 /** Where the loaded model data came from, in the words the header shows after the data set's name. */
 interface DataOrigin {
@@ -43,6 +52,8 @@ interface DataOrigin {
   from: string;
   /** Why the built-in sample had to be used. Empty for the other two. */
   reason: string;
+  /** The folder's own name, the sample's, or the upload's: for the Audit step's record of the source. */
+  folderName: string;
 }
 
 /** Everything one load needs, kept so "Start over" can read the same data set again. */
@@ -78,7 +89,39 @@ function dataSetLabel(name: string): string {
   return words ? words[0].toUpperCase() + words.slice(1) : "Unnamed data set";
 }
 
-const uploadOrigin = (name: string): DataOrigin => ({ source: "upload", from: `from your upload (${name})`, reason: "" });
+const uploadOrigin = (name: string): DataOrigin => ({ source: "upload", from: `from your upload (${name})`, reason: "", folderName: name });
+
+/** What every step but the Dashboard is handed besides its own props: the offer, and a way to open another step. */
+interface StepExtras extends OfferFocusProps {
+  /** Opens another step of the walkthrough by its id from lib/steps. */
+  onOpenStep: (id: StepId) => void;
+}
+
+/** What the Results and Audit steps are handed for the underwriter's decision and the note that records it. */
+interface DecisionExtras {
+  /** The decision as it stands: a draft until recordedAt is set. */
+  decision: DecisionRecord;
+  /** Where the model data came from, in the header's words, for the footer of the decision note. */
+  dataSource: string;
+}
+
+/**
+ * A step with more props than its own Props type names yet. The offer props, and a few values kept
+ * here, are handed to every step that can use them; a step takes one up by adding the same name
+ * and type to its own Props, optional or required, and nothing here has to change when it does.
+ * Until then the step simply does not read it.
+ */
+const handed = <E,>() => <P,>(step: ComponentType<P>) => step as ComponentType<P & E>;
+
+const DashboardView = handed<OfferFocusProps>()(Dashboard);
+const DataView = handed<StepExtras>()(DataStep);
+/** The hazard maps and the risk map are one step, so it is handed what the map step took as well: the assumptions and result in force. */
+const HazardView = handed<StepExtras & { active: Active }>()(HazardStep);
+const AgentsView = handed<StepExtras & { prices: Prices | null }>()(AgentsStep);
+const VulnerabilityView = handed<StepExtras>()(VulnerabilityStep);
+const LossView = handed<StepExtras>()(LossStep);
+const ResultsView = handed<StepExtras & DecisionExtras & { onDecision: (next: DecisionRecord) => void }>()(ResultsStep);
+const AuditView = handed<StepExtras & DecisionExtras & { prices: Prices | null }>()(AuditStep);
 
 const fileNameOf = (path: string) => path.split("/").pop() || path;
 
@@ -130,11 +173,15 @@ export function Walkthrough() {
   const [log, setLog] = useState<LogEntry[]>([]);
   // The offer being priced in the offer step. Kept here so it is still there after a look at another step.
   const [offer, setOffer] = useState<OfferState | null>(null);
+  // What the underwriter chose on the header switch. null leaves it to the app: Offer once an offer is priced, Portfolio otherwise.
+  const [userMode, setUserMode] = useState<Mode | null>(null);
+  // The underwriter's decision on the offer, recorded on the Results step and listed on the Audit step.
+  const [decision, setDecision] = useState<DecisionRecord>(emptyDecision);
+  // The ward map and the waterways, loaded once: the offer is placed and measured against them.
+  const [geo, setGeo] = useState<GeoLayers | null>(null);
   // An offer on its way to the offer step: from the dashboard card, an upload or the rehearsal link.
   // A new seq means a new offer, even when the file is the same one.
   const [incoming, setIncoming] = useState<{ file?: File; text?: string; seq: number } | null>(null);
-  // The latest priced offer, as the dashboard shows it.
-  const [offerSummary, setOfferSummary] = useState<OfferSummary | null>(null);
   // The insurance terms applied after the damage model: example terms until someone edits them in the loss engine step.
   const [terms, setTerms] = useState<InsuranceTerms>(DEFAULT_TERMS);
 
@@ -142,6 +189,35 @@ export function Walkthrough() {
 
   useEffect(() => {
     fetch("/api/agents/status").then((r) => r.json()).then(setStatus).catch(() => setStatus(null));
+  }, []);
+
+  useEffect(() => {
+    let live = true;
+    loadGeo().then((layers) => {
+      if (live) setGeo(layers);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  /**
+   * Every change to the offer goes through here. A newly read document, or no offer at all, hands the
+   * header switch back to the app and starts the decision afresh. An edit to the values of the same
+   * document keeps the draft, but a decision already recorded goes back to being a draft: the
+   * figures it was recorded against have moved.
+   */
+  const offerRun = useRef<ExtractionRun | null>(null);
+  const changeOffer = useCallback((next: OfferState | null) => {
+    const run = next?.run ?? null;
+    if (run !== offerRun.current) {
+      offerRun.current = run;
+      setUserMode(null);
+      setDecision(emptyDecision());
+    } else {
+      setDecision((d) => (d.recordedAt ? { ...d, recordedAt: null } : d));
+    }
+    setOffer(next);
   }, []);
 
   const stepId = STEP_IDS[step];
@@ -233,9 +309,8 @@ export function Walkthrough() {
           .catch(() => setDrainage(null));
         setDeliberation(null);
         setReplayed(false);
-        setOffer(null);
+        changeOffer(null);
         setIncoming(null);
-        setOfferSummary(null);
         setHasSaved(loadRun(next) !== null);
         setBusy(null);
         setReplaceOpen(false);
@@ -248,7 +323,7 @@ export function Walkthrough() {
         return false;
       }
     },
-    [note],
+    [note, changeOffer],
   );
 
   /** First load: the Nairobi set from the model data folder, or from the built-in sample when the folder cannot be read. */
@@ -274,7 +349,7 @@ export function Walkthrough() {
         candidate,
         name: fromFolder ? "the model data folder" : "the built-in sample (sample-data.zip)",
         files: found.files,
-        origin: { source: loaded.source, from: fromFolder ? FOLDER_ORIGIN : SAMPLE_ORIGIN, reason: loaded.reason },
+        origin: { source: loaded.source, from: fromFolder ? FOLDER_ORIGIN : SAMPLE_ORIGIN, reason: loaded.reason, folderName: loaded.folderName },
       });
     } catch (e) {
       setBusy(null);
@@ -436,6 +511,22 @@ export function Walkthrough() {
   // Ground-up losses taken through the policy terms and the reinsurance: gross and net for every event.
   const termsResult = useMemo(() => (view && active ? applyTerms(view.dataset, active.result, terms) : null), [view, active, terms]);
 
+  // One picture of the offer, worked out once and handed to every step: located, priced and checked by
+  // code on the maps, the flood source, the assumptions and the terms in force. null when no offer is read.
+  const drainageInForce = drainageOn && drainage ? drainage.state : null;
+  const layers = useMemo(() => (geo ? { wards: geo.wards, waterways: geo.waterways } : null), [geo]);
+  const offerFocus = useMemo(
+    () => (view && active ? buildOfferFocus({ offer, session: view, active, drainage: drainageInForce, policyDefaults: terms, portfolioTerms: termsResult, deliberation: viewDeliberation, layers }) : null),
+    [offer, view, active, drainageInForce, terms, termsResult, viewDeliberation, layers],
+  );
+  // Offer mode needs a priced offer. Until there is one, and whenever the underwriter chooses it, every step shows the portfolio.
+  const pricedFocus: PricedFocus | null = isPriced(offerFocus) ? offerFocus : null;
+  const mode: Mode = pricedFocus && userMode !== "portfolio" ? "offer" : "portfolio";
+  const focus = mode === "offer" ? pricedFocus : null;
+  // The same two props for every step: `focus` in Offer mode only, `offerFocus` whatever the mode.
+  const follow: OfferFocusProps = { focus, offerFocus };
+  const prices = status?.prices ?? null;
+
   const checks = useMemo(() => {
     if (!session || !view || !active || !termsResult) return { ai: [], vulnerability: [], financial: [], all: [] };
     // The agents are checked on the data they decided on. Their saved fingerprint belongs to that
@@ -455,9 +546,8 @@ export function Walkthrough() {
     setReplaceOpen(false);
     setDeliberation(null);
     setDrainage(null);
-    setOffer(null);
+    changeOffer(null);
     setIncoming(null);
-    setOfferSummary(null);
     setTerms(DEFAULT_TERMS);
     setError(null);
     setLog([]);
@@ -482,6 +572,7 @@ export function Walkthrough() {
   const showPanel = !session || replaceOpen;
   const nextId: StepId | undefined = STEP_IDS[step + 1];
   const modelDataLine = session && origin ? `${dataSetLabel(session.dataset.name)}, ${origin.from}` : opening || busy ? "opening" : "none loaded";
+  const openStep = (id: StepId) => goTo(stepIndex(id));
 
   return (
     <div
@@ -525,6 +616,13 @@ export function Walkthrough() {
                   <Tag kind={isScore ? "proxy" : "real"}>{isScore ? "Proxy hazard, not measured" : "Published depth maps"}</Tag>
                 </span>
               )}
+              {/* Always there once the model has loaded, so it sits before the switches that appear later. */}
+              {session && (
+                <span className="inline-flex flex-wrap items-center gap-2">
+                  <span className={CAPTION}>View</span>
+                  <ModeSwitch mode={mode} offerReady={pricedFocus !== null} onChange={setUserMode} />
+                </span>
+              )}
               {session && drainage && drainage.dataset === session.dataset && (
                 <span className="inline-flex flex-wrap items-center gap-2">
                   <span className={CAPTION}>Flood source</span>
@@ -541,7 +639,7 @@ export function Walkthrough() {
           </div>
         </div>
         <div className="h-[3px] bg-brand" />
-        {view && active && <KeyFigures active={active} hazard={drainageOn ? "Terrain + drainage" : "Terrain only"} />}
+        {view && active && (focus ? <OfferKeyFigures focus={focus} /> : <KeyFigures active={active} hazard={drainageOn ? "Terrain + drainage" : "Terrain only"} />)}
       </header>
 
       <div className={`${GUTTER} flex flex-1 flex-col gap-6 py-6 lg:flex-row lg:gap-8 2xl:gap-10`}>
@@ -612,42 +710,45 @@ export function Walkthrough() {
                     </div>
                   )}
                   {stepId === "dashboard" && (
-                    <Dashboard
+                    <DashboardView
                       session={view}
                       active={active}
                       terms={termsResult}
                       deliberation={viewDeliberation}
                       checks={checks.all}
                       drainageOn={drainageOn}
-                      offer={offerSummary}
-                      onOpenStep={(target) => goTo(stepIndex(DASHBOARD_LINKS[target]))}
+                      offer={offerFocus?.status === "locating" ? null : (offerFocus?.summary ?? null)}
+                      onOpenStep={(target) => openStep(DASHBOARD_LINKS[target])}
                       offerCard={<OfferDropCard onOffer={giveOffer} onReplaceData={(zip) => void handleFiles([zip])} />}
+                      {...follow}
                     />
                   )}
                   {stepId === "offer" && (
                     <OfferStep
                       session={view}
                       active={active}
-                      drainage={drainageOn && drainage ? drainage.state : null}
                       modelReady={status ? status.configured.chair : null}
                       offer={offer}
-                      onOffer={setOffer}
-                      policyDefaults={terms}
+                      onOffer={changeOffer}
                       onLog={(message) => note(STEP_NAMES.offer, message)}
                       incoming={incoming}
-                      onSummary={setOfferSummary}
+                      focus={focus}
+                      offerFocus={offerFocus}
                     />
                   )}
-                  {stepId === "data" && <DataStep session={view} />}
+                  {stepId === "data" && <DataView session={view} {...follow} onOpenStep={openStep} />}
+                  {/* The hazard maps and the risk map are one step. It is handed everything the map step took (session, active) as well. */}
                   {stepId === "hazard" && (
-                    <HazardStep
+                    <HazardView
                       session={view}
+                      active={active}
                       drainage={session.dataset.hazardKind === "score" ? { state: drainage && drainage.dataset === session.dataset ? drainage.state : null, enabled: useDrainage, onToggle: setUseDrainage } : undefined}
+                      {...follow}
+                      onOpenStep={openStep}
                     />
                   )}
-                  {stepId === "map" && <MapStep session={view} active={active} />}
                   {stepId === "agents" && (
-                    <AgentsStep
+                    <AgentsView
                       session={view}
                       deliberation={viewDeliberation}
                       busy={agentsBusy}
@@ -664,12 +765,44 @@ export function Walkthrough() {
                           note(STEP_NAMES.agents, `Could not read ${file.name} as a saved run`);
                         }
                       }}
+                      prices={prices}
+                      {...follow}
+                      onOpenStep={openStep}
                     />
                   )}
-                  {stepId === "vulnerability" && <VulnerabilityStep session={view} active={active} checks={checks.vulnerability} />}
-                  {stepId === "loss" && <LossStep session={view} active={active} checks={checks.financial} terms={termsResult} onTermsChange={setTerms} />}
-                  {stepId === "results" && <ResultsStep session={view} active={active} deliberation={viewDeliberation} engineSession={session} terrainResult={terrainResult} terms={termsResult} />}
-                  {stepId === "audit" && <AuditStep session={view} active={active} deliberation={viewDeliberation} checks={checks.all} log={log} terms={termsResult} />}
+                  {stepId === "vulnerability" && <VulnerabilityView session={view} active={active} checks={checks.vulnerability} {...follow} onOpenStep={openStep} />}
+                  {stepId === "loss" && <LossView session={view} active={active} checks={checks.financial} terms={termsResult} onTermsChange={setTerms} {...follow} onOpenStep={openStep} />}
+                  {stepId === "results" && (
+                    <ResultsView
+                      session={view}
+                      active={active}
+                      deliberation={viewDeliberation}
+                      engineSession={session}
+                      terrainResult={terrainResult}
+                      terms={termsResult}
+                      decision={decision}
+                      onDecision={setDecision}
+                      dataSource={modelDataLine}
+                      {...follow}
+                      onOpenStep={openStep}
+                    />
+                  )}
+                  {stepId === "audit" && (
+                    <AuditView
+                      session={view}
+                      active={active}
+                      deliberation={viewDeliberation}
+                      checks={checks.all}
+                      log={log}
+                      terms={termsResult}
+                      modelSource={origin && origin.source !== "upload" ? { source: origin.source, folderName: origin.folderName, reason: origin.reason || null } : undefined}
+                      prices={prices}
+                      decision={decision}
+                      dataSource={modelDataLine}
+                      {...follow}
+                      onOpenStep={openStep}
+                    />
+                  )}
                 </>
               )}
             </motion.div>
@@ -700,6 +833,75 @@ export function Walkthrough() {
   );
 }
 
+/**
+ * The header switch between the priced offer and the portfolio. Drawn like the Segmented control
+ * beside it; it is its own piece because "Offer" has to be switched off until an offer is priced.
+ */
+function ModeSwitch({ mode, offerReady, onChange }: { mode: Mode; offerReady: boolean; onChange: (mode: Mode) => void }) {
+  const option = (value: Mode, label: string, disabled: boolean) => (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={value === mode}
+      disabled={disabled}
+      title={disabled ? "Read and price an offer first" : undefined}
+      onClick={() => onChange(value)}
+      className={`rounded-full px-3 py-1 text-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${value === mode ? "bg-surface font-medium text-ink shadow-sm" : "text-ink-2 enabled:hover:text-ink"}`}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div role="radiogroup" aria-label="Show the offer or the portfolio" className="inline-flex flex-wrap gap-1 rounded-full border border-line bg-surface-2 p-1">
+      {option("offer", "Offer", !offerReady)}
+      {option("portfolio", "Portfolio", false)}
+    </div>
+  );
+}
+
+/** One band of figures under the header: two columns on a phone, three on a tablet, then one row with a rule between figures. */
+function FigureStrip({ items, lead }: { items: { label: string; value: string; strong?: boolean }[]; lead?: string }) {
+  return (
+    <div className="@container border-b border-line bg-plane/95 backdrop-blur">
+      {lead && <p className={`${GUTTER} pt-2 text-xs leading-snug text-ink-2 wrap-anywhere`}>{lead}</p>}
+      {/* The steps are measured against the strip in rem, so a larger text size keeps the rows until one band fits. */}
+      <dl className={`${GUTTER} grid grid-cols-2 gap-x-6 gap-y-2 py-2 @2xl:grid-cols-3 @4xl:grid-cols-[repeat(6,auto)] @4xl:gap-x-4 @5xl:gap-x-6`}>
+        {items.map((x) => (
+          <div key={x.label} className="min-w-0 border-line @4xl:border-l @4xl:pl-4 @4xl:first:border-l-0 @4xl:first:pl-0 @5xl:pl-6">
+            <dt className="text-xs uppercase tracking-wide text-muted">{x.label}</dt>
+            <dd className={`tabular text-sm font-semibold @5xl:text-base ${x.strong ? "text-brand" : "text-ink"}`}>{x.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+/**
+ * The same strip in Offer mode: the offer's own figures, each labelled as the offer's. Every loss is
+ * from the engine. Gross is after the policy deductible and limit; the change to the portfolio is ground-up.
+ */
+function OfferKeyFigures({ focus }: { focus: PricedFocus }) {
+  const { total, portfolio } = focus.price;
+  const rate = total.ratePerMilleGross;
+  const added = portfolio.loss100ChangeKes;
+  const addedShare = portfolio.loss100ChangeShare;
+  const sign = added !== null && added < 0 ? "-" : "+";
+  const items: { label: string; value: string; strong?: boolean }[] = [
+    { label: "Offer sum insured", value: kes1(total.tivKes) },
+    { label: "Offer 1-in-100 gross loss · 1% a year", value: total.loss100GrossKes !== null ? kes1(total.loss100GrossKes) : "not modelled", strong: true },
+    { label: "Offer average annual loss, gross", value: kes1(total.aalGrossKes) },
+    { label: "Offer pure flood rate, gross", value: `${fmtNum(rate, rate !== 0 && Math.abs(rate) < 0.1 ? 4 : 2)} per mille` },
+    {
+      label: "Added to portfolio 1-in-100, ground-up",
+      value: added === null ? "not modelled" : Math.abs(added) < 0.5 ? "no change" : `${sign}${kes1(Math.abs(added))}${addedShare !== null ? ` (${sign}${fmtPct(Math.abs(addedShare), Math.abs(addedShare) < 0.001 ? 3 : 1)})` : ""}`,
+    },
+    { label: "Offer terms used", value: focus.terms.summary },
+  ];
+  const lead = `Figures for this offer: ${[focus.line.insured ?? focus.building.name, focus.line.location].filter(Boolean).join(", ")} (${focus.documentName}). Switch to Portfolio in the bar above for the whole portfolio.`;
+  return <FigureStrip items={items} lead={lead} />;
+}
+
 /** The figures an underwriter looks for first, kept in view on every step. The losses are ground-up: before any insurance terms. */
 function KeyFigures({ active, hazard }: { active: Active; hazard: string }) {
   const r = active.result;
@@ -714,18 +916,5 @@ function KeyFigures({ active, hazard }: { active: Active; hazard: string }) {
     { label: "Flood source", value: hazard },
     { label: "Assumptions", value: active.source === "ai" ? "Agreed by agents" : "Reference, no AI" },
   ];
-  return (
-    <div className="@container border-b border-line bg-plane/95 backdrop-blur">
-      {/* Two columns on a phone, three on a tablet, then one band across the whole bar with a rule between figures.
-          The steps are measured against the strip in rem, so a larger text size keeps the rows until one band fits. */}
-      <dl className={`${GUTTER} grid grid-cols-2 gap-x-6 gap-y-2 py-2 @2xl:grid-cols-3 @4xl:grid-cols-[repeat(6,auto)] @4xl:gap-x-4 @5xl:gap-x-6`}>
-        {items.map((x) => (
-          <div key={x.label} className="min-w-0 border-line @4xl:border-l @4xl:pl-4 @4xl:first:border-l-0 @4xl:first:pl-0 @5xl:pl-6">
-            <dt className="text-xs uppercase tracking-wide text-muted">{x.label}</dt>
-            <dd className={`tabular text-sm font-semibold @5xl:text-base ${x.strong ? "text-brand" : "text-ink"}`}>{x.value}</dd>
-          </div>
-        ))}
-      </dl>
-    </div>
-  );
+  return <FigureStrip items={items} />;
 }

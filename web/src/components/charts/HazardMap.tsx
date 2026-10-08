@@ -38,7 +38,16 @@ export function hazardMapRatio(dataset: Dataset, scenarioIndex: number): number 
   return (bbox[2] - bbox[0]) / (bbox[3] - bbox[1]);
 }
 
-export function HazardMap({ dataset, scenarioIndex, hits }: { dataset: Dataset; scenarioIndex: number; hits: HotspotHit[] }) {
+/** The offer building on the picture: where it is and what to call it. */
+export interface HazardMapOffer {
+  lat: number;
+  lon: number;
+  name: string;
+  /** True when a named place stands in for coordinates. */
+  approximate: boolean;
+}
+
+export function HazardMap({ dataset, scenarioIndex, hits, offer = null }: { dataset: Dataset; scenarioIndex: number; hits: HotspotHit[]; offer?: HazardMapOffer | null }) {
   const wrap = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(720);
@@ -125,7 +134,7 @@ export function HazardMap({ dataset, scenarioIndex, hits }: { dataset: Dataset; 
           height={height}
           className="absolute inset-0"
           role="img"
-          aria-label={`Map of the ${isScore ? "susceptibility score" : "flood depth"} in the ${scenario.label} scenario, with ${fmtInt(wet.length)} buildings affected, ${fmtInt(dry.length)} not affected${hits.length > 0 ? ` and ${hits.length} known flood areas` : ""}`}
+          aria-label={`Map of the ${isScore ? "susceptibility score" : "flood depth"} in the ${scenario.label} scenario, with ${fmtInt(wet.length)} buildings affected, ${fmtInt(dry.length)} not affected${hits.length > 0 ? ` and ${hits.length} known flood areas` : ""}${offer ? `, and the offer building ${offer.name}` : ""}`}
           onPointerLeave={() => setTip(null)}
         >
           {dry.map((b) => (
@@ -164,6 +173,16 @@ export function HazardMap({ dataset, scenarioIndex, hits }: { dataset: Dataset; 
               )}
             </g>
           ))}
+          {/* The offer building is drawn last, so nothing covers it: a ring with a dot at its centre. */}
+          {offer && (
+            <g
+              transform={`translate(${px(offer.lon)},${py(offer.lat)})`}
+              onPointerEnter={() => setTip({ x: px(offer.lon), y: py(offer.lat), title: offer.name, lines: [offer.approximate ? "The offer building, approximate location" : "The offer building"] })}
+            >
+              <circle r={11} fill="var(--surface)" fillOpacity={0.6} stroke="var(--brand)" strokeWidth={2.5} />
+              <circle r={3.5} fill="var(--brand)" />
+            </g>
+          )}
         </svg>
         {tip && (
           // Offsets are in rem so they follow the text size: 14.5rem is the tooltip's width (w-56) plus a small gap.
@@ -189,6 +208,14 @@ export function HazardMap({ dataset, scenarioIndex, hits }: { dataset: Dataset; 
             <span className="tabular">{isScore ? "0" : "0 m"}</span>
             <span className="inline-block h-2.5 w-24 shrink-0 rounded-full" style={{ background: `linear-gradient(to right, ${RAMP_VARS.map((v) => `var(${v})`).join(",")})` }} />
             <span className="tabular">{isScore ? "1.0 (highest)" : `${fmtNum(scaleMax, 1)} m or deeper`}</span>
+          </li>
+        )}
+        {offer && (
+          <li className="inline-flex items-center gap-2">
+            <span aria-hidden className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2" style={{ borderColor: "var(--brand)" }}>
+              <span className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--brand)" }} />
+            </span>
+            Offer building{offer.approximate ? " (approximate)" : ""}
           </li>
         )}
         <li className="inline-flex items-center gap-2"><span className="inline-block h-3 w-3 shrink-0 rounded-full border-2 border-surface ring-1 ring-line" style={{ background: "var(--series-2)" }} />Building affected ({fmtInt(wet.length)})</li>

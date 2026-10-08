@@ -13,7 +13,7 @@ import { hazardToDepth } from "@/lib/model/pipeline";
 import { rpLabel } from "@/lib/labels";
 import { HOUSING_LABELS, type HousingClass } from "@/lib/model/types";
 import type { Active, Session } from "@/lib/session";
-import { DRAINAGE_RGB, FACILITY_COLORS, SETTLEMENT_COLOR, WARD_COLOR, WATER_COLORS, type BasemapStatus, type LayerKey, type LayerState, type MapCamera, type MapView, type Selection, type WardMetric } from "./mapTheme";
+import { DRAINAGE_RGB, FACILITY_COLORS, SETTLEMENT_COLOR, WARD_COLOR, WATER_COLORS, OFFER_ZOOM, type BasemapStatus, type LayerKey, type LayerState, type MapCamera, type MapView, type OfferMark, type Selection, type WardMetric } from "./mapTheme";
 
 setWorkerUrl(new URL("maplibre-gl/dist/maplibre-gl-worker.mjs", import.meta.url).toString());
 
@@ -74,6 +74,10 @@ interface Props {
   onStatus: (s: BasemapStatus) => void;
   /** Kept up to date here and read when the map is created, so a map rebuilt for a theme change opens on the same view. */
   viewRef: { current: MapView };
+  /** The offer building, drawn above everything else. null in the portfolio view. */
+  offer?: OfferMark | null;
+  /** Draws the portfolio's buildings smaller and fainter, as the setting around the offer building. */
+  muted?: boolean;
 }
 
 /** A hover tooltip. x and y are where the pointer is; the tooltip is fitted inside the map when it is drawn. */
@@ -115,7 +119,7 @@ async function loadStyle(dark: boolean, plane: string): Promise<{ style: StyleSp
 }
 
 export function RiskMap(props: Props) {
-  const { session, active, geo, k, layers, threeD, wardMetric, wardRows, facilityDepth, selection, focus, viewRef } = props;
+  const { session, active, geo, k, layers, threeD, wardMetric, wardRows, facilityDepth, selection, focus, viewRef, offer = null, muted = false } = props;
   const box = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLDivElement>(null);
   const tipBox = useRef<HTMLDivElement>(null);
@@ -144,13 +148,18 @@ export function RiskMap(props: Props) {
       onlineRef.current = online;
       latest.current.onStatus(online ? "online" : "offline");
 
-      // A map rebuilt for a theme change opens where the last one was looking; the first map opens on the county.
+      // A map rebuilt for a theme change opens where the last one was looking. The first map opens on the
+      // offer building when there is one, and is marked as having gone there so no effect moves it again;
+      // otherwise it opens on the county.
       const saved = viewRef.current.camera;
+      const mark = latest.current.offer ?? null;
+      if (!saved && mark) viewRef.current.offerKey = mark.key;
+      const opening = saved ?? (mark ? { center: [mark.lon, mark.lat] as [number, number], zoom: OFFER_ZOOM } : null);
       const start = geo.county?.features[0] ? geometryBBox(geo.county.features[0].geometry) : rasterBox(session);
       map = new MapLibre({
         container: box.current,
         style,
-        ...(saved ?? {
+        ...(opening ?? {
           bounds: [
             [start[0], start[1]],
             [start[2], start[3]],
@@ -423,6 +432,43 @@ export function RiskMap(props: Props) {
     view.camera = heading(map, to);
   }, [ready, threeD, viewRef]);
 
+  // ---- portfolio buildings as the setting around an offer: smaller and fainter -------------------
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map || !map.getLayer("buildings")) return;
+    const paint = buildingPaint(muted);
+    map.setPaintProperty("buildings", "circle-radius", paint.radius);
+    map.setPaintProperty("buildings", "circle-opacity", paint.opacity);
+    map.setPaintProperty("buildings", "circle-stroke-width", paint.strokeWidth);
+  }, [ready, muted]);
+
+  // ---- the offer building: its outline or marker, filled in again on every rebuilt map -----------
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return;
+    const mode = !offer ? "" : offer.approximate ? "approximate" : offer.outline ? "outline" : "marker";
+    const point = offer ? [{ type: "Feature" as const, properties: { mode, label: offer.approximate ? `${offer.name} (approximate)` : offer.name }, geometry: { type: "Point", coordinates: [offer.lon, offer.lat] } }] : [];
+    const outline = offer?.outline && !offer.approximate ? [{ type: "Feature" as const, properties: {}, geometry: { type: "Polygon", coordinates: offer.outline } }] : [];
+    (map.getSource("offer-point") as GeoJSONSource | undefined)?.setData(fc(point) as unknown as SetDataArg);
+    (map.getSource("offer-outline") as GeoJSONSource | undefined)?.setData(fc(outline) as unknown as SetDataArg);
+  }, [ready, offer]);
+
+  // This effect comes after the others that move the camera, so on a new offer its move is the one that stands.
+  const offerKey = offer?.key ?? null;
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return;
+    // The camera goes to an offer building once. A rebuilt map, and an outline that arrives later, do not move it again.
+    const view = viewRef.current;
+    if (view.offerKey === offerKey) return;
+    view.offerKey = offerKey;
+    const at = latest.current.offer;
+    if (!at) return;
+    const to = { center: [at.lon, at.lat] as [number, number], zoom: Math.max(map.getZoom(), OFFER_ZOOM) };
+    map.easeTo({ ...to, duration: 1100 });
+    view.camera = heading(map, to);
+  }, [ready, offerKey, viewRef]);
+
   // The tooltip is measured as drawn and kept inside the map, so it is not cut off at the right
   // or bottom edge at any text size, in the page or in fullscreen.
   useLayoutEffect(() => {
@@ -469,7 +515,17 @@ function rasterBox(session: Session): BBox {
 }
 
 function firstSymbolId(map: MapLibre): string | undefined {
-  return map.getStyle().layers.find((l) => l.type === "symbol" && !["wards-label", "hotspots-label"].includes(l.id))?.id;
+  return map.getStyle().layers.find((l) => l.type === "symbol" && !["wards-label", "hotspots-label", "offer-label"].includes(l.id))?.id;
+}
+
+/** How the portfolio's building dots are drawn: at full strength, or smaller and fainter around an offer building. */
+function buildingPaint(muted: boolean): { radius: ExpressionSpecification; opacity: ExpressionSpecification; strokeWidth: ExpressionSpecification } {
+  const size = muted ? 0.6 : 1;
+  return {
+    radius: ["interpolate", ["linear"], ["zoom"], 10, ["+", 2.5 * size, ["*", ["get", "rad"], 9 * size]], 15, ["+", 5 * size, ["*", ["get", "rad"], 20 * size]]],
+    opacity: ["case", ["==", ["get", "wet"], 1], muted ? 0.6 : 0.95, muted ? 0.28 : 0.45],
+    strokeWidth: ["case", [">", ["get", "loss"], 0], muted ? 1.2 : 2, 0.8],
+  };
 }
 
 /** Adds every source and layer once. Data that changes with the scenario is filled in by the effects. */
@@ -553,16 +609,17 @@ function addStaticLayers(map: MapLibre, p: Props, online: boolean) {
     layout: { visibility: "none" },
     paint: { "fill-extrusion-color": classColor, "fill-extrusion-height": ["get", "h"], "fill-extrusion-base": 0, "fill-extrusion-opacity": 0.88 },
   });
+  const dots = buildingPaint(p.muted ?? false);
   map.addLayer({
     id: "buildings",
     type: "circle",
     source: "buildings",
     paint: {
       "circle-color": classColor,
-      "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, ["+", 2.5, ["*", ["get", "rad"], 9]], 15, ["+", 5, ["*", ["get", "rad"], 20]]],
-      "circle-opacity": ["case", ["==", ["get", "wet"], 1], 0.95, 0.45],
+      "circle-radius": dots.radius,
+      "circle-opacity": dots.opacity,
       "circle-stroke-color": ["case", [">", ["get", "loss"], 0], WARD_COLOR, surface],
-      "circle-stroke-width": ["case", [">", ["get", "loss"], 0], 2, 0.8],
+      "circle-stroke-width": dots.strokeWidth,
     },
   });
   map.addLayer({ id: "buildings-selected", type: "circle", source: "buildings", filter: ["==", ["get", "i"], -1], paint: { "circle-color": "rgba(0,0,0,0)", "circle-radius": 16, "circle-stroke-color": ink, "circle-stroke-width": 3 } });
@@ -601,9 +658,36 @@ function addStaticLayers(map: MapLibre, p: Props, online: boolean) {
       paint: { "text-color": navyLine, "text-halo-color": surface, "text-halo-width": 1.4, "text-opacity": 0.85 },
     });
   }
+
+  // The offer building goes on last, so it lies above every other layer. The sources start empty and are
+  // filled by an effect, which runs again on a rebuilt map.
+  const brandRgb = cssColor("--brand", [209, 18, 66]);
+  const brand = rgbCss(brandRgb);
+  const isMode = (mode: string): FilterSpecification => ["==", ["get", "mode"], mode];
+  const marker = { "circle-radius": 7, "circle-color": brand, "circle-stroke-color": surface, "circle-stroke-width": 2.5 };
+  map.addSource("offer-outline", { type: "geojson", data: empty });
+  map.addSource("offer-point", { type: "geojson", data: empty });
+  map.addLayer({ id: "offer-outline-fill", type: "fill", source: "offer-outline", paint: { "fill-color": brand, "fill-opacity": 0.22 } });
+  map.addLayer({ id: "offer-outline-line", type: "line", source: "offer-outline", layout: { "line-join": "round" }, paint: { "line-color": brand, "line-width": ["interpolate", ["linear"], ["zoom"], 13, 2, 18, 4.5] } });
+  // An approximate location keeps its ring at every zoom: the ring says "somewhere about here".
+  map.addLayer({ id: "offer-ring", type: "circle", source: "offer-point", filter: isMode("approximate"), paint: { "circle-radius": 24, "circle-color": rgbCss(brandRgb, 0.12), "circle-stroke-color": brand, "circle-stroke-width": 2.5 } });
+  // From far away an outline is a speck, so an exact location gets a ring and a marker until the map is close.
+  map.addLayer({ id: "offer-ring-far", type: "circle", source: "offer-point", maxzoom: 15, filter: ["!=", ["get", "mode"], "approximate"], paint: { "circle-radius": 17, "circle-color": rgbCss(brandRgb, 0), "circle-stroke-color": brand, "circle-stroke-width": 2.5 } });
+  map.addLayer({ id: "offer-point-far", type: "circle", source: "offer-point", maxzoom: 15, filter: isMode("outline"), paint: marker });
+  map.addLayer({ id: "offer-point", type: "circle", source: "offer-point", filter: ["!=", ["get", "mode"], "outline"], paint: marker });
+  if (online) {
+    map.addLayer({
+      id: "offer-label",
+      type: "symbol",
+      source: "offer-point",
+      layout: { "text-field": ["get", "label"], "text-font": ["Noto Sans Bold"], "text-size": 13, "text-offset": [0, 1.5], "text-anchor": "top", "text-max-width": 12, "text-allow-overlap": true, "text-ignore-placement": true },
+      paint: { "text-color": ink, "text-halo-color": surface, "text-halo-width": 2 },
+    });
+  }
 }
 
-const INTERACTIVE = ["buildings", "columns", "hotspots", "facilities", "settlements-fill", "wards-fill"];
+const OFFER_LAYERS = ["offer-point", "offer-point-far", "offer-ring", "offer-ring-far", "offer-outline-fill"];
+const INTERACTIVE = [...OFFER_LAYERS, "buildings", "columns", "hotspots", "facilities", "settlements-fill", "wards-fill"];
 
 /** Hover tooltips and clicks. Reads the latest props through a ref so the handlers are bound once. */
 function bindInteractions(map: MapLibre, latest: { current: Props }, setTip: (t: Tip | null) => void) {
@@ -621,7 +705,10 @@ function bindInteractions(map: MapLibre, latest: { current: Props }, setTip: (t:
     const props = hit.properties as Record<string, unknown>;
     const s = p.active.result.scenarios[p.k];
     const event = `${rpLabel(s.returnPeriod)} event`;
-    if (hit.layer.id === "buildings" || hit.layer.id === "columns") {
+    if (OFFER_LAYERS.includes(hit.layer.id)) {
+      if (!p.offer) return setTip(null);
+      setTip({ ...place(e), title: p.offer.name, lines: p.offer.lines });
+    } else if (hit.layer.id === "buildings" || hit.layer.id === "columns") {
       const i = Number(props.i);
       const b = p.session.dataset.buildings[i];
       const t = p.active.result.buildings[i].perScenario[p.k];

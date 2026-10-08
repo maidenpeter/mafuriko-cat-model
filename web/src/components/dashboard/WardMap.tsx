@@ -11,6 +11,7 @@
  *     rows={wardRows}                                    wardAccumulation() for the event
  *     top={topWards(wardRows)}                           the numbered wards
  *     valueLabel="Ground-up loss"
+ *     marker={{ lat, lon, label: "This offer" }}         optional: one point drawn over the wards, as a diamond
  *   />
  *
  * The shade is a second reading of the bars, never the only one: the numbered wards carry
@@ -43,9 +44,11 @@ interface Props {
   format?: (value: number) => string;
   /** The tallest the map may be at the Standard text size. */
   maxHeight?: number;
+  /** One point to pick out on the map, such as the building of an offer. Left off when it lies outside the ward outlines. */
+  marker?: { lat: number; lon: number; label: string } | null;
 }
 
-export function WardMap({ title, wards, rows, top, valueLabel, format = kes1, maxHeight = 340 }: Props) {
+export function WardMap({ title, wards, rows, top, valueLabel, format = kes1, maxHeight = 340, marker = null }: Props) {
   const wrap = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(480);
   const [active, setActive] = useState<number | null>(null);
@@ -81,7 +84,8 @@ export function WardMap({ title, wards, rows, top, valueLabel, format = kes1, ma
         centre: [x((b[0] + b[2]) / 2), y((b[1] + b[3]) / 2)] as Position,
       };
     });
-    return { spanX: Math.max(1e-9, (maxLon - minLon) * k), spanY: Math.max(1e-9, maxLat - minLat), items };
+    const inside = (lon: number, lat: number) => lon >= minLon && lon <= maxLon && lat >= minLat && lat <= maxLat;
+    return { spanX: Math.max(1e-9, (maxLon - minLon) * k), spanY: Math.max(1e-9, maxLat - minLat), items, x, y, inside };
   }, [wards]);
 
   const byIndex = useMemo(() => new Map(rows.filter((r) => r.index >= 0).map((r) => [r.index, r])), [rows]);
@@ -108,6 +112,9 @@ export function WardMap({ title, wards, rows, top, valueLabel, format = kes1, ma
 
   const fontSize = 12 * scale;
   const badge = 10 * scale;
+  // The marked point, in pixels. null when there is none or it lies outside the ward outlines.
+  const point = marker && shapes.inside(marker.lon, marker.lat) ? { x: px(shapes.x(marker.lon)), y: py(shapes.y(marker.lat)), label: marker.label } : null;
+  const diamond = 8 * scale;
   const hovered = active !== null ? byIndex.get(active) : undefined;
   const describe = (r: WardLoss) => `${r.name}${r.subcounty ? `, ${r.subcounty}` : ""}: ${valueLabel} ${format(r.lossKes)}, ${fmtInt(r.flooded)} of ${fmtInt(r.buildings)} buildings flooded`;
 
@@ -117,7 +124,7 @@ export function WardMap({ title, wards, rows, top, valueLabel, format = kes1, ma
         width={width}
         height={height}
         role="img"
-        aria-label={`${title}. ${ranked.length > 0 ? `Most loss: ${ranked.map((w) => `${w.rank}, ${w.name}, ${format(w.lossKes)}`).join("; ")}.` : "No ward has a loss in this event."}`}
+        aria-label={`${title}. ${ranked.length > 0 ? `Most loss: ${ranked.map((w) => `${w.rank}, ${w.name}, ${format(w.lossKes)}`).join("; ")}.` : "No ward has a loss in this event."}${point ? ` The diamond marks ${point.label.toLowerCase()}.` : ""}`}
         className="block"
         onPointerLeave={() => setActive(null)}
       >
@@ -148,6 +155,13 @@ export function WardMap({ title, wards, rows, top, valueLabel, format = kes1, ma
               </g>
             );
           })}
+          {/* The marked point goes on last. It is a diamond, so it is told from the round rank labels by shape. */}
+          {point && (
+            <g transform={`translate(${point.x.toFixed(1)},${point.y.toFixed(1)})`}>
+              <path d={`M0,${-diamond}L${diamond},0L0,${diamond}L${-diamond},0Z`} fill="var(--brand)" stroke="var(--surface)" strokeWidth={2} strokeLinejoin="round" />
+              <path d={`M0,${-diamond - 2}L${diamond + 2},0L0,${diamond + 2}L${-diamond - 2},0Z`} fill="none" stroke="var(--ink)" strokeWidth={1} strokeLinejoin="round" />
+            </g>
+          )}
         </g>
       </svg>
 
@@ -181,6 +195,14 @@ export function WardMap({ title, wards, rows, top, valueLabel, format = kes1, ma
           </svg>
           Numbered and outlined: most loss
         </li>
+        {point && (
+          <li className="inline-flex items-center gap-2">
+            <svg viewBox="0 0 22 22" aria-hidden className="shrink-0" style={{ width: "1.25rem", height: "1.25rem" }}>
+              <path d="M11,2L20,11L11,20L2,11Z" fill="var(--brand)" stroke="var(--ink)" strokeWidth={1.5} strokeLinejoin="round" />
+            </svg>
+            Diamond: {point.label.toLowerCase()}
+          </li>
+        )}
       </ul>
     </div>
   );

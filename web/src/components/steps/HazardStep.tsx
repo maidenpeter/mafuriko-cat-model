@@ -4,13 +4,16 @@ import { useState, type CSSProperties, type ReactNode } from "react";
 import { fmtInt, fmtNum, fmtPct } from "@/lib/format";
 import { DRAINAGE_DEFAULTS } from "@/lib/geo/drainage";
 import type { DrainageState } from "@/lib/geo/drainageView";
-import { kes1, pct1, rpLabel, rpWithChance } from "@/lib/labels";
+import { rpLabel, rpWithChance } from "@/lib/labels";
 import { SCORE_TIERS } from "@/lib/model/types";
-import type { Session } from "@/lib/session";
-import { STEP_NAMES, stepKicker } from "@/lib/steps";
+import { isPriced, type OfferFocus, type PricedFocus } from "@/lib/offer/focus";
+import { plural } from "@/lib/offer/shared";
+import type { Active, Session } from "@/lib/session";
+import { STEP_NAMES, stepKicker, type StepId } from "@/lib/steps";
 import { SourceBadge, SourceLine } from "../charts/ChartFrame";
 import { HazardMap, hazardMapRatio } from "../charts/HazardMap";
-import { Card, CheckList, ChecksSummary, Note, Segmented, StepHeader, Tag } from "../ui";
+import { Button, Card, CheckList, ChecksSummary, Note, Segmented, StepHeader, Tag } from "../ui";
+import { MapStep } from "./MapStep";
 
 /**
  * The source line under the hazard map. It is SourceLine's layout written out, because the hazard score needs
@@ -36,14 +39,34 @@ export interface DrainageControl {
   onToggle: (on: boolean) => void;
 }
 
-export function HazardStep({ session, drainage }: { session: Session; drainage?: DrainageControl }) {
+interface Props {
+  session: Session;
+  /** The assumptions and the result in force: what the map draws. */
+  active: Active;
+  drainage?: DrainageControl;
+  /** The priced offer while the header switch is on Offer. The step is then about that building. */
+  focus?: PricedFocus | null;
+  /** The offer whatever the switch says, priced or not. */
+  offerFocus?: OfferFocus | null;
+  onOpenStep?: (id: StepId) => void;
+}
+
+/**
+ * The one hazard step: the interactive map first, then the tests of how far the hazard layer can be trusted.
+ * With a priced offer it opens on that building, and the portfolio's own map is the second view.
+ */
+export function HazardStep({ session, active, drainage, focus = null, offerFocus = null, onOpenStep }: Props) {
   const { dataset, reference, hits } = session;
   const isScore = dataset.hazardKind === "score";
   const [index, setIndex] = useState(dataset.scenarios.length - 1);
   const scenario = dataset.scenarios[index];
-  const affected = dataset.buildings.filter((b) => b.hazard[index] > 0);
-  const tivExposed = affected.reduce((t, b) => t + b.tivKes, 0);
   const missed = hits.filter((h) => !h.hit);
+
+  // With a priced offer the step opens on the building; the portfolio's map is one click away.
+  const [view, setView] = useState<"offer" | "portfolio">("offer");
+  const shown = focus && view === "offer" ? focus : null;
+  // An offer that is loaded but not followed here: outside the maps, waiting for a value, or the header is on Portfolio.
+  const aside = focus ? null : offerFocus;
 
   // A depth map carries its own return period. A score tier has none of its own: the one shown is the reference assumption.
   const returnPeriod = scenario.fixedReturnPeriod ?? reference.scenarios.find((s) => s.id === scenario.id)?.returnPeriod;
@@ -75,11 +98,58 @@ export function HazardStep({ session, drainage }: { session: Session; drainage?:
 
   return (
     <div>
-      <StepHeader kicker={stepKicker("hazard")} title="Hazard">
-        {isScore
-          ? "Each building was looked up on five susceptibility maps. The value is a score from 0 to 1 built from terrain and distance to rivers. It is not a measured flood depth."
-          : "Each building was looked up on the flood depth maps. The value is water depth in metres for a flood of the stated rarity."}
+      <StepHeader kicker={stepKicker("hazard")} title={STEP_NAMES.hazard}>
+        {shown
+          ? `Where ${shown.building.name} stands on the flood maps, with the portfolio's insured buildings around it. Pick a return period to see how deep the water is at the building.`
+          : "Where water collects at each event, which insured buildings it reaches and how losses pile up by ward. Pick an event or press play to watch the flood spread as events get rarer."}
       </StepHeader>
+
+      {focus && (
+        <div className="mb-4">
+          <Segmented
+            label="What the map is about"
+            value={view}
+            onChange={setView}
+            options={[
+              { value: "offer", label: "This offer" },
+              { value: "portfolio", label: "Portfolio" },
+            ]}
+          />
+        </div>
+      )}
+      {aside && (
+        <div className="mb-4">
+          {aside.outside ? (
+            <Note tone="warn">
+              <strong className="font-semibold text-ink">{aside.outsideMessage}.</strong> {aside.building ? `${aside.building.name} is not on these maps` : "The offer is not on these maps"}, so the map below is the portfolio&rsquo;s.{aside.coverage ? ` ${aside.coverage}` : ""}
+            </Note>
+          ) : aside.waiting.length > 0 ? (
+            <Note tone="warn">
+              <strong className="font-semibold text-ink">The offer is not on the map yet.</strong> {plural(aside.waiting.length, "value")} read from the document {aside.waiting.length === 1 ? "waits" : "wait"} to be confirmed, so the map below is the portfolio&rsquo;s.
+              {onOpenStep && (
+                <Button variant="secondary" className="ml-2 mt-1" onClick={() => onOpenStep("offer")}>
+                  Open {STEP_NAMES.offer}
+                </Button>
+              )}
+            </Note>
+          ) : isPriced(aside) ? (
+            <p className="text-sm text-ink-2">An offer is loaded: {aside.building.name}. Switch the header to Offer to see it on this map.</p>
+          ) : (
+            <Note>{aside.statusLine}</Note>
+          )}
+        </div>
+      )}
+
+      <MapStep session={session} active={active} offer={shown} onOpenStep={onOpenStep} />
+
+      <div className="mb-4 mt-10 border-t border-line pt-6">
+        <h3 className="text-2xl font-semibold tracking-tight text-ink">Model validation</h3>
+        <p className="mt-1 max-w-3xl text-sm leading-relaxed text-ink-2">
+          {shown
+            ? `How far the hazard layer can be trusted at this site: whether it finds the places the county knows to flood, how much the answer moves with the drainage assumption, and the raw map the depths at ${shown.building.name} were read from.`
+            : "How far the hazard layer can be trusted: whether it finds the places the county knows to flood, how much the answer moves with the drainage assumption, and the raw maps every depth was read from."}
+        </p>
+      </div>
 
       {/* Three layouts from one set of cards. Narrow: one column. From 48rem of room: the map across the top and
           two columns under it. From 72rem: the map on the left with its checks and notes beside it, so the picture
@@ -87,22 +157,16 @@ export function HazardStep({ session, drainage }: { session: Session; drainage?:
       <div className="grid gap-4 @3xl:grid-cols-2 @6xl:grid-cols-[var(--map-column)_minmax(0,1fr)]" style={{ "--map-column": mapColumn } as CSSProperties}>
         <Card
           className="@3xl:col-span-2 @6xl:col-span-1"
-          title={<span className="inline-flex flex-wrap items-center gap-2">Buildings on the hazard map <Tag kind={isScore ? "proxy" : "real"} /></span>}
+          title={<span className="inline-flex flex-wrap items-center gap-2">The hazard map as supplied <Tag kind={isScore ? "proxy" : "real"} /></span>}
           aside={<Segmented label="Scenario" value={scenario.id} onChange={(id) => setIndex(dataset.scenarios.findIndex((s) => s.id === id))} options={dataset.scenarios.map((s) => ({ value: s.id, label: scenarioLabel(s) }))} />}
         >
           <p className="-mt-2 mb-4 max-w-3xl text-sm leading-relaxed text-ink-2">
             {isScore
               ? `The shading is the susceptibility score in the "${scenario.label}" tier: the darker the cell, the higher the score, and ground with no shading scores 0. `
               : `The shading is the flood depth in metres in a ${returnPeriod !== undefined ? rpWithChance(returnPeriod) : scenario.label} flood: the darker the cell, the deeper the water, and ground with no shading stays dry. `}
-            Each dot is an insured building; the large dots sit on a shaded cell. Point at a large dot{hits.length > 0 ? " or a known flood area" : ""} to see its values. Pick another scenario above the map to see the footprint change.
+            Each dot is an insured building of the portfolio; the large dots sit on a shaded cell. Point at a large dot{hits.length > 0 ? " or a known flood area" : ""} to see its values. Pick another scenario above the map to see the footprint change.
           </p>
-          <HazardMap dataset={dataset} scenarioIndex={index} hits={hits} />
-          {/* A label that wraps would push its figure down, so the figures sit on the bottom edge and stay in line. */}
-          <div className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
-            <div className="flex flex-col justify-between"><div className="text-muted">Buildings affected</div><div className="tabular text-lg font-semibold text-ink">{fmtInt(affected.length)} of {fmtInt(dataset.buildings.length)}</div></div>
-            <div className="flex flex-col justify-between"><div className="text-muted">Insured value in affected cells</div><div className="tabular text-lg font-semibold text-ink">{kes1(tivExposed)}</div></div>
-            <div className="flex flex-col justify-between"><div className="text-muted">Share of portfolio value</div><div className="tabular text-lg font-semibold text-ink">{pct1(tivExposed / reference.totalTivKes)}</div></div>
-          </div>
+          <HazardMap dataset={dataset} scenarioIndex={index} hits={hits} offer={shown ? { lat: shown.site.lat, lon: shown.site.lon, name: shown.building.name, approximate: shown.site.approximate } : null} />
           <Sources items={mapSources} className="mt-4 border-t border-line pt-3" />
         </Card>
 

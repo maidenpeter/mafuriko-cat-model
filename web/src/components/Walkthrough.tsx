@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties } from "react";
 import { aiChecks, deliberate, replay, type Deliberation, type ModelBasis } from "@/lib/agents/orchestrate";
 import { buildProfile } from "@/lib/agents/profile";
 import { ROLE_LABELS, ROLES, type Role } from "@/lib/agents/schema";
@@ -275,8 +275,13 @@ export function Walkthrough() {
 
   const stepsRef = useRef<HTMLOListElement>(null);
   useEffect(() => {
-    window.scrollTo({ top: 0, behavior: "smooth" });
     // On a phone the steps are one row that scrolls sideways: bring the current one to the middle of it.
+  // A new step opens at its top, at once and before it paints. A smooth scroll here started from
+  // wherever the last page was left, so a long page handed over to the bottom of the next one.
+  useLayoutEffect(() => {
+    window.scrollTo({ top: 0, behavior: "instant" });
+  }, [step]);
+
     const list = stepsRef.current;
     const item = list?.children[step];
     if (list && item) {

@@ -4,10 +4,19 @@ Nairobi Urban Flood Challenge · Kenya Re catastrophe modelling hackathon
 
 ## 1. What we are building
 
-A web app that takes the hackathon data as a zip upload and walks the viewer
-through a complete flood catastrophe model, one animated step at a time:
+A web app for an underwriter. It loads the hackathon data by itself, takes a
+broker's offer for one building, and walks through a complete flood
+catastrophe model with that building at the centre of every step:
 
-**Upload → Read the data → Hazard → Agents set the assumptions → Vulnerability → Loss engine → Risk map → Results → Price an offer → Audit**
+**Dashboard → Read the offer → Read the data → Hazard map → Agents → Vulnerability → Loss engine → Results → Audit**
+
+Once an offer has been read and priced the app is in **Offer mode**, and every
+step answers one question: should we take this business, and on what terms?
+The model data is not set aside. The synthetic portfolio is the offer's
+context on every step (the other insured buildings around it on the map, the
+range of its construction class, what it adds to the book), and each step
+keeps the full portfolio view as a second view. An **Offer / Portfolio**
+switch in the header returns to the portfolio alone.
 
 Each step shows its output, the checks that ran on it, and where every number
 came from. The viewer should be able to understand the result in under two
@@ -15,12 +24,13 @@ minutes and then drill into any figure.
 
 ### The one rule
 
-> **Agents choose and defend the assumptions. Code does every calculation. Tests check both. The screen shows all of it.**
+> **Language models read the document and choose the assumptions. Code checks, locates, prices and reconciles. Tests check both. The screen shows all of it.**
 
 This is the lesson from last year. An AI that takes the input and returns the
 output is a black box. Here, no loss figure ever comes out of a model: the
-agents return a small set of named parameters with a reason for each, and
-plain code turns those parameters into losses. That is what makes the tests
+agents return a small set of named parameters with a reason for each, the
+offer reader returns values with the sentence each one rests on, and plain
+code turns those into losses. That is what makes the tests
 meaningful and the result repeatable.
 
 ### What the judges score
@@ -29,7 +39,8 @@ From the problem statement: genuine AI integration and modelling rigour weigh
 more than visual polish, and honesty about limitations is scored. The AI must
 *materially change the output*, not describe it. Our evidence for that is a
 side-by-side of the loss curve **without AI** (reference assumptions) and
-**with AI** (the agents' agreed assumptions).
+**with AI** (the agents' agreed assumptions), and the same offer priced under
+the reference, optimistic, cautious and agreed assumptions.
 
 ## 2. Decisions already made
 
@@ -41,8 +52,11 @@ side-by-side of the loss curve **without AI** (reference assumptions) and
 | Agents | Optimist, Cautious, Critic, running in parallel, plus a Chair that combines them. |
 | AI provider | OpenAI (one key for all four agents) or Gemini (free keys, one per agent), chosen by one setting. The model call sits behind one function, so nothing else in the app knows which is in use. |
 | Front end | Next.js, modern and simple, animated walkthrough, tests running on screen. |
-| Input | A zip shaped like `data/data/`. The app must not depend on exact file names. |
-| Second AI feature | Chosen: offer pricing. An offer in plain words (a broker's memo as Word or text, or a typed sentence) becomes exposure rows by the model, every value is checked against its quote by code, and the rows are priced by code. With no key, or if the call fails, fixed rules do the reading and nothing leaves the browser. |
+| Model data | Read in place from the model data folder: `data/data` beside `web`, or `MODEL_DATA_DIR` in `web/.env.local`. The app opens on the Dashboard with the model loaded; with no folder it falls back to a built-in sample and says so. "Replace model data" takes a zip or loose files for another data set. The app must not depend on exact file names. |
+| Second AI feature | Chosen: offer pricing. An offer in plain words (a broker's memo as Word, PDF or text, or a typed sentence) becomes exposure rows by the model, every value is checked against its quote by code, and the rows are priced by code. With no key, or if the call fails, fixed rules do the reading and nothing leaves the browser. An old `.doc` file is refused with "Old Word format, please save as .docx". |
+| The offer at the centre | Once an offer is priced, every step follows that building, with the portfolio as its context and as a second view on the same step. One picture of the offer is built once by code and handed to every step, so no step prices anything itself. |
+| One home for each fact | Each figure, table and explanation lives in one step; another step that needs it gives one line and points there. The header strip carries the offer's headline figures on every step. |
+| The decision | The tool does not accept or decline. Results sets out the figures, the flags with their evidence and suggested conditions; the underwriter records Accept, Accept with conditions, Refer or Decline with a note, and can download a one-page decision note. |
 
 ## 3. The model
 
@@ -175,7 +189,16 @@ GEMINI_API_KEY_CRITIC=
 GEMINI_API_KEY_CHAIR=
 GEMINI_API_KEY=          # fallback used by any agent without its own key
 GEMINI_MODEL=            # optional; defaults to gemini-3.8-flash
+MODEL_DATA_DIR=          # optional; defaults to ../data/data, beside web
+OPENAI_PRICE_IN_PER_M=   # optional; US dollars per million tokens in
+OPENAI_PRICE_OUT_PER_M=  # optional; US dollars per million tokens out
+GEMINI_PRICE_IN_PER_M=
+GEMINI_PRICE_OUT_PER_M=
 ```
+
+Each call records its model, tokens in, out and thinking, and seconds. A cost
+is shown only when both prices for the provider in use are set. No price is
+written in the code.
 
 ## 5. Explainability
 
@@ -190,8 +213,18 @@ This is the part we lost on last year, so it is a feature in its own right.
 - **Run log.** Every step with its timing, inputs and outputs.
 - **With and without AI.** Reference curve next to the agreed curve, with the
   difference in shillings and percent.
-- **Export.** A downloadable audit file and a short written note (data
-  sources, assumptions, AI feature), which is also a required deliverable.
+- **Quotes in the document.** Read the offer shows the document with the
+  sentence behind each extracted value highlighted, and each value marked
+  "AI, verified", "AI, unverified" or "rules".
+- **Flags with evidence.** Every point raised on an offer carries a quote
+  from the document or a figure from the model, and is sorted by severity.
+  The thresholds behind the severities are stated assumptions.
+- **Export.** From Audit: the audit report as a PDF, the full audit file
+  (JSON, with the extraction record but not the document's text) and a short
+  written note (data sources with links, every assumption with its value,
+  the AI features and what each changed, drainage, the insurance terms, the
+  Oasis check, limits), which is also a required deliverable. When an offer
+  is priced the note opens with it. From Results: the one-page decision note.
 
 ## 6. Checks that run on screen
 
@@ -252,46 +285,68 @@ Each check shows pass, warning or fail, with the numbers behind it.
 
 ## 7. The walkthrough
 
-| Step | What the viewer sees |
-|---|---|
-| 0. Upload | Drop a zip. A sample dataset button for rehearsals. |
-| 1. Read the data | Files found, each tagged real or synthetic; data checks ticking off; the 10× notice. |
-| 2. Hazard | Buildings drawn over the susceptibility map; switch between tiers; hotspots marked hit or missed. |
-| 3. Agents | Three columns working in parallel, then the Chair's decision and the assumption ledger. |
-| 4. Vulnerability | Damage curves per construction class under the agreed parameters. |
-| 5. Loss engine | Loss building up tier by tier; click a building for its trace. The Insurance terms panel, and each event from ground-up to gross to net. |
-| 6. Risk map | Interactive map of Nairobi: flood depth for each event on a slider that can play, insured buildings with a click-through loss trace, wards shaded by loss or value, rivers and drains, informal settlements, schools and health facilities in the water, the county hotspots, and a 3D view with loss columns. Works without internet on a plain background. |
-| 7. Results | Total exposure, loss at key return periods, average annual loss; the loss curve with its band and its ground-up, gross and net lines; breakdown by class; largest contributors; with and without AI; the Oasis check. |
-| 8. Price an offer | Give a broker's memo or type a sentence. What was sent to the model with contact details removed; each value with its source sentence and whether code verified it; the building on the maps; ground-up and gross loss per return period with where the deductible and limit came from; the effect on the portfolio; checks on the offer; the rows as a CSV. |
-| 9. Audit | All checks, the ledger, the run log, and the export buttons. |
+The steps are listed once, in `web/src/lib/steps.ts`. In Offer mode each step
+is about the offer's building; the last column is the second view on the same
+step, and what the step shows when the header switch is on Portfolio.
+
+| Step | In Offer mode | Portfolio view |
+|---|---|---|
+| 0. Dashboard | The offer's headline figures and the way into each step. | The portfolio, its losses, the model data source, and a card to drop an offer on. |
+| 1. Read the offer | The document with each value's sentence highlighted; the rows in the exposure file's shape, each field marked "AI, verified", "AI, unverified" or "rules" and editable; what was sent and received, collapsed. | The same. |
+| 2. Read the data | Where the offer sits in the portfolio. | Files found, each tagged real or synthetic; data checks; the 10× notice. |
+| 3. Hazard map | The map zoomed to the building, its outline from the nearest OpenStreetMap building within 30 m (a marker, and a line saying so, when none is found); a return period slider; depth at the building per return period, terrain and ponding apart; distance to the nearest wet cell, river and drain. Portfolio layers are toggles, off by default. | The interactive map of Nairobi with insured buildings, wards, waterways, settlements and facilities. The hotspot test and the drainage sensitivity sit under "Model validation". |
+| 4. Agents | Three columns working in parallel, then the Chair's decision in a panel that scrolls inside a fixed height; the assumption ledger; the offer priced under each set of assumptions; usage per agent. | The portfolio's loss under each set. |
+| 5. Vulnerability | The building's points on its class curve, one per return period, and a "This building" row in the matrix. | Damage curves and ratios per construction class. |
+| 6. Loss engine | The single-building trace per return period: depth, damage ratio, ground-up, deductible, limit, gross, each line naming its source. | The portfolio engine, the Insurance terms panel, and each event from ground-up to gross to net. |
+| 7. Results | The underwriter's decision page: the offer in one line; 1-in-100 gross, average annual loss, pure rate per mille, change to the portfolio's 1-in-100; the loss chart; flags with evidence, sorted by severity; suggested conditions; the decision and its note; "Download decision note". | Total exposure, losses at key return periods, the loss curve with its band, breakdowns, with and without AI, the Oasis check. |
+| 8. Audit | Every check, the extraction record, agent usage, the model data source, and the exports, including the audit report as a PDF. | The same, without the offer. |
+
+An offer for a building outside the maps stops with "Outside the hazard maps
+loaded: flood cannot be priced here"; the steps then show the portfolio view.
 
 ## 8. Technical design
 
 - **Next.js (App Router) + TypeScript + Tailwind**, in `web/`.
 - **The model runs in the browser.** Zip reading (JSZip), CSV parsing
-  (PapaParse) and raster lookup (geotiff.js) all happen client-side, so there
-  is no upload limit and the walkthrough can animate real progress.
-- **Agent calls go through server routes**, so the keys stay on the server.
+  (PapaParse), raster lookup (geotiff.js) and PDF text (pdfjs-dist) all
+  happen client-side, so there is no upload limit and the walkthrough can
+  animate real progress.
+- **Model calls go through server routes**, so the keys stay on the server.
+  A third route serves the model data folder in place.
+- **One picture of the offer.** `src/lib/offer/focus.ts` turns the offer, the
+  loaded model and the assumptions in force into one object: the document
+  and its fields, the building, depth, damage and loss per return period,
+  the terms used, the effect on the portfolio, the price under each set of
+  assumptions, the checks, the flags and the suggested conditions. Every
+  step reads it.
+- **The building outline** comes from the public OpenStreetMap Overpass
+  service, asked from the browser with the building's coordinates.
 - **Motion** for animation, hand-written SVG charts (no chart library),
   **Zod** for schemas, **Vitest** for unit tests.
 
 ```
+README.md                 what it is, how to run it, a three-minute demo
 PLAN.md
-data/                     hackathon starter kit
+data/                     hackathon starter kit: data/data is the model data folder
+oasis/                    the independent check with Oasis LMF
 web/
-  src/app/                the walkthrough page; api/agents/[role] and api/offer/extract routes
-  src/lib/model/          parameters, hazard, vulnerability, financial, pipeline
+  src/app/                the walkthrough page; api/agents/[role], api/offer/extract and api/model-data routes
+  src/lib/model/          parameters, hazard, vulnerability, financial, insurance terms, pipeline
+  src/lib/modelData/      reading the model data folder in place
   src/lib/ingest/         zip, csv, raster, dataset detection
   src/lib/checks/         the on-screen checks
-  src/lib/agents/         prompts, schemas, model client
-  src/lib/offer/          reading an offer, checking it against its words, locating and pricing it
-  src/components/         steps, charts, shared UI
+  src/lib/agents/         prompts, schemas, model client, usage and cost
+  src/lib/offer/          reading an offer, checking it against its words, locating and pricing it; focus.ts
+  src/lib/offerFiles/     file kinds and PDF text
+  src/lib/decision.ts     flags, suggested conditions, the decision record; decisionNote.ts prints it
+  src/lib/export.ts       the written note and the audit file
+  src/components/         dashboard, steps, charts, shared UI
   tests/                  unit tests, plus a test against the starter kit
 ```
 
 ### Input contract
 
-The app looks inside the zip for:
+The app looks inside the model data folder, or an uploaded zip, for:
 
 - an exposure CSV (columns `loc_id, lat, lon, housing_class, tiv_kes`, and
   optionally `hazard_score_*`);
@@ -299,7 +354,7 @@ The app looks inside the zip for:
   `moderate`, `severe`, `extreme`) or return periods (`rp100y`);
 - optionally a hotspots CSV (`name, lat, lon`).
 
-If the zip holds more than one dataset, the viewer picks one. Rasters named by
+If the folder or zip holds more than one dataset, the viewer picks one. Rasters named by
 return period are treated as depths in metres with their own return periods,
 so a Nzoia-style dataset runs through the same engine. This is insurance
 against being handed something unexpected on the day.
@@ -334,6 +389,13 @@ Each phase ends with something that works, so there is always a demo.
    code prices the rows on the loaded maps and assumptions.
 8. **Insurance terms.** Deductible and limit per building, quota share and
    excess of loss on the portfolio, ground-up, gross and net throughout.
+9. **Model data folder and dashboard.** The model loads by itself and the
+   app opens on the Dashboard.
+10. **Offer-led walkthrough.** One picture of the offer for every step; PDF
+    input; quotes highlighted in the document; the merged Hazard map with the
+    building outline; the single-building trace; the decision page and its
+    note; Audit with the extraction record, usage and the PDF.
+11. **Deliverables.** The written note, the root README, this plan.
 
 ## 10. Honest limits to state in the demo
 
@@ -361,6 +423,11 @@ Each phase ends with something that works, so there is always a demo.
   signature blocks). Names written inside ordinary sentences are not
   removed. The screen shows exactly what was sent, and "Fixed rules only"
   sends nothing.
+- The building outline on the Hazard map comes from the public OpenStreetMap
+  Overpass service, which is run by volunteers. The offer building's
+  coordinates and the search radius go to it, and nothing else: no name, no
+  value, no word of the document. When no building is mapped within 30 m,
+  the map shows a marker and says so.
 - A value marked verified was found written in the document. That shows it
   was written, not that it was understood, so the source sentence sits
   beside every value.
@@ -371,6 +438,16 @@ Each phase ends with something that works, so there is always a demo.
 - An offer is priced on the residential damage curve whatever it is used
   for, and water entering basements is not modelled. Both are flagged on
   screen when they apply.
+- An offer has a ground-up and a gross loss. Net is a portfolio figure.
+- The flags on an offer rest on thresholds we chose (water at the building at
+  1-in-25 or more frequent is high; 1% and 5% added to the portfolio's
+  1-in-100; 5% and 10% of the portfolio's insured value; a 1-in-100 gross
+  loss of 3% and 10% of the sum insured). They are listed in the written
+  note. The "poor drainage" flag is a word test on the document's own
+  sentence, which is always shown.
+- A point that the maps show as dry gives a loss of zero. That is a statement
+  about the maps at those coordinates, not a finding that the building
+  cannot flood; the flags say what the maps cannot see.
 
 ## 11. Open items
 
@@ -384,11 +461,27 @@ Each phase ends with something that works, so there is always a demo.
 - [ ] Confirm the free-tier request limits.
 - [x] Confirm the OpenAI model name: `gpt-6-luna` is on OpenAI's model page
       and listed for our key (checked 8 October 2026).
-- [ ] Complete one live agent run and save it, so a run can ship with the app.
+- [ ] Complete one live agent run and save it, so a run can ship with the app
+      (to be done by the team on localhost).
 - [ ] Get the marking rubric and check this plan against it.
 - [x] Choose the second AI feature: offer pricing.
 - [ ] Run one offer end to end with the hosted model on localhost (the rules
-      path is covered by tests against the two test offers).
+      path is covered by tests against the two test offers; to be done by
+      the team).
+- [x] Insurance terms: deductible, limit, quota share and excess of loss,
+      with ground-up, gross and net kept apart.
+- [x] Model data folder: the model loads by itself and the app opens on the
+      Dashboard.
+- [x] Offer-led walkthrough: every step follows the priced offer, with the
+      portfolio as context and the Offer / Portfolio switch.
+- [x] PDF offers, and the message for old Word files.
+- [x] Decision page, decision record and the one-page decision note.
+- [x] Written note, root README and this plan brought in line.
+- [ ] Look at every step in a browser in Offer mode, light and dark, at
+      390 px and 1920 px, with the Nairobi test offer.
+- [ ] Check the building outline lookup once against the live Overpass
+      service (tests use a local stand-in).
+- [ ] Set the token prices in `web/.env.local` if a cost should be shown.
 
 ## 12. Sources
 
@@ -405,4 +498,6 @@ Each phase ends with something that works, so there is always a demo.
   Details in `web/public/geo/SOURCES.md`.
 - Basemap: OpenFreeMap styles on OpenStreetMap data. Terrain: Mapzen Terrain
   Tiles on AWS Open Data.
+- Building outlines for an offer: OpenStreetMap through the Overpass API,
+  https://overpass-api.de (OpenStreetMap contributors, ODbL).
 - Oasis LMF: https://github.com/OasisLMF/OasisLMF

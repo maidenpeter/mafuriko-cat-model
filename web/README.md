@@ -1,7 +1,9 @@
 # Mafuriko web app
 
-An explainable flood loss walkthrough for the Kenya Re hackathon (Team A, Nairobi).
-The plan and the modelling decisions are in [`../PLAN.md`](../PLAN.md).
+An explainable flood model for an underwriter, for the Kenya Re hackathon (Team A, Nairobi).
+Once an offer has been read and priced, every step is about that building; the loaded portfolio
+is its context. A three-minute demo path is in [`../README.md`](../README.md), and the plan and
+the modelling decisions are in [`../PLAN.md`](../PLAN.md).
 
 ## Run it
 
@@ -26,7 +28,12 @@ npm run build
 npm start                    # http://localhost:3000
 ```
 
-Without keys the walkthrough still runs, on reference assumptions, and says so.
+Without keys the walkthrough still runs: the offer is read by fixed rules, the model uses
+reference assumptions, and the screen says so.
+
+An estimated cost in US dollars appears beside the token counts only when both
+`OPENAI_PRICE_IN_PER_M` and `OPENAI_PRICE_OUT_PER_M` (or the `GEMINI_` pair) are set in
+`.env.local`. No price is written in the code.
 
 ## Model data
 
@@ -47,6 +54,25 @@ exposure CSV, hotspots) from the model data folder and opens on the Dashboard wi
   offer and opens in step 1, Read the offer. Problem statements and the data dictionary stay
   documentation.
 
+## The offer
+
+- **Inputs.** An offer is a `.docx`, a `.pdf` or a `.txt` file, or text typed into the box. A PDF
+  is turned into text in the browser. An old `.doc` file is refused with "Old Word format,
+  please save as .docx".
+- **Offer mode.** When an offer is priced, the header switch reads **Offer** and every step
+  follows that building. **Portfolio** on the same switch returns to the portfolio view, and
+  each step keeps the portfolio as a second view beside "This offer".
+- **Outside the maps.** A building outside the hazard maps stops with "Outside the hazard maps
+  loaded: flood cannot be priced here" and no loss figure.
+- **What leaves the browser.** With a key, the offer's text goes to the hosted model with email
+  addresses, phone numbers and contact blocks removed; "Fixed rules only" sends nothing. The
+  building's coordinates go to the public OpenStreetMap Overpass service to fetch its outline.
+- **Decision note.** On Results, the underwriter records Accept, Accept with conditions, Refer
+  or Decline with a note. **Download decision note** gives one printable page.
+- **Audit.** The Audit step holds every check, the extraction record, what each model call used
+  and the model data source. It gives the audit report as a PDF, the written note (Markdown) and
+  the full audit file (JSON).
+
 ## The steps
 
 The steps are listed once, in `src/lib/steps.ts`. Every step takes its number and name from there.
@@ -56,20 +82,32 @@ The steps are listed once, in `src/lib/steps.ts`. Every step takes its number an
 | 0 | Dashboard |
 | 1 | Read the offer |
 | 2 | Read the data |
-| 3 | Hazard |
-| 4 | Risk map |
-| 5 | Agents |
-| 6 | Vulnerability |
-| 7 | Loss engine |
-| 8 | Results |
-| 9 | Audit |
+| 3 | Hazard map |
+| 4 | Agents |
+| 5 | Vulnerability |
+| 6 | Loss engine |
+| 7 | Results |
+| 8 | Audit |
 
-Every step is open as soon as the model has loaded.
+Every step is open as soon as the model has loaded. The hazard maps and the risk map are one
+step, Hazard map.
+
+| Step | In Offer mode | Portfolio view |
+|---|---|---|
+| Dashboard | The offer's headline figures and where to go next | The portfolio, its losses and the offer drop card |
+| Read the offer | The document with each value's sentence highlighted, the editable fields and their sources, what was sent and received | The same |
+| Read the data | Where the offer sits in the portfolio | Files found, data checks |
+| Hazard map | The building pinpointed, depth per return period, distances to water and drains | Portfolio layers, hotspot test and drainage sensitivity under "Model validation" |
+| Agents | The assumptions, their reasons and the offer's price under each set | The portfolio's loss under each set |
+| Vulnerability | The building's points on its class curve | Curves and damage ratios by class |
+| Loss engine | The single-building trace per return period | The portfolio engine and the insurance terms |
+| Results | Flags, suggested conditions, the decision and the decision note | Loss curve, breakdowns, with and without AI, the Oasis check |
+| Audit | Every check, the extraction record, usage, the exports | The same, without the offer |
 
 ## Rehearsal shortcuts
 
-- `http://localhost:3000/?step=8` opens that step once the model has loaded (numbers as in the
-  table above). Old links with `sample=1` still work: the model loads by itself, so it changes nothing.
+- `http://localhost:3000/?step=7` opens that step once the model has loaded (numbers as in the
+  first table above: 7 is Results, 8 is Audit). Old links with `sample=1` still work: the model loads by itself, so it changes nothing.
 - `http://localhost:3000/?offer=1` opens step 1, Read the offer, with the Nairobi test offer and
   reads it straight away. The offer is the first `.docx` with NAIROBI in its name in the
   `test-data` folder beside the model data folder (`../data/test-data` by default). It is served
@@ -95,7 +133,12 @@ npm run build
 | `src/lib/checks/` | The checks shown on screen. |
 | `src/lib/agents/` | Agent prompts, reply schemas, the OpenAI and Gemini calls, and the two-round orchestration. |
 | `src/app/api/agents/` | Server routes that hold the keys and call the model. |
-| `src/components/` | The dashboard, the walkthrough steps, the risk map and the charts. |
+| `src/lib/offer/` | Reading an offer, checking each value against its sentence, locating and pricing it. `focus.ts` builds the one picture of the offer every step reads. |
+| `src/lib/offerFiles/` | Telling `.docx`, `.pdf`, `.txt` and old `.doc` apart, and turning a PDF into text. |
+| `src/app/api/offer/extract/` | The server route that sends the offer's text, contact details removed, to the model. |
+| `src/lib/decision.ts`, `src/lib/decisionNote.ts` | Flags, suggested conditions, the decision record and the printable decision note. |
+| `src/lib/export.ts` | The written note and the full audit file. |
+| `src/components/` | The dashboard, the walkthrough steps, the hazard map and the charts. |
 | `tests/` | Vitest tests. |
 
 Only `openai.ts` and `gemini.ts` in `src/lib/agents/` call a model, and `provider.ts` picks between them.

@@ -1,10 +1,12 @@
 import { z } from "zod";
 import { HOUSING_CLASSES } from "../model/types";
 import {
+  BI_COVERS,
   DEDUCTIBLE_BASES,
   FLOOD_COVERS,
   NOTE_KINDS,
   OCCUPANCIES,
+  OFFER_EQUIPMENT_FIELDS,
   OFFER_FIELDS,
   OFFER_LOSS_FIELDS,
   OFFER_LOSS_KEYS,
@@ -12,7 +14,10 @@ import {
   OFFER_ROW_KEYS,
   OFFER_TERM_FIELDS,
   OFFER_TERM_KEYS,
+  PRESENCES,
+  YES_NO,
   type BuildOfferPrompt,
+  type EquipmentItem,
   type ExtractionPath,
   type FloodLoss,
   type FromFlatReply,
@@ -77,6 +82,19 @@ export const emptyTerms = (): OfferTerms => ({
   riverName: missingValue(),
   riverDistanceM: missingValue(),
   floodHistoryYears: missingValue(),
+  basementDepthM: missingValue(),
+  drainDesignRp: missingValue(),
+  sumpPumpCapacity: missingValue(),
+  sumpPumpBackup: missingValue(),
+  floodBarriers: missingValue(),
+  nonReturnValves: missingValue(),
+  valueBuildingKes: missingValue(),
+  valueMachineryKes: missingValue(),
+  valueContentsKes: missingValue(),
+  valueBelowGroundKes: missingValue(),
+  annualRentKes: missingValue(),
+  biCovered: missingValue(),
+  premiumKes: missingValue(),
 });
 
 /** The most past flood losses kept from one document. A memo with more than this is read by a person. */
@@ -102,6 +120,37 @@ export function uniqueLosses(losses: readonly FloodLoss[]): FloodLoss[] {
     else if (kept[at].amountKes.value === null && amount !== null) kept[at] = loss;
   }
   return kept.slice(0, MOST_LOSSES);
+}
+
+/** The most items of equipment below ground kept from one document. */
+export const MOST_EQUIPMENT = 20;
+
+/** What an item of equipment is called when the extractor gave its sentence but no name. */
+export const EQUIPMENT_LABEL = "Equipment below ground";
+
+/**
+ * What makes two items the same one: the name with its capitals, spaces and plural evened out,
+ * so "Generators" and "generator" are one item. An item with no name of its own is told apart
+ * by its sentence.
+ */
+function equipmentKey({ item }: EquipmentItem): string {
+  const name = item.value === null || item.value === EQUIPMENT_LABEL ? "" : item.value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/s$/, "");
+  return name ? `item ${name}` : `sentence ${item.quote.trim()}`;
+}
+
+/**
+ * The items with each one kept once, in the order given. A memo names the same generator where
+ * it describes the basement and again where it describes a past flood.
+ */
+export function uniqueEquipment(items: readonly EquipmentItem[]): EquipmentItem[] {
+  const seen = new Set<string>();
+  const kept = items.filter((entry) => {
+    const key = equipmentKey(entry);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return kept.slice(0, MOST_EQUIPMENT);
 }
 
 /** What a note of each kind is called when the extractor gave it no summary of its own. */
@@ -192,6 +241,7 @@ Rows:
 - A building is a structure that is insured. Plant, machinery, equipment, stock and contents are not buildings and get no row, even when the document gives them their own coordinates or values.
 - When the document describes one building, or one site with a single total, send one row.
 - Entries about a past flood loss carry that loss's number in "row": number the losses from 1 in the order the document lists them.
+- Entries about equipment below ground carry that item's number in "row": number the items from 1 in the order the document names them.
 - Entries about the offer as a whole, and all notes, have "row": 0.
 
 Values are always text:
@@ -220,6 +270,24 @@ Fields for the offer (row 0):
 - river_distance_m: the stated distance from the site to that river, in metres.
 - flood_history_years: the number of years the document's loss or claims history covers, with the sentence or heading that states it. "Loss history (11 years: 2014 to 2024)" is "11". Send it only when a number of years is written. Never work it out from a range of dates.
 Where the document states both the terms of the current policy and the terms asked for in this offer, send the terms asked for.
+
+Below ground, the drains, the value split and the cover (row 0). The flood model prices water in a basement, overloaded drains and lost rent from these, so each one must be a statement of the document. Never guess one, never work one out from other figures, and never fill one in from what is usual for a building of this kind. An entry that is left out is recorded as not stated, and the broker is asked for it.
+- basement_depth_m: how far the lowest basement floor is below ground level, in metres, only when the document states that depth. Never multiply a number of levels by a height, and never send a depth of flood water.
+- drain_design_rp: the return period, in years, that the site's storm drains are designed for. "Designed for a 1-in-50 year storm" and "50-year design standard" are both "50". Not the return period of a past flood, and not an amount of rain.
+- sump_pump_capacity: the capacity of the basement sump pumps, in the document's own words, for example "2 x 15 l/s".
+- sump_pump_backup: one of ${YES_NO.map((c) => `"${c}"`).join(", ")}. "yes" when the document says the sump pumps have backup power, such as a generator, a battery or a second supply. "no" when it says they have none.
+- flood_barriers: one of ${PRESENCES.map((c) => `"${c}"`).join(", ")}. "present" when the document says flood barriers, flood gates or flood boards are fitted. "absent" when it says there are none. A barrier that is only planned or recommended is left out.
+- non_return_valves: one of ${PRESENCES.map((c) => `"${c}"`).join(", ")}. "present" when the document says non-return or backflow valves are fitted on the drains. "absent" when it says there are none.
+- value_building_kes: the insured value of the building itself, in KES, when the document splits the total insured value.
+- value_machinery_kes: the insured value of plant and machinery, in KES, from the same split.
+- value_contents_kes: the insured value of contents, in KES, from the same split. Stock counts as contents only when no contents figure is given.
+- value_below_ground_kes: the value, in KES, of the machinery and contents that the document says are in a basement or below ground, only when it states that figure. Never add items up, and never send the amount of a past loss.
+- annual_rent_kes: the rent or revenue of the building for one year, in KES, only when the document states a yearly figure. Never multiply a monthly figure.
+- bi_covered: one of ${BI_COVERS.map((c) => `"${c}"`).join(", ")}. "covered" when the offer asks for business interruption or loss of rent to be insured, "excluded" when it leaves it out.
+- premium_kes: the annual premium of the policy for all risks, in KES. When the document gives a current premium and a proposed one, send the current one. Not a premium for flood alone, and not a rate.
+
+Equipment below ground (row is the item's number, from 1). Send one entry for each item of equipment the document says is in a basement or below ground: generators, switchgear, transformers, pumps, tanks, lift motors, server rooms and the like. List each item once.
+- equipment_below_ground: the item in a few words, as the document names it. Its quote is the exact sentence or line that says where the item is. Equipment that the document places above ground, or does not place at all, is left out.
 
 Past flood losses (row is the loss's number, from 1). List every past loss at the site from flood or water damage that the document states: a river in flood, storm water, water in a basement, a burst pipe, blocked or overflowing drains. Leave out fire, theft, machinery breakdown and every other cause, even when they stand in the same loss history. List each loss once, even when the document reports it in more than one place.
 - flood_loss_year: the year the loss happened, as four digits. Its quote is the exact sentence or line that states the year.
@@ -264,15 +332,29 @@ const NUMBER_FIELDS = new Set<OfferField>([
   "flood_history_years",
   "flood_loss_year",
   "flood_loss_amount_kes",
+  "basement_depth_m",
+  "drain_design_rp",
+  "value_building_kes",
+  "value_machinery_kes",
+  "value_contents_kes",
+  "value_below_ground_kes",
+  "annual_rent_kes",
+  "premium_kes",
 ]);
 
 /** A year a loss can have happened in. Anything outside this is a figure taken for a year by mistake. */
 export const LOSS_YEAR_RANGE = { min: 1900, max: 2100 } as const;
+/** A storm a drain can be designed for, in years. Anything outside this is a figure taken for a return period by mistake. */
+export const DESIGN_RP_RANGE = { min: 1, max: 10_000 } as const;
 const WORD_LISTS: Partial<Record<OfferField, readonly string[]>> = {
   housing_class: HOUSING_CLASSES,
   occupancy: OCCUPANCIES,
   flood_cover: FLOOD_COVERS,
   flood_deductible_basis: DEDUCTIBLE_BASES,
+  sump_pump_backup: YES_NO,
+  flood_barriers: PRESENCES,
+  non_return_valves: PRESENCES,
+  bi_covered: BI_COVERS,
 };
 
 /** "4250000000", "48,500" and " 1800 " are numbers. "8 million" and "about 5" are not: the model was asked for plain digits. */
@@ -294,6 +376,7 @@ function readEntry(entry: OfferFlatEntry): Quoted<unknown> {
     if (entry.field === "basements" && !Number.isInteger(n)) return unreadValue(quote, `The model's value "${written}" is not a whole number of basement levels.`);
     if (entry.field === "flood_history_years" && n <= 0) return unreadValue(quote, `The model's value "${written}" is not a number of years above zero.`);
     if (entry.field === "flood_loss_year" && (!Number.isInteger(n) || n < LOSS_YEAR_RANGE.min || n > LOSS_YEAR_RANGE.max)) return unreadValue(quote, `The model's value "${written}" is not a year.`);
+    if (entry.field === "drain_design_rp" && (n < DESIGN_RP_RANGE.min || n > DESIGN_RP_RANGE.max)) return unreadValue(quote, `The model's value "${written}" is not a return period in years.`);
     return statedValue(n, quote);
   }
   const words = WORD_LISTS[entry.field];
@@ -308,13 +391,16 @@ function readEntry(entry: OfferFlatEntry): Quoted<unknown> {
  * The flat reply as an extraction. A field repeated for the same row keeps its last entry;
  * notes all stay. A reply with no entry about any building still gives one empty row, as the
  * rules do, so there is always a row on screen to fill in. Past flood losses are built the way
- * rows are, by their number, and a loss the model listed twice is kept once.
+ * rows are, by their number, and a loss the model listed twice is kept once. Equipment below
+ * ground is a list like the notes: every entry is kept, in the order of its number, and an item
+ * named twice is kept once.
  */
 export const fromFlatReply: FromFlatReply = (reply) => {
   const rowEntries = new Map<number, Map<OfferRowField, OfferFlatEntry>>();
   const lossEntries = new Map<number, Map<OfferLossField, OfferFlatEntry>>();
   const terms = emptyTerms();
   const notes: OfferNote[] = [];
+  const equipment: { number: number; item: Quoted<string> }[] = [];
 
   for (const entry of reply.entries) {
     const { field } = entry;
@@ -323,6 +409,13 @@ export const fromFlatReply: FromFlatReply = (reply) => {
       const summary = NOT_STATED.test(entry.value.trim()) ? "" : entry.value.trim();
       // A note with neither a summary nor a sentence says nothing.
       if (summary || quote) notes.push({ kind: field as NoteKind, ...statedValue(summary || NOTE_LABELS[field as NoteKind], quote) });
+      continue;
+    }
+    if ((OFFER_EQUIPMENT_FIELDS as readonly string[]).includes(field)) {
+      const quote = entry.quote.trim();
+      const name = NOT_STATED.test(entry.value.trim()) ? "" : entry.value.trim();
+      // An item with neither a name nor a sentence says nothing. A model with one list may number every item the same.
+      if (name || quote) equipment.push({ number: entry.row, item: statedValue(name || EQUIPMENT_LABEL, quote) });
       continue;
     }
     if (NOT_STATED.test(entry.value.trim())) continue;
@@ -364,5 +457,8 @@ export const fromFlatReply: FromFlatReply = (reply) => {
       }),
   );
 
-  return { rows: rows.length ? rows : [emptyRow("model")], terms, notes, floodLosses };
+  // A stable sort: items with the same number stay in the order they were sent.
+  const equipmentBelowGround = uniqueEquipment([...equipment].sort((a, b) => a.number - b.number).map(({ item }) => ({ item })));
+
+  return { rows: rows.length ? rows : [emptyRow("model")], terms, notes, floodLosses, equipmentBelowGround };
 };

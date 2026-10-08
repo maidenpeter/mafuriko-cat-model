@@ -765,7 +765,7 @@ describe("offer checks", () => {
   it("states basements and a non-residential building as limits, not failures", () => {
     const { byId } = run(extraction([siteRow()], { basements: stated(3), occupancy: stated("commercial") }, [note("basement_plant", "generators below ground")]));
     expect(byId("offer-basements")).toMatchObject({ status: "warn", group: "hazard" });
-    expect(byId("offer-basements")?.detail).toContain("Water entering basements is not modelled");
+    expect(byId("offer-basements")?.detail).toContain("water entering a basement is not read from them");
     expect(byId("offer-basements")?.detail).toContain("3 basement levels");
     expect(byId("offer-curve")).toMatchObject({ status: "warn", group: "vulnerability" });
     expect(byId("offer-curve")?.detail).toContain("commercial building");

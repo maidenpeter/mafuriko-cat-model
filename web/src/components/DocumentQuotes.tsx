@@ -18,6 +18,13 @@
  * Rows with an empty quote are left out of the count; rows whose quote is not in the text are
  * named in the line above the panel. Each status has its own underline style and a word in the
  * key below the panel, so status never rests on colour alone.
+ *
+ * Three more props, all optional, for a page that shows the count itself and keeps the keyboard
+ * in its own list:
+ *   showCount={false}       leaves out "N of N quotes found"; quotes that are not in the text are still named
+ *   focusActive={false}     scrolls to the active quote without moving the keyboard to it
+ *   panelClassName="..."    the height of the scrolling panel, in place of the one it comes with
+ * countQuotes(text, quotes) gives the same count without drawing anything.
  */
 
 import { memo, useEffect, useMemo, useRef, type KeyboardEvent } from "react";
@@ -33,18 +40,27 @@ export type DocumentQuotesProps = {
   activeId?: string | null;
   onSelect?: (id: string) => void;
   className?: string;
+  /** False leaves out the line that counts the quotes found. Quotes that are not in the text are still named. */
+  showCount?: boolean;
+  /** False scrolls to the active quote and leaves the keyboard where it is. */
+  focusActive?: boolean;
+  /** The height of the scrolling panel. */
+  panelClassName?: string;
 };
 
 /** The word, background and underline for each status. The underline shape differs, not just the colour. */
 const STATUS: Record<QuoteStatus, { word: string; wash: string; line: string }> = {
   verified: { word: "Verified", wash: "bg-accent-wash", line: "decoration-solid decoration-accent" },
-  confirmed: { word: "Confirmed", wash: "bg-accent-wash", line: "decoration-double decoration-accent" },
-  edited: { word: "Edited", wash: "bg-surface-2", line: "decoration-wavy decoration-ink-2" },
+  confirmed: { word: "Confirmed by you", wash: "bg-accent-wash", line: "decoration-double decoration-accent" },
+  edited: { word: "Typed by you", wash: "bg-surface-2", line: "decoration-wavy decoration-ink-2" },
   rules: { word: "Set by rules", wash: "bg-surface-2", line: "decoration-dotted decoration-ink-2" },
-  unverified: { word: "Unverified", wash: "bg-brand-wash", line: "decoration-dashed decoration-brand" },
+  unverified: { word: "Check this", wash: "bg-brand-wash", line: "decoration-dashed decoration-brand" },
 };
 
 const STATUS_ORDER: QuoteStatus[] = ["verified", "confirmed", "edited", "rules", "unverified"];
+
+/** The height the scrolling panel comes with. */
+const PANEL_HEIGHT = "max-h-[24rem] lg:max-h-[36rem]";
 
 const MARK = "cursor-pointer rounded-sm underline decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
@@ -119,7 +135,18 @@ const Block = memo(function Block({ pieces, lookup, activeId, onSelect }: BlockP
   );
 });
 
-export function DocumentQuotes({ text, quotes, activeId = null, onSelect, className = "" }: DocumentQuotesProps) {
+/**
+ * How many of the quotes are in the text, for a line that says so away from the panel.
+ * asked leaves out rows with an empty quote; missing names the rows whose quote is not in the text.
+ */
+export function countQuotes(text: string, quotes: DocumentQuote[]): { found: number; asked: number; missing: string[] } {
+  const withQuote = quotes.filter((q) => q.quote.trim() !== "");
+  const { notFound } = findQuoteSpans(text, withQuote);
+  const gone = new Set(notFound);
+  return { found: withQuote.length - gone.size, asked: withQuote.length, missing: withQuote.filter((q) => gone.has(q.id)).map((q) => q.label) };
+}
+
+export function DocumentQuotes({ text, quotes, activeId = null, onSelect, className = "", showCount = true, focusActive = true, panelClassName = PANEL_HEIGHT }: DocumentQuotesProps) {
   const panel = useRef<HTMLDivElement>(null);
   const shownId = useRef<string | null>(null);
   const firstRun = useRef(true);
@@ -175,8 +202,8 @@ export function DocumentQuotes({ text, quotes, activeId = null, onSelect, classN
       box.scrollTo({ top: Math.max(0, top), behavior: still ? "auto" : "smooth" });
     }
     // On first load only scroll: taking the keyboard before the reader has done anything would be a surprise.
-    if (!first) mark.focus({ preventScroll: true });
-  }, [activeId, lookup]);
+    if (!first && focusActive) mark.focus({ preventScroll: true });
+  }, [activeId, lookup, focusActive]);
 
   const found = lookup.numberOf.size;
   const activeStart = activeId === null ? undefined : lookup.startOf.get(activeId);
@@ -184,18 +211,22 @@ export function DocumentQuotes({ text, quotes, activeId = null, onSelect, classN
 
   return (
     <div className={`min-w-0 ${className}`}>
-      <p className="mb-2 text-sm leading-relaxed text-ink-2" aria-live="polite">
-        {asked === 0
-          ? "No quotes to show in the document yet."
-          : `${found} of ${asked} ${asked === 1 ? "quote" : "quotes"} found in the document.`}
-        {missing.length > 0 && <span className="text-ink"> Not found in the document: {missing.join(", ")}.</span>}
-      </p>
+      {(showCount || missing.length > 0) && (
+        <p className="mb-2 text-sm leading-relaxed text-ink-2" aria-live="polite">
+          {!showCount
+            ? ""
+            : asked === 0
+              ? "No quotes to show in the document yet."
+              : `${found} of ${asked} ${asked === 1 ? "quote" : "quotes"} found in the document.`}
+          {missing.length > 0 && <span className="text-ink"> Not found in the document: {missing.join(", ")}.</span>}
+        </p>
+      )}
       <div
         ref={panel}
         role="region"
         aria-label="Document text"
         tabIndex={0}
-        className="max-h-[24rem] overflow-y-auto rounded-2xl border border-line bg-surface p-4 text-sm leading-relaxed text-ink-2 focus-visible:outline-2 focus-visible:outline-accent lg:max-h-[36rem]"
+        className={`overflow-y-auto rounded-2xl border border-line bg-surface p-4 text-sm leading-relaxed text-ink-2 focus-visible:outline-2 focus-visible:outline-accent ${panelClassName}`}
       >
         {text.trim() === "" ? (
           <p className="text-muted">No document text to show.</p>

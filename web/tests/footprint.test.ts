@@ -2,7 +2,11 @@ import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  ASSUMED_HEIGHT_M,
+  ASSUMED_LEVELS,
+  ASSUMED_SQUARE_M,
   buildFootprintQuery,
+  buildingBlock,
   closeRing,
   distanceToEdgesM,
   distanceToFootprintM,
@@ -10,8 +14,14 @@ import {
   FOOTPRINT_LABEL,
   footprintAreaM2,
   footprintsFromOverpass,
+  heightTagM,
+  LEVEL_HEIGHT_M,
+  MAX_IMPLIED_LEVELS,
   nearestFootprint,
   pointInFootprint,
+  SQUARE_SIDE_RANGE_M,
+  type Footprint,
+  type FootprintFound,
   type FootprintPolygon,
 } from "../src/lib/offer/footprint";
 
@@ -143,6 +153,19 @@ describe("reading an Overpass reply", () => {
     expect(found.levels).toBeNull();
   });
 
+  it("reads the height tag in metres, and leaves out what it cannot read", () => {
+    expect(heightTagM("12")).toBe(12);
+    expect(heightTagM(" 12.5 m ")).toBe(12.5);
+    expect(heightTagM("18metres")).toBe(18);
+    expect(heightTagM(9)).toBe(9);
+    expect(heightTagM("40 ft")).toBeCloseTo(12.192, 3);
+    for (const unread of [undefined, null, "", "tall", "0", "-4", "12'6\"", "3 storeys", "5000", { m: 12 }]) expect(heightTagM(unread), String(unread)).toBeNull();
+
+    const [tagged, bare] = footprintsFromOverpass({ elements: [way(10, square(0, 0, 10), { building: "yes", height: "24 m", "building:levels": "7" }), way(11, square(40, 0, 10))] })!;
+    expect(tagged).toMatchObject({ heightM: 24, levels: 7 });
+    expect(bare).toMatchObject({ heightM: null, levels: null });
+  });
+
   it("joins a relation's pieces into an outline with its courtyard", () => {
     const outer = square(0, 0, 10);
     const relation = {
@@ -182,10 +205,10 @@ describe("reading an Overpass reply", () => {
 });
 
 describe("choosing the building", () => {
-  const far = { polygon: polygon(square(20, 0, 5)), osmId: "way/1", name: null, levels: null };
-  const near = { polygon: polygon(square(0, 12, 4)), osmId: "way/2", name: null, levels: null };
-  const around = { polygon: polygon(square(0, 0, 10)), osmId: "way/3", name: null, levels: null };
-  const kiosk = { polygon: polygon(square(0, 0, 2)), osmId: "way/4", name: null, levels: null };
+  const far = { polygon: polygon(square(20, 0, 5)), osmId: "way/1", name: null, levels: null, heightM: null };
+  const near = { polygon: polygon(square(0, 12, 4)), osmId: "way/2", name: null, levels: null, heightM: null };
+  const around = { polygon: polygon(square(0, 0, 10)), osmId: "way/3", name: null, levels: null, heightM: null };
+  const kiosk = { polygon: polygon(square(0, 0, 2)), osmId: "way/4", name: null, levels: null, heightM: null };
 
   it("takes the nearer wall", () => {
     const chosen = nearestFootprint([far, near], LAT, LON)!;
@@ -195,7 +218,7 @@ describe("choosing the building", () => {
 
   it("takes the building the point is in over a nearer wall next door", () => {
     // The point is 1 m inside the big building's east wall; the neighbour's wall is 2 m away.
-    const neighbour = { polygon: polygon(square(15, 0, 4)), osmId: "way/5", name: null, levels: null };
+    const neighbour = { polygon: polygon(square(15, 0, 4)), osmId: "way/5", name: null, levels: null, heightM: null };
     const p = node(9, 0);
     expect(nearestFootprint([neighbour, around], p.lat, p.lon)).toMatchObject({ candidate: { osmId: "way/3" }, distanceM: 0 });
   });
@@ -210,7 +233,99 @@ describe("choosing the building", () => {
   });
 });
 
+describe("the building as a block", () => {
+  // A 20 m by 20 m outline around the point: 400 m² on the ground.
+  const found = (tags: { levels?: number | null; heightM?: number | null } = {}): FootprintFound => ({
+    found: true,
+    polygon: polygon(square(0, 0, 10)),
+    osmId: "way/7",
+    name: null,
+    levels: tags.levels ?? null,
+    heightM: tags.heightM ?? null,
+    distanceM: 0,
+    osmUrl: "https://www.openstreetmap.org/way/7",
+    label: FOOTPRINT_LABEL,
+  });
+  const none: Footprint = { found: false, cause: "none", reason: "OpenStreetMap has no building within 30 m of these coordinates" };
+
+  it("stands on the OpenStreetMap outline when there is one, anchored at its middle", () => {
+    const outline = found();
+    const block = buildingBlock(LAT, LON, outline, null);
+    expect(block.shape).toBe("osm");
+    expect(block.sideM).toBeNull();
+    expect(block.polygon).toBe(outline.polygon);
+    expect(block.polygon.coordinates[0]).toHaveLength(5);
+    expect(block.areaM2).toBeCloseTo(400, 0);
+    expect(block.centre[0]).toBeCloseTo(LON, 9);
+    expect(block.centre[1]).toBeCloseTo(LAT, 9);
+    // An outline off to one side is anchored where it is, not at the stated point.
+    const aside = buildingBlock(LAT, LON, { ...found(), polygon: polygon(square(25, 0, 5)), distanceM: 20 }, null);
+    expect((aside.centre[0] - LON) * M_LON).toBeCloseTo(25, 3);
+  });
+
+  it("takes OpenStreetMap's own height before anything else", () => {
+    expect(buildingBlock(LAT, LON, found({ heightM: 41, levels: 3 }), 8000)).toMatchObject({ heightM: 41, heightFrom: "osm_height", levels: null });
+  });
+
+  it("then OpenStreetMap's levels at 3.2 m each", () => {
+    const block = buildingBlock(LAT, LON, found({ levels: 12 }), 800);
+    expect(block).toMatchObject({ heightFrom: "osm_levels", levels: 12 });
+    expect(block.heightM).toBeCloseTo(12 * LEVEL_HEIGHT_M, 9);
+  });
+
+  it("then the levels the stated floor area implies over the outline, never fewer than one", () => {
+    // 2,000 m² of floor over 400 m² of ground is five levels.
+    const block = buildingBlock(LAT, LON, found(), 2000);
+    expect(block).toMatchObject({ heightFrom: "floor_area", levels: 5 });
+    expect(block.heightM).toBeCloseTo(16, 9);
+    expect(buildingBlock(LAT, LON, found(), 1900)).toMatchObject({ levels: 5 });
+    expect(buildingBlock(LAT, LON, found(), 90)).toMatchObject({ heightFrom: "floor_area", levels: 1, heightM: LEVEL_HEIGHT_M });
+  });
+
+  it("assumes 12 m when nothing says how tall it is", () => {
+    expect(buildingBlock(LAT, LON, found(), null)).toMatchObject({ shape: "osm", heightM: ASSUMED_HEIGHT_M, heightFrom: "assumed", levels: null });
+    expect(buildingBlock(LAT, LON, found(), 0)).toMatchObject({ heightFrom: "assumed" });
+    expect(buildingBlock(LAT, LON, found(), Number.NaN)).toMatchObject({ heightFrom: "assumed" });
+  });
+
+  it("does not stack a floor area that cannot be one building's onto a small outline", () => {
+    // 400 m² of ground would need 100 levels to hold 40,000 m².
+    expect(buildingBlock(LAT, LON, found(), 40000)).toMatchObject({ heightM: ASSUMED_HEIGHT_M, heightFrom: "assumed", levels: null });
+    expect(buildingBlock(LAT, LON, found(), 400 * MAX_IMPLIED_LEVELS)).toMatchObject({ heightFrom: "floor_area", levels: MAX_IMPLIED_LEVELS });
+  });
+
+  it("draws a square on the stated point when there is no outline, sized from the floor area", () => {
+    // 3,600 m² of floor over the assumed four levels is 900 m² of ground: 30 m a side.
+    expect(ASSUMED_LEVELS).toBe(4);
+    for (const missing of [none, null, { found: false, cause: "timeout", reason: "The OpenStreetMap lookup did not answer in time" } as Footprint]) {
+      const block = buildingBlock(LAT, LON, missing, 3600);
+      expect(block).toMatchObject({ shape: "approximate", heightM: ASSUMED_HEIGHT_M, heightFrom: "assumed", levels: 4, centre: [LON, LAT] });
+      expect(block.sideM).toBeCloseTo(30, 9);
+      expect(block.areaM2).toBeCloseTo(900, 6);
+      const ring = block.polygon.coordinates[0];
+      expect(ring).toHaveLength(5);
+      expect(ring[0]).toEqual(ring[4]);
+      expect(footprintAreaM2(block.polygon)).toBeCloseTo(900, 0);
+      expect(pointInFootprint(block.polygon, LAT, LON)).toBe(true);
+    }
+  });
+
+  it("draws a plain 30 m square when no floor area is stated, and keeps a square within sensible sides", () => {
+    expect(buildingBlock(LAT, LON, none, null)).toMatchObject({ shape: "approximate", sideM: ASSUMED_SQUARE_M, heightFrom: "assumed" });
+    expect(buildingBlock(LAT, LON, none, 40).sideM).toBe(SQUARE_SIDE_RANGE_M.min);
+    expect(buildingBlock(LAT, LON, none, 4_000_000).sideM).toBe(SQUARE_SIDE_RANGE_M.max);
+  });
+});
+
 describe("the lookup", () => {
+  it("hands back the height and the levels OpenStreetMap records, from the one reply", async () => {
+    handler = (res) => json(res, { elements: [way(401, square(0, 0, 10), { building: "office", height: "36", "building:levels": "10" })] });
+    const result = await findFootprint(LAT, LON, { endpoint: `${base}/api` });
+    expect(result).toMatchObject({ found: true, osmId: "way/401", heightM: 36, levels: 10 });
+    expect(sent).toHaveLength(1);
+    expect(buildingBlock(LAT, LON, result, 9000)).toMatchObject({ shape: "osm", heightM: 36, heightFrom: "osm_height" });
+  });
+
   it("returns the building that contains the point, at distance 0", async () => {
     handler = (res) => json(res, { elements: [way(101, square(40, 0, 5)), way(102, square(0, 0, 10), { building: "commercial", name: "Made-up Plaza", "building:levels": "6" })] });
     const result = await findFootprint(LAT, LON, { endpoint: `${base}/api` });
@@ -234,7 +349,7 @@ describe("the lookup", () => {
   it("chooses the nearer of two buildings nearby", async () => {
     handler = (res) => json(res, { elements: [way(201, square(20, 0, 5)), way(202, square(0, 12, 4))] });
     const result = await findFootprint(LAT, LON, { endpoint: `${base}/api` });
-    expect(result).toMatchObject({ found: true, osmId: "way/202", name: null, levels: null });
+    expect(result).toMatchObject({ found: true, osmId: "way/202", name: null, levels: null, heightM: null });
     if (result.found) expect(result.distanceM).toBeCloseTo(8, 2);
   });
 

@@ -15,6 +15,8 @@ import {
 import type { Flag, OfferFacts } from "../src/lib/decision";
 import {
   MAX_FLAGS_ON_NOTE,
+  MAX_FLAGS_WITH_DRIVERS,
+  MAX_QUESTIONS_ON_NOTE,
   STANDING_LIMITS,
   buildDecisionNoteHtml,
   decisionNoteFileName,
@@ -126,11 +128,25 @@ describe("suggested conditions", () => {
   });
 
   it("is supported by a flag alone and names the flags it came from", () => {
-    const flags = [flag("drainage_blocked", "medium", "Storm drains reported blocked"), flag("other", "low", "Something else")];
+    const flags = [flag("under_insurance", "medium", "Declared values look low"), flag("other", "low", "Something else")];
     const out = suggestedConditions(flags, facts());
-    expect(out.map((c) => c.id)).toEqual(["drainage_evidence"]);
-    expect(out[0].because).toEqual(["drainage_blocked"]);
+    expect(out.map((c) => c.id)).toEqual(["revaluation"]);
+    expect(out[0].because).toEqual(["under_insurance"]);
     expect(out[0].why).not.toBe("");
+  });
+
+  it("asks for evidence of drainage upkeep only on a report of poor drainage", () => {
+    // A flag that only mentions drains is not a report on how they are kept: an open question, assumed ponding, an overloaded design.
+    const mentions = [flag("broker-questions-drains", "low", "2 questions for the broker on drains and flood protection"), flag("drainage-ponding", "low", "The depth here comes from assumed drainage ponding"), flag("drain-overload", "medium", "Drains are overloaded from the 1-in-50 flood")];
+    expect(ids({}, mentions)).toEqual([]);
+    // The report is a fact, and the flag that carries its sentence is named as the support.
+    const reported = flag("drainage-condition", "medium", "The document reports poor drainage at the site", "quote");
+    const out = suggestedConditions([...mentions, reported], facts({ drainagePoor: true }));
+    expect(out.map((c) => c.id)).toEqual(["drainage_evidence"]);
+    expect(out[0].because).toEqual(["drainage-condition"]);
+    expect(out[0].why).toContain("reported as poor");
+    // The flag without the fact suggests nothing.
+    expect(ids({}, [reported])).toEqual([]);
   });
 
   it("words every condition as a suggestion with a reason", () => {
@@ -154,6 +170,98 @@ describe("suggested conditions", () => {
       expect(c.why.length).toBeGreaterThan(10);
     }
     expect(new Set(all.map((c) => c.id)).size).toBe(8);
+  });
+});
+
+describe("suggested conditions from the loss drivers beyond depth", () => {
+  /** A flag as the focus raises it for a group of questions to the broker: the questions are in its detail. */
+  const asked = (group: string, questions: string): Flag => ({
+    id: `broker-questions-${group}`,
+    severity: "low",
+    title: `Questions for the broker on ${group}`,
+    detail: `The document does not state these, and nothing is guessed. ${questions}`,
+    evidence: { kind: "figure", text: "The model's own figure is used until the broker answers." },
+  });
+
+  it("leaves the new facts out of it when they are not given", () => {
+    expect(ids({ basements: 2 })).toEqual([]);
+    expect(EMPTY_FACTS.drainDesignStated).toBeUndefined();
+  });
+
+  it("counts equipment below ground towards moving or protecting the plant", () => {
+    const out = suggestedConditions([], facts({ basements: 2, equipmentBelowGround: 6 }));
+    expect(out.map((c) => c.id)).toEqual(["relocate_plant"]);
+    expect(out[0].why).toContain("6 items of equipment below ground");
+    expect(suggestedConditions([], facts({ basements: 1, equipmentBelowGround: 1 }))[0].why).toContain("1 item of equipment below ground");
+    expect(ids({ basements: 2, equipmentBelowGround: 0 })).toEqual([]);
+  });
+
+  it("asks for the drain design when the offer does not state one", () => {
+    expect(ids({ drainDesignStated: true })).toEqual([]);
+    const out = suggestedConditions([], facts({ drainDesignStated: false }));
+    expect(out.map((c) => c.id)).toEqual(["drain_design"]);
+    expect(out[0].why).toContain("assumed design");
+  });
+
+  it("asks for pump backup, barriers and valves only where there may be a basement", () => {
+    expect(ids({ basements: 0, sumpPumpBackup: "no", floodBarriers: "absent", nonReturnValves: null })).toEqual([]);
+    expect(ids({ basements: 2, sumpPumpBackup: "yes", floodBarriers: "present", nonReturnValves: "present" })).toEqual([]);
+    expect(ids({ basements: 2, sumpPumpBackup: "no" })).toEqual(["pump_backup"]);
+    expect(ids({ basements: 2, sumpPumpBackup: null })).toEqual(["pump_backup"]);
+    expect(suggestedConditions([], facts({ basements: 2, sumpPumpBackup: "no" }))[0].why).toContain("no backup power");
+    expect(suggestedConditions([], facts({ basements: 2, sumpPumpBackup: null }))[0].why).toContain("does not say");
+    const out = suggestedConditions([], facts({ basements: 2, floodBarriers: "absent", nonReturnValves: null }));
+    expect(out.map((c) => c.id)).toEqual(["ingress_protection"]);
+    expect(out[0].why).toContain("no flood barriers");
+    expect(out[0].why).toContain("does not say whether non-return valves");
+  });
+
+  it("asks to confirm business interruption only when the offer does not say", () => {
+    expect(ids({ interruptionCover: "covered" })).toEqual([]);
+    expect(ids({ interruptionCover: "excluded" })).toEqual([]);
+    const out = suggestedConditions([], facts({ interruptionCover: null }));
+    expect(out.map((c) => c.id)).toEqual(["confirm_interruption"]);
+    expect(out[0].why).toContain("no loss of rent or revenue is in the price");
+  });
+
+  it("reads the facts, never the wording of a flag", () => {
+    const flags = [
+      asked("drains", "What is the design return period of the site's storm drains? Do the sump pumps have backup power? Are non-return valves fitted on the drains that serve the basements?"),
+      asked("cover", "Is business interruption or loss of rent to be insured for flood?"),
+    ];
+    // The questions are open, but no fact is given: nothing is suggested from their words.
+    expect(suggestedConditions(flags, facts({ basements: 2 }))).toEqual([]);
+    // The facts say the same gaps are there: each suggestion appears, and names no question flag as its support.
+    const open = suggestedConditions(flags, facts({ basements: 2, drainDesignStated: false, sumpPumpBackup: null, floodBarriers: "present", nonReturnValves: null, interruptionCover: null }));
+    expect(open.map((c) => c.id)).toEqual(["drain_design", "pump_backup", "ingress_protection", "confirm_interruption"]);
+    expect(open.find((c) => c.id === "pump_backup")?.why).toContain("does not say whether the sump pumps have backup power");
+    expect(open.find((c) => c.id === "ingress_protection")?.why).not.toContain("flood barriers are fitted");
+    for (const c of open) expect(c.because).toEqual([]);
+    // A fact that is given settles it, whatever the questions say.
+    expect(suggestedConditions(flags, facts({ basements: 2, drainDesignStated: true, sumpPumpBackup: "yes", floodBarriers: "present", nonReturnValves: "present", interruptionCover: "covered" }))).toEqual([]);
+  });
+
+  it("names the flag that carries the figure as support, by its id, only when the fact holds", () => {
+    const flags = [flag("drain-overload", "medium", "Drains are overloaded from the 1-in-50 flood"), flag("basement-ingress", "high", "The basement takes water from the 1-in-25 flood"), flag("interruption-not-stated", "low", "Business interruption is not priced")];
+    const open = suggestedConditions(flags, { ...EMPTY_FACTS, basements: 2, drainDesignStated: false, sumpPumpBackup: "no", floodBarriers: "absent", nonReturnValves: "present", interruptionCover: null });
+    const because = Object.fromEntries(open.map((c) => [c.id, c.because]));
+    expect(because.drain_design).toEqual(["drain-overload"]);
+    expect(because.pump_backup).toEqual(["basement-ingress"]);
+    expect(because.ingress_protection).toEqual(["basement-ingress"]);
+    expect(because.confirm_interruption).toEqual(["interruption-not-stated"]);
+    // The same flags with every fact settled support none of the four.
+    const settled = suggestedConditions(flags, { ...EMPTY_FACTS, basements: 2, drainDesignStated: true, sumpPumpBackup: "yes", floodBarriers: "present", nonReturnValves: "present", interruptionCover: "excluded" }).map((c) => c.id);
+    for (const id of ["drain_design", "pump_backup", "ingress_protection", "confirm_interruption"]) expect(settled).not.toContain(id);
+  });
+
+  it("words the new conditions as suggestions too", () => {
+    const all = suggestedConditions([], facts({ basements: 2, equipmentBelowGround: 3, drainDesignStated: false, sumpPumpBackup: "no", floodBarriers: "absent", nonReturnValves: "absent", interruptionCover: null }));
+    expect(all.map((c) => c.id)).toEqual(["relocate_plant", "drain_design", "pump_backup", "ingress_protection", "confirm_interruption"]);
+    for (const c of all) {
+      expect(c.text).toMatch(/^Consider /);
+      expect(c.text).not.toMatch(/\b(must|decline|accept)\b/i);
+      expect(c.why.length).toBeGreaterThan(10);
+    }
   });
 });
 
@@ -293,8 +401,11 @@ describe("decision note", () => {
 
   it("orders return periods, flags by severity, and marks the ticked conditions", () => {
     const html = buildDecisionNoteHtml(input());
-    expect(html.indexOf("1 in 10 years")).toBeLessThan(html.indexOf("1 in 100 years"));
-    expect(html.indexOf("1 in 100 years")).toBeLessThan(html.indexOf("1 in 250 years"));
+    // Return periods read as everywhere else in the app, never "1 in 100 years".
+    expect(html.indexOf("<td>1-in-10</td>")).toBeGreaterThan(-1);
+    expect(html.indexOf("<td>1-in-10</td>")).toBeLessThan(html.indexOf("<td>1-in-100</td>"));
+    expect(html.indexOf("<td>1-in-100</td>")).toBeLessThan(html.indexOf("<td>1-in-250</td>"));
+    expect(html).not.toMatch(/1 in \d+ years/);
     expect(html.indexOf("Plant in basement")).toBeLessThan(html.indexOf("Minor point"));
     expect(html).toContain("Document quote: &quot;generators");
     expect(html).toContain("Model figure: Minor point evidence");
@@ -336,7 +447,126 @@ describe("decision note", () => {
   });
 
   it("uses no long dashes", () => {
-    expect(buildDecisionNoteHtml(input())).not.toMatch(/[–—]/);
+    expect(buildDecisionNoteHtml(input())).not.toMatch(new RegExp(`[${String.fromCharCode(0x2013, 0x2014)}]`));
+  });
+
+  describe("with the loss drivers", () => {
+    const withDrivers = (over: Partial<DecisionNoteInput> = {}) =>
+      input({
+        figures: { grossLoss100Kes: 81.7e6, averageAnnualLossKes: 1.8e6, pureRatePerMille: 1.65, floodRatePerMille: 8.02, portfolioChange100Kes: 86.7e6, portfolioChange100Fraction: 0.007 },
+        drivers: {
+          basis: "All loss drivers",
+          columns: [
+            { id: "surrounding", label: "Surrounding flooding" },
+            { id: "overload", label: "Drain overload" },
+            { id: "basement", label: "Basement ingress" },
+            { id: "uncertainty", label: "Uncertainty loading" },
+          ],
+          off: ["Drainage ponding", "Business interruption"],
+          rows: [
+            { returnPeriodYears: 250, byDriverKes: { surrounding: 95.8e6, overload: 0, basement: 61e6, uncertainty: 15.7e6 }, groundUpKes: 172.5e6, grossKes: 163.9e6 },
+            { returnPeriodYears: 100, byDriverKes: { surrounding: 0, overload: 30.9e6, basement: 48e6, uncertainty: 7.9e6 }, groundUpKes: 86.7e6, grossKes: 81.7e6 },
+          ],
+        },
+        premium: {
+          lines: [
+            { label: "Surrounding flooding", kes: 636950, ratePerMille: 0.58, note: "average annual loss, gross" },
+            { label: "Uncertainty loading", kes: 163727, ratePerMille: 0.15 },
+            { label: "Capital load", kes: 6.94e6, ratePerMille: 6.37, note: "8% of KES 86.7m" },
+            { label: "Minimum rate", kes: 109000, ratePerMille: 0.1, note: "the floor" },
+            { label: "Flood premium", kes: 8.74e6, ratePerMille: 8.02, total: true },
+          ],
+          floodPremiumKes: 8.74e6,
+          floodRatePerMille: 8.02,
+          setBy: "modelled",
+          stated: { premiumKes: 20e6, ratePerMille: 16.04 },
+          history: "Sense check, not in the price: the document's own flood losses come to KES 77.3k a year.",
+        },
+        assumptions: [
+          { label: "Buffer around the building", value: "250 m", setBy: "agents" },
+          { label: "Drains designed for", value: "1-in-50", setBy: "offer" },
+          { label: "Minimum flood rate", value: "0.1 per mille", setBy: "typed" },
+          { label: "Uncertainty <loading>", value: "10%", setBy: "reference" },
+          { label: "Cost of capital", value: "8% a year", setBy: "reference" },
+        ],
+        questions: ["Is business interruption insured for flood?", "Do the sump pumps have <backup> power?"],
+        ...over,
+      });
+
+    it("prints the loss by driver, the premium build-up, the assumptions and the questions", () => {
+      const html = buildDecisionNoteHtml(withDrivers());
+      for (const id of ["offer", "figures", "loss-by-driver", "premium", "terms", "flags", "conditions", "questions", "assumptions", "decision", "footer"]) {
+        expect(html).toContain(`id="${id}"`);
+      }
+      // The loss by driver takes the place of the plain loss table: both hold ground-up and gross.
+      expect(html).not.toContain('id="loss-table"');
+      expect(html).toContain("losses from: All loss drivers");
+      expect(html).toContain("<th>Drain overload</th>");
+      expect(html.indexOf("<td>1-in-100</td>")).toBeGreaterThan(-1);
+      expect(html.indexOf("<td>1-in-100</td>")).toBeLessThan(html.indexOf("<td>1-in-250</td>"));
+      // The two boxes that could be read either way say which loss they are.
+      expect(html).toContain("Average annual loss, gross");
+      expect(html).toContain("Change to the portfolio&#39;s 1-in-100, gross");
+      expect(html).toContain("<td>KES 30.9m</td>");
+      expect(html).toContain("Not in this price: Drainage ponding, Business interruption.");
+      expect(html).toContain("Flood rate");
+      expect(html).toContain("8.02 per mille");
+      expect(html).toContain("pure rate 1.65 per mille");
+      expect(html).toContain('<tr class="total"><td>Flood premium</td>');
+      expect(html).toContain("8% of KES 86.7m");
+      expect(html).toContain("set by the modelled figures");
+      expect(html).toContain("the flood rate is 50% of it");
+      expect(html).toContain("Sense check, not in the price");
+    });
+
+    it("says who set each assumption, and escapes what it is given", () => {
+      const html = buildDecisionNoteHtml(withDrivers());
+      expect(html).toContain("Assumptions in force (5), and who set each");
+      expect(html).toContain("<strong>From the offer (1):</strong> Drains designed for 1-in-50.");
+      expect(html).toContain("<strong>Agreed by the agents (1):</strong> Buffer around the building 250 m.");
+      expect(html).toContain("<strong>Typed by the underwriter (1):</strong>");
+      expect(html).toContain("<strong>Reference values (2):</strong> Uncertainty &lt;loading&gt; 10%; Cost of capital 8% a year.");
+      expect(html.indexOf("From the offer (1)")).toBeLessThan(html.indexOf("Reference values (2)"));
+      expect(html).toContain("Questions for the broker (2)");
+      expect(html).toContain("Do the sump pumps have &lt;backup&gt; power?");
+      expect(html).not.toContain("<backup>");
+      expect(html).not.toMatch(new RegExp(`[${String.fromCharCode(0x2013, 0x2014)}]`));
+      expect(html).not.toContain("undefined");
+      expect(html).not.toContain("NaN");
+    });
+
+    it("sets the page tighter so it still fits: fewer points, and the suggestions not selected in one line", () => {
+      const many = Array.from({ length: MAX_FLAGS_WITH_DRIVERS + 2 }, (_, i) => flag(`m${i}`, "medium", `Point ${String(i).padStart(2, "0")}`));
+      const html = buildDecisionNoteHtml(withDrivers({ flags: many }));
+      expect(html).toContain('<body class="tight">');
+      expect(html).toContain("2 more flags on screen, not shown here.");
+      expect(html).toContain(`Point 0${MAX_FLAGS_WITH_DRIVERS - 1} detail`);
+      expect(html).not.toContain(`Point 0${MAX_FLAGS_WITH_DRIVERS} detail`);
+      expect(html).toContain("<strong>Selected.</strong> Consider a flood sub-limit.");
+      expect(html).toContain("Not selected: Consider moving plant.");
+      expect(buildDecisionNoteHtml(input())).not.toContain('class="tight"');
+    });
+
+    it("caps the questions, says when there are none, and copes without a stated premium", () => {
+      const lots = Array.from({ length: MAX_QUESTIONS_ON_NOTE + 3 }, (_, i) => `Question ${i + 1}?`);
+      const html = buildDecisionNoteHtml(withDrivers({ questions: lots }));
+      expect(html).toContain(`Questions for the broker (${MAX_QUESTIONS_ON_NOTE + 3})`);
+      expect(html).toContain("3 more questions on screen, not shown here.");
+      expect(html).not.toContain(`Question ${MAX_QUESTIONS_ON_NOTE + 1}?`);
+      expect(buildDecisionNoteHtml(withDrivers({ questions: [] }))).toContain("None: the document states every value the price needs.");
+      const base = withDrivers();
+      const bare = buildDecisionNoteHtml({ ...base, premium: { ...base.premium!, stated: null, history: undefined, setBy: "minimum rate" } });
+      expect(bare).toContain("The offer states no premium for all risks.");
+      expect(bare).toContain("set by the minimum rate");
+    });
+
+    it("keeps Depth only on the short figures: a pure rate and no assumptions", () => {
+      const base = withDrivers();
+      const html = buildDecisionNoteHtml({ ...base, figures: { ...base.figures, floodRatePerMille: null }, drivers: { ...base.drivers!, basis: "Depth only" }, assumptions: undefined });
+      expect(html).toContain("losses from: Depth only");
+      expect(html).toContain('<div class="label">Pure rate</div>');
+      expect(html).not.toContain('id="assumptions"');
+    });
   });
 
   it("names the file from the insured and the Nairobi date", () => {

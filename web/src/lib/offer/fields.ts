@@ -1,7 +1,8 @@
 import { fmtInt, fmtNum } from "../format";
+import { rpWithChance } from "../labels";
 import { HOUSING_CLASSES, HOUSING_LABELS } from "../model/types";
 import { fmtDistance } from "./shared";
-import type { CoreTermKey, FloodLoss, OfferExtraction, OfferRowValues, Quoted, ValueRef } from "./types";
+import type { CoreTermKey, DriverTermKey, FloodLoss, OfferExtraction, OfferRowValues, Quoted, ValueRef } from "./types";
 
 /**
  * Every value of an offer that is shown on screen: its name, the kind of thing it holds and the
@@ -15,11 +16,18 @@ import type { CoreTermKey, FloodLoss, OfferExtraction, OfferRowValues, Quoted, V
  *   historyFields(e)  the document's own loss history: the years it covers, then the year and the
  *                     amount of each past flood loss, each ready for a table row and a quote mark
  *   historyFieldDef(r) the box a loss history value is typed into, by its reference
+ *   DRIVER_GROUPS     what the loss drivers beyond flood depth read from the offer, in the four
+ *                     groups the screen shows after the building: below ground, value split,
+ *                     drainage and protection, cover and premium
+ *   driverFields(e)   the same values as a list, with each item of equipment below ground, each
+ *                     ready for a table row and a quote mark; a value that is absent reads as not stated
+ *   driverFieldDef(r) the box one of those values is typed into, by its reference
+ *   fieldDefOf(r)     the box for any value at all, by its reference; null for a note
  *   fieldLabel(f)     the name without its unit in brackets, for a table that shows the unit in the value
  *   fieldText(v, f)   the value as text with its unit: "KES 4,250,000,000", "48,500 m²", "5%", "1.8 km"
  */
 
-export type FieldKind = "text" | "degrees" | "kes" | "area" | "percent" | "count" | "metres" | "choice" | "year" | "years";
+export type FieldKind = "text" | "degrees" | "kes" | "area" | "percent" | "count" | "metres" | "depth" | "choice" | "year" | "years" | "returnPeriod";
 
 export interface FieldDef<K extends string> {
   key: K;
@@ -139,7 +147,7 @@ export interface HistoryField {
   field: FieldDef<string>;
 }
 
-const NOT_STATED: Quoted<number> = { value: null, quote: "", status: "missing", reason: null };
+const NOT_STATED: Quoted<never> = { value: null, quote: "", status: "missing", reason: null };
 
 /**
  * The loss history as a list: the years it covers first, whether stated or not, then two
@@ -166,6 +174,135 @@ export function historyFieldDef(ref: ValueRef): FieldDef<string> | null {
   return null;
 }
 
+// ---------------------------------------------------------------------------------------------
+// What the loss drivers beyond flood depth read from the offer
+// ---------------------------------------------------------------------------------------------
+
+const PRESENT_OR_ABSENT = [
+  { value: "present", label: "Present" },
+  { value: "absent", label: "Absent" },
+];
+
+/** The group the equipment list is shown in. */
+export const BELOW_GROUND_TITLE = "Below ground";
+
+/**
+ * The values the loss drivers read, in the groups the screen shows them in. The number of
+ * basement levels stays with the building, in TERM_GROUPS. A value left empty is never filled
+ * in by the model: the driver uses its marked assumption and the broker is asked (questions.ts).
+ */
+export const DRIVER_GROUPS: { title: string; fields: FieldDef<DriverTermKey>[] }[] = [
+  {
+    title: BELOW_GROUND_TITLE,
+    fields: [
+      { key: "basementDepthM", label: "Depth of the lowest basement floor (m)", kind: "depth", hint: "Metres below ground level, as the document states it." },
+      { key: "valueBelowGroundKes", label: "Value below ground (KES)", kind: "kes", hint: "Machinery and contents the document says are in a basement. Left empty, an assumed share of the insured value is used." },
+    ],
+  },
+  {
+    title: "Value split",
+    fields: [
+      { key: "valueBuildingKes", label: "Building (KES)", plain: "Value of the building", kind: "kes" },
+      { key: "valueMachineryKes", label: "Plant and machinery (KES)", plain: "Value of plant and machinery", kind: "kes" },
+      { key: "valueContentsKes", label: "Contents (KES)", plain: "Value of contents", kind: "kes" },
+      { key: "annualRentKes", label: "Rent or revenue for one year (KES)", kind: "kes", hint: "A yearly figure only. Left empty, an assumed share of the insured value is used when business interruption is covered." },
+    ],
+  },
+  {
+    title: "Drainage and protection",
+    fields: [
+      { key: "drainDesignRp", label: "Drain design return period (years)", kind: "returnPeriod", hint: "The storm the site's drains are designed for: 50 for a 1-in-50 year storm. Left empty, the assumed design is used." },
+      { key: "sumpPumpCapacity", label: "Sump pump capacity", kind: "text", hint: "As the document states it, for example 2 x 15 l/s." },
+      {
+        key: "sumpPumpBackup",
+        label: "Sump pumps have backup power",
+        kind: "choice",
+        choices: [
+          { value: "yes", label: "Yes" },
+          { value: "no", label: "No" },
+        ],
+      },
+      { key: "floodBarriers", label: "Flood barriers", kind: "choice", choices: PRESENT_OR_ABSENT },
+      { key: "nonReturnValves", label: "Non-return valves", kind: "choice", choices: PRESENT_OR_ABSENT },
+    ],
+  },
+  {
+    title: "Cover and premium",
+    fields: [
+      {
+        key: "biCovered",
+        label: "Business interruption",
+        kind: "choice",
+        choices: [
+          { value: "covered", label: "Covered" },
+          { value: "excluded", label: "Excluded" },
+        ],
+        hint: "Loss of rent or revenue. Priced only when the offer says it is covered.",
+      },
+      { key: "premiumKes", label: "Annual premium, all risks (KES)", plain: "Annual premium, all risks", kind: "kes", hint: "The offer's own premium, shown beside the modelled flood rate." },
+    ],
+  },
+];
+
+export const DRIVER_FIELDS = DRIVER_GROUPS.flatMap((g) => g.fields);
+
+/** One item of equipment the document places below ground. The name on screen carries the item's number: see equipmentLabel. */
+export const EQUIPMENT_FIELD: FieldDef<"item"> = { key: "item", label: "Equipment below ground", kind: "text", hint: "One item, as the document names it: a generator, switchgear, pumps, a tank, a lift motor, a server room." };
+
+/** "Equipment below ground 1". index is the item's place in the list, from 0. */
+export const equipmentLabel = (index: number): string => `${EQUIPMENT_FIELD.label} ${index + 1}`;
+
+/** One of the loss drivers' values, flat, ready for a table row and for a mark in the document. */
+export interface DriverField {
+  /** Stable id: "terms:drainDesignRp", "equipment:0". */
+  id: string;
+  /** Points at the value in the extraction, for editValue and confirmValue. */
+  ref: ValueRef;
+  /** The title of the group it is shown in: one of the DRIVER_GROUPS titles. */
+  group: string;
+  /** "Drain design return period", "Equipment below ground 1". */
+  label: string;
+  /** The value as text with its unit: "1-in-50 (2% a year)", "7.5 m", "KES 380,000,000", "Present". "" when there is none. */
+  value: string;
+  /** The value with its quote, status and reason. A value absent from the extraction reads as not stated. */
+  quoted: Quoted<string | number>;
+  /** The kind of box the value is typed into. */
+  field: FieldDef<string>;
+}
+
+/**
+ * The loss drivers' values as a list, group by group, every one present whether stated or not.
+ * The items of equipment below ground follow the two values of the "Below ground" group, in the
+ * document's order. An offer that states none of this gives the thirteen values, all not stated.
+ */
+export function driverFields(extraction: OfferExtraction): DriverField[] {
+  const out: DriverField[] = [];
+  for (const group of DRIVER_GROUPS) {
+    for (const field of group.fields) {
+      const quoted: Quoted<string | number> = extraction.terms[field.key] ?? NOT_STATED;
+      out.push({ id: `terms:${field.key}`, ref: { scope: "terms", key: field.key }, group: group.title, label: fieldLabel(field), value: fieldText(quoted.value, field), quoted, field });
+    }
+    if (group.title !== BELOW_GROUND_TITLE) continue;
+    (extraction.equipmentBelowGround ?? []).forEach(({ item }, index) => {
+      out.push({ id: `equipment:${index}`, ref: { scope: "equipment", index }, group: group.title, label: equipmentLabel(index), value: fieldText(item.value, EQUIPMENT_FIELD), quoted: item, field: EQUIPMENT_FIELD });
+    });
+  }
+  return out;
+}
+
+/** The box for one of the loss drivers' values, by its reference. null for any other value. */
+export function driverFieldDef(ref: ValueRef): FieldDef<string> | null {
+  if (ref.scope === "terms") return DRIVER_FIELDS.find((f) => f.key === ref.key) ?? null;
+  return ref.scope === "equipment" ? EQUIPMENT_FIELD : null;
+}
+
+/** The box for any value, by its reference: a building's, an offer-level one, the loss history's or a loss driver's. null for a note, which has none. */
+export function fieldDefOf(ref: ValueRef): FieldDef<string> | null {
+  if (ref.scope === "row") return ROW_FIELDS.find((f) => f.key === ref.key) ?? null;
+  if (ref.scope === "terms") return TERM_FIELDS.find((f) => f.key === ref.key) ?? historyFieldDef(ref) ?? driverFieldDef(ref);
+  return historyFieldDef(ref) ?? driverFieldDef(ref);
+}
+
 /** The field's name for a table: the label with any unit in brackets left off. */
 export const fieldLabel = (field: FieldDef<string>): string => field.plain ?? field.label.replace(/\s*\([^)]*\)$/, "");
 
@@ -185,6 +322,11 @@ export function fieldText(value: string | number | null, field: FieldDef<string>
       return `${fmtNum(value, 2)}%`;
     case "metres":
       return fmtDistance(value);
+    case "depth":
+      return `${fmtNum(value, 2)} m`;
+    case "returnPeriod":
+      // "1-in-50 (2% a year)", as every return period in the app is written.
+      return rpWithChance(value);
     case "year":
       // A year takes no thousands separator: "2018", never "2,018".
       return String(value);

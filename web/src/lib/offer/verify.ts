@@ -1,19 +1,23 @@
 import { HOUSING_CLASSES } from "../model/types";
 import { describeReading, inKenya, parseCoordinates } from "./coords";
-import { LOSS_YEAR_RANGE, missingValue as missing, MOST_LOSSES } from "./extraction";
+import { DESIGN_RP_RANGE, LOSS_YEAR_RANGE, missingValue as missing, MOST_EQUIPMENT, MOST_LOSSES } from "./extraction";
 import { DISTANCE_SCALES, MONEY_SCALES } from "./shared";
 import {
+  BI_COVERS,
   DEDUCTIBLE_BASES,
   FLOOD_COVERS,
   OCCUPANCIES,
   OFFER_LOSS_KEYS,
   OFFER_ROW_KEYS,
   OFFER_TERM_KEYS,
+  PRESENCES,
   USABLE_STATUSES,
+  YES_NO,
   type ConfirmValue,
   type CoordinateReading,
   type CoreTermKey,
   type EditValue,
+  type EquipmentItem,
   type FloodLoss,
   type NumberInQuote,
   type OfferExtraction,
@@ -199,6 +203,32 @@ function checkYear(q: Quoted<number>, tidiedDocument: string): Quoted<number> {
   return checked;
 }
 
+/** True when the text writes the number as a return period: "50-year", "1-in-50", "1:50", "return period of 50 years". */
+function writtenAsReturnPeriod(years: number, text: string): boolean {
+  const n = `(?:${years}|${years.toLocaleString("en-US").replace(/[.]/g, "\\.")})`;
+  const end = "(?!\\d|[.,]\\d)";
+  const forms = [
+    `(?:^|[^\\d.,])${n}[\\s-]*(?:years?|yrs?)\\b`,
+    `(?:^|[^\\d.,])1[\\s-]*(?:in|[:/])[\\s-]*${n}${end}`,
+    `\\b(?:return\\s+period|recurrence(?:\\s+interval)?|RP|ARI)[^\\d]{0,25}${n}${end}`,
+  ];
+  return new RegExp(forms.join("|"), "i").test(tidy(text));
+}
+
+/**
+ * A drain design return period, checked as a number and then as a return period: "50 mm of
+ * rain" holds the number 50, but a return period is written as a number of years or as one
+ * chance in so many, so that quote does not hold it.
+ */
+function checkReturnPeriod(q: Quoted<number>, tidiedDocument: string): Quoted<number> {
+  const checked = check(q, tidiedDocument);
+  if (checked.status !== "verified" || checked.value === null) return checked;
+  const years = checked.value;
+  if (years < DESIGN_RP_RANGE.min || years > DESIGN_RP_RANGE.max) return unverified(checked, `${plain(years)} is not a return period in years.`);
+  if (!writtenAsReturnPeriod(years, checked.quote)) return unverified(checked, `${plain(years)} is not written as a number of years, or as a 1-in-${plain(years)} chance, in the quoted sentence.`);
+  return checked;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Coordinates
 // ---------------------------------------------------------------------------------------------
@@ -305,16 +335,22 @@ export const verifyExtraction: VerifyExtraction = (extraction, documentText) => 
     tivKes: check(row.tivKes, doc),
     ...checkCoordinates(row, doc),
   }));
-  // Terms built before the loss history existed carry no years value: it is read as not stated.
-  const terms = { ...extraction.terms, floodHistoryYears: extraction.terms.floodHistoryYears ?? missing<number>() } as Record<keyof OfferTerms, Quoted<unknown>>;
-  for (const key of Object.keys(terms) as (keyof OfferTerms)[]) terms[key] = check(terms[key], doc, NAMED_TERMS.has(key));
+  // Terms built by hand may carry no years of loss history and none of the loss drivers' values: each is read as not stated.
+  const given = extraction.terms as Partial<Record<keyof OfferTerms, Quoted<unknown>>>;
+  const terms = { ...given } as Record<keyof OfferTerms, Quoted<unknown>>;
+  for (const key of Object.keys(TERM_KINDS) as (keyof OfferTerms)[]) {
+    const read = given[key] ?? missing();
+    terms[key] = key === "drainDesignRp" ? checkReturnPeriod(read as Quoted<number>, doc) : check(read, doc, NAMED_TERMS.has(key));
+  }
   const notes = extraction.notes.map((note): OfferNote => ({ ...check(note, doc), kind: note.kind }));
   // Each loss's year and amount stand on their own sentence, and each is checked like any other number.
   const floodLosses = (extraction.floodLosses ?? []).map((loss): FloodLoss => ({ year: checkYear(loss.year, doc), amountKes: check(loss.amountKes, doc) }));
-  return { rows, terms: terms as unknown as OfferTerms, notes, floodLosses };
+  // An item of equipment stands on the sentence that says where it is.
+  const equipmentBelowGround = (extraction.equipmentBelowGround ?? []).map((entry): EquipmentItem => ({ item: check(entry.item, doc) }));
+  return { rows, terms: terms as unknown as OfferTerms, notes, floodLosses, equipmentBelowGround };
 };
 
-export const usableValue: UsableValue = (quoted) => ((USABLE_STATUSES as readonly string[]).includes(quoted.status) ? quoted.value : null);
+export const usableValue: UsableValue = (quoted) => (quoted && (USABLE_STATUSES as readonly string[]).includes(quoted.status) ? quoted.value : null);
 
 // ---------------------------------------------------------------------------------------------
 // What still waits on the underwriter
@@ -338,7 +374,19 @@ const PRICED_TERMS: [CoreTermKey, string][] = [
   ["placeName", "Place name"],
 ];
 
-export const waitingValues: WaitingValues = (extraction) => {
+/**
+ * The values that switch a loss driver on or set its size. With all loss drivers an unverified one
+ * holds pricing like any other value the price rests on; with Depth only none of them is read.
+ */
+const PRICED_DRIVER_TERMS: [keyof OfferTerms, string][] = [
+  ["basements", "Basement levels"],
+  ["valueBelowGroundKes", "Value below ground"],
+  ["drainDesignRp", "Drain design return period"],
+  ["biCovered", "Business interruption cover"],
+  ["annualRentKes", "Rent or revenue for a year"],
+];
+
+export const waitingValues: WaitingValues = (extraction, mode = "depth_only") => {
   const out: WaitingValue[] = [];
   extraction.rows.forEach((row, i) => {
     for (const [key, label] of PRICED_ROW_VALUES) {
@@ -356,15 +404,26 @@ export const waitingValues: WaitingValues = (extraction) => {
     if (quoted.status !== "unverified" || (key === "placeName" && !needsPlace)) continue;
     out.push({ ref: { scope: "terms", key }, label, quoted });
   }
+  if (mode === "all_drivers") {
+    // A year's rent is read only while interruption could be priced: not when cover is excluded or nothing is said of it.
+    const cover = extraction.terms.biCovered;
+    const rentRead = cover !== undefined && cover.status !== "missing" && !(usableValue(cover) === "excluded");
+    for (const [key, label] of PRICED_DRIVER_TERMS) {
+      const quoted = extraction.terms[key] as Quoted<string | number> | undefined;
+      if (!quoted || quoted.status !== "unverified" || (key === "annualRentKes" && !rentRead)) continue;
+      out.push({ ref: { scope: "terms", key }, label, quoted });
+    }
+  }
   return out;
 };
 
 export const statusCounts: StatusCounts = (extraction) => {
   const counts: Record<ValueStatus, number> = { verified: 0, unverified: 0, confirmed: 0, edited: 0, missing: 0 };
   for (const row of extraction.rows) for (const key of Object.values(OFFER_ROW_KEYS)) counts[row[key].status]++;
-  // A years value that is absent is one that was not stated.
+  // An offer-level value that is absent, on terms built by hand, is one that was not stated.
   for (const key of Object.values(OFFER_TERM_KEYS)) counts[extraction.terms[key]?.status ?? "missing"]++;
   for (const loss of extraction.floodLosses ?? []) for (const key of Object.values(OFFER_LOSS_KEYS)) counts[loss[key].status]++;
+  for (const entry of extraction.equipmentBelowGround ?? []) counts[entry.item.status]++;
   for (const note of extraction.notes) counts[note.status]++;
   return counts;
 };
@@ -374,7 +433,7 @@ export const statusCounts: StatusCounts = (extraction) => {
 // ---------------------------------------------------------------------------------------------
 
 /** What kind of thing each value holds, so a typed edit can be read the same way wherever it is made. */
-type ValueKind = "text" | "count" | "kes" | "percent" | "area" | "distance" | "lat" | "lon" | "year" | "years" | readonly string[];
+type ValueKind = "text" | "count" | "kes" | "percent" | "area" | "distance" | "depth" | "lat" | "lon" | "year" | "years" | "returnPeriod" | readonly string[];
 
 const ROW_KINDS: Record<keyof OfferRowValues, ValueKind> = {
   name: "text",
@@ -399,6 +458,19 @@ const TERM_KINDS: Record<keyof OfferTerms, ValueKind> = {
   riverName: "text",
   riverDistanceM: "distance",
   floodHistoryYears: "years",
+  basementDepthM: "depth",
+  drainDesignRp: "returnPeriod",
+  sumpPumpCapacity: "text",
+  sumpPumpBackup: YES_NO,
+  floodBarriers: PRESENCES,
+  nonReturnValves: PRESENCES,
+  valueBuildingKes: "kes",
+  valueMachineryKes: "kes",
+  valueContentsKes: "kes",
+  valueBelowGroundKes: "kes",
+  annualRentKes: "kes",
+  biCovered: BI_COVERS,
+  premiumKes: "kes",
 };
 
 const LOSS_KINDS: Record<keyof FloodLoss, ValueKind> = {
@@ -411,14 +483,18 @@ const TYPED_NUMBER = /^([-\u2212\u2013+]?)\s*(\d{1,3}(?:[, \u00a0]\d{3})+(?:\.\d
 
 /**
  * A number as an underwriter types it into a box: "8,000,000", "8 million", "8m" in a money
- * box, "1.8 km" in a distance box, "5%" in a percentage box. Outside a money box the letter m
- * means metres, never millions. Returns undefined when it cannot be read.
+ * box, "1.8 km" in a distance box, "5%" in a percentage box, "1-in-50" or "50-year" in a return
+ * period box. Outside a money box the letter m means metres, never millions. Returns undefined
+ * when it cannot be read.
  */
 function typedNumber(input: string | number, kind: ValueKind): number | undefined {
   let n: number;
   if (typeof input === "number") n = input;
   else {
-    const match = TYPED_NUMBER.exec(input.trim().replace(/^(?:KES|KSH|KSHS)\.?\s*/i, ""));
+    let written = input.trim().replace(/^(?:KES|KSH|KSHS)\.?\s*/i, "");
+    // "1-in-50" and "1:50" are the 50-year storm: the years are the number that follows.
+    if (kind === "returnPeriod") written = written.replace(/^1\s*(?:-?\s*in\s*-?|[:/])\s*(?=\d)/i, "");
+    const match = TYPED_NUMBER.exec(written);
     if (!match) return undefined;
     n = Number(match[2].replace(/[, \u00a0]/g, ""));
     if (match[1] !== "" && match[1] !== "+") n = -n;
@@ -432,6 +508,7 @@ function typedNumber(input: string | number, kind: ValueKind): number | undefine
   // A loss happened in a year; a history covers some years, never none.
   if (kind === "year") return Number.isInteger(n) && n >= LOSS_YEAR_RANGE.min && n <= LOSS_YEAR_RANGE.max ? n : undefined;
   if (kind === "years") return n > 0 ? n : undefined;
+  if (kind === "returnPeriod") return n >= DESIGN_RP_RANGE.min && n <= DESIGN_RP_RANGE.max ? n : undefined;
   // Nothing else on an offer can be below zero.
   return n >= 0 ? n : undefined;
 }
@@ -461,7 +538,7 @@ function withValue(extraction: OfferExtraction, ref: ValueRef, change: (q: Quote
   }
   if (ref.scope === "terms") {
     if (!(ref.key in TERM_KINDS)) return extraction;
-    // Only the years of loss history can be absent, and absent is not stated.
+    // The years of loss history and the loss drivers' values can be absent, and absent is not stated.
     const now: Quoted<unknown> = extraction.terms[ref.key] ?? missing();
     const next = change(now, TERM_KINDS[ref.key]);
     if (next === now) return extraction;
@@ -478,6 +555,16 @@ function withValue(extraction: OfferExtraction, ref: ValueRef, change: (q: Quote
     const changed: FloodLoss = { ...loss, [ref.key]: next };
     // A cleared loss keeps its place, so the losses after it are still found by the same number.
     return { ...extraction, floodLosses: ref.index === losses.length ? [...losses, changed] : losses.map((l, i) => (i === ref.index ? changed : l)) };
+  }
+  if (ref.scope === "equipment") {
+    const items = extraction.equipmentBelowGround ?? [];
+    if (!Number.isInteger(ref.index) || ref.index < 0 || ref.index > Math.min(items.length, MOST_EQUIPMENT - 1)) return extraction;
+    // One past the end is an item the reading did not find: it starts with nothing stated.
+    const now: Quoted<string> = items[ref.index]?.item ?? missing();
+    const next = change(now, "text") as Quoted<string>;
+    if (next === now || (ref.index === items.length && next.value === null)) return extraction;
+    // A cleared item keeps its place, so the items after it are still found by the same number.
+    return { ...extraction, equipmentBelowGround: ref.index === items.length ? [...items, { item: next }] : items.map((entry, i) => (i === ref.index ? { item: next } : entry)) };
   }
   const note = extraction.notes[ref.index];
   if (!note) return extraction;

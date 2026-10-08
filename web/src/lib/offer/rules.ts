@@ -1,8 +1,8 @@
 import type { HousingClass } from "../model/types";
 import { inKenya, parseCoordinates } from "./coords";
-import { emptyRow, emptyTerms, missingValue, NOTE_LABELS, statedValue, uniqueLosses, unreadValue } from "./extraction";
+import { emptyRow, emptyTerms, missingValue, NOTE_LABELS, statedValue, uniqueEquipment, uniqueLosses, unreadValue } from "./extraction";
 import { MONEY_SCALES as SCALES } from "./shared";
-import type { DeductibleBasis, ExtractByRules, FloodCover, FloodLoss, NoteKind, Occupancy, OfferNote, Quoted } from "./types";
+import type { BiCover, DeductibleBasis, EquipmentItem, ExtractByRules, FloodCover, FloodLoss, NoteKind, Occupancy, OfferNote, Presence, Quoted, YesNo } from "./types";
 
 /**
  * Reading an offer with fixed rules and no model: what is used when no key is set or the
@@ -11,8 +11,13 @@ import type { DeductibleBasis, ExtractByRules, FloodCover, FloodLoss, NoteKind, 
  * reply. They read one building per document. A memo that describes several gets one row,
  * and the underwriter adds the rest. They also read the document's own flood loss history:
  * the years it covers and each flood or water damage loss in it, never a fire or a theft.
+ * And they read what the loss drivers beyond flood depth need, where the document states it
+ * in a regular way: the depth of the basements, the equipment kept below ground, the storm
+ * the drains are designed for, the sump pumps, flood barriers and non-return valves, the
+ * split of the insured value, a year's rent, business interruption cover and the premium.
  *
- * The rules never guess: a field they cannot find is left missing.
+ * The rules never guess: a field they cannot find is left missing, and so is one that two
+ * statements give differently. Nothing is added up, multiplied or worked out.
  */
 
 // ---------------------------------------------------------------------------------------------
@@ -75,18 +80,21 @@ function sentencesOf(documentText: string): string[] {
     else blocks.push(line);
     open = true;
   }
+  return blocks.flatMap(sentencesIn);
+}
+
+/** One block of text, already on one line, as its sentences. */
+function sentencesIn(block: string): string[] {
   const sentences: string[] = [];
-  for (const block of blocks) {
-    let start = 0;
-    const ends = /[.!?]\s+(?=["'(\[]?[A-Z])/g;
-    for (let m = ends.exec(block); m; m = ends.exec(block)) {
-      const sentence = block.slice(start, m.index + 1);
-      if (ABBREVIATION.test(sentence)) continue;
-      sentences.push(sentence.trim());
-      start = m.index + m[0].length;
-    }
-    if (block.slice(start).trim()) sentences.push(block.slice(start).trim());
+  let start = 0;
+  const ends = /[.!?]\s+(?=["'(\[]?[A-Z])/g;
+  for (let m = ends.exec(block); m; m = ends.exec(block)) {
+    const sentence = block.slice(start, m.index + 1);
+    if (ABBREVIATION.test(sentence)) continue;
+    sentences.push(sentence.trim());
+    start = m.index + m[0].length;
   }
+  if (block.slice(start).trim()) sentences.push(block.slice(start).trim());
   return sentences;
 }
 
@@ -189,9 +197,24 @@ const CAUSE_LABEL = /^(?:description|cause|peril|type|nature|event|details?|trig
 const AMOUNT_LABEL = /\b(?:claim(?:ed)?|paid|settled|settlement|amount|incurred)\b/i;
 const TOTAL_LABEL = /^total\b/i;
 /** A figure for several losses together, or for something that is not a loss. Never one loss's amount. */
-const AGGREGATE_LABEL = /\b(?:years|yrs|losses|claims|events|average|annual|premium|frequency|ratio|deductible|excess|limit)\b/i;
+const AGGREGATE_LABEL = /\b(?:years|yrs|losses|claims|events|average|annual|premium|frequency|ratio|deductible|excess|limit|sums?\s+insured|insured\s+values?|insurable|declared|TIV)\b/i;
+/** The most lines one numbered loss is given. Text with no blank lines must not hand a loss the rest of the document. */
+const MOST_LOSS_LINES = 40;
 /** An amount that follows one of these words is the loss, not the value of what was damaged. */
 const CLAIMED = /\b(?:claim(?:ed)?|paid|settled|loss|total)\b[^\d]{0,25}$/i;
+
+/**
+ * The loss figure among some amounts, with the text they stand in. A claim that moved, "KES
+ * 2,400,000 (reduced from KES 2.6M to KES 2,150,000 after adjustment)", ended at the figure
+ * after "to", which is the one a summary of the same losses gives. Otherwise an amount straight
+ * after a loss word, else the first one.
+ */
+function lossFigure(text: string, amounts: Amount[]): Amount | null {
+  if (!amounts.length) return null;
+  const moved = new RegExp(String.raw`\bfrom\s+${KES_AMOUNT}\s+to\s+(${KES_AMOUNT})`, "i").exec(text);
+  const settled = moved ? amounts.find((a) => a.index === moved.index + moved[0].length - moved[3].length) : undefined;
+  return settled ?? amounts.find((a) => CLAIMED.test(text.slice(0, a.index))) ?? amounts[0];
+}
 
 /** The text names flood or water damage, and does not say there was none. A loss number ("No. 2") is not a "no". */
 function saysWater(text: string): boolean {
@@ -228,12 +251,11 @@ function floodLossesIn(lines: Line[]): FloodLoss[] {
     }
     const header = line.text;
     const afterYear = found.index + found[0].length;
-    const amounts = amountsIn(header).filter((a) => a.index >= afterYear);
-    const onHeader = amounts.find((a) => CLAIMED.test(header.slice(0, a.index))) ?? amounts[0];
+    const onHeader = lossFigure(header, amountsIn(header).filter((a) => a.index >= afterYear));
 
     // A numbered loss with no amount on its own line owns the lines under it.
     const body: Line[] = [];
-    if (numbered && !onHeader) for (let j = i + 1; j < lines.length && !lines[j].first && !NUMBERED_LOSS.test(lines[j].text); j++) body.push(lines[j]);
+    if (numbered && !onHeader) for (let j = i + 1; j < lines.length && body.length < MOST_LOSS_LINES && !lines[j].first && !NUMBERED_LOSS.test(lines[j].text); j++) body.push(lines[j]);
     // Those lines are part of this loss, not losses of their own.
     i += body.length;
 
@@ -257,7 +279,7 @@ function floodLossesIn(lines: Line[]): FloodLoss[] {
     else {
       const stated = body.filter((l) => l.label !== null && !AGGREGATE_LABEL.test(l.label) && amountsIn(l.value).length > 0);
       const amountLine = stated.find((l) => AMOUNT_LABEL.test(l.label!)) ?? stated.find((l) => TOTAL_LABEL.test(l.label!));
-      if (amountLine) amountKes = statedValue(amountsIn(amountLine.value)[0].kes, amountLine.text);
+      if (amountLine) amountKes = statedValue(lossFigure(amountLine.text, amountsIn(amountLine.text))!.kes, amountLine.text);
     }
     losses.push({ year: statedValue(Number(found[1]), header), amountKes });
   }
@@ -308,6 +330,385 @@ function historyYearsIn(lines: Line[]): Quoted<number> {
   const stating = lines.filter((l) => span(l.text) !== null);
   const line = stating.find((l) => HISTORY_WORDS.test(l.text)) ?? stating.find((l) => LOSS_CONTEXT.test(l.text) || LOSS_CONTEXT.test(l.heading));
   return line ? statedValue(span(line.text)!, line.text) : missingValue();
+}
+
+// ---------------------------------------------------------------------------------------------
+// What the loss drivers beyond flood depth read
+// ---------------------------------------------------------------------------------------------
+
+/** One sentence, or one line of a list, with where it stands in the document. */
+interface Statement {
+  /** The sentence on one line. This is what a value's quote is. */
+  text: string;
+  /** The heading of the list it stands in: the nearest label alone on its line above it, up to a blank line. */
+  heading: string;
+  /** The section it stands in: the nearest heading above it, running on past blank lines. */
+  section: string;
+}
+
+/** The section each line stands in. A heading is its own section. */
+function sectionsOf(lines: Line[]): string[] {
+  let section = "";
+  return lines.map((line) => {
+    if (isHeading(line)) section = line.text;
+    return section;
+  });
+}
+
+/** The text as sentences, joined over hard line breaks the way sentencesOf joins them, each with its heading and its section. */
+function statementsOf(lines: Line[], sections: string[]): Statement[] {
+  const blocks: Statement[] = [];
+  lines.forEach((line, i) => {
+    const last = blocks[blocks.length - 1];
+    if (last && !line.first && !/[.:;!?]$/.test(last.text) && /^[a-z]/.test(line.text)) last.text += ` ${line.text}`;
+    else blocks.push({ text: line.text, heading: line.heading, section: sections[i] });
+  });
+  return blocks.flatMap((block) => sentencesIn(block.text).map((text) => ({ ...block, text })));
+}
+
+/** The one value several statements agree on. null when none states it. Not stated when they differ: the rules cannot tell which is meant. */
+function agreed<T>(found: Quoted<T>[]): Quoted<T> | null {
+  if (!found.length) return null;
+  return found.every((f) => f.value === found[0].value) ? found[0] : missingValue();
+}
+
+const BELOW_GROUND = /\b(?:sub-?basements?|basements?|below[\s-]+ground|below[\s-]+grade|underground)\b/i;
+/**
+ * Where past losses are told. A value or a cover is never read from there. "Loss of rent" and
+ * "material damage" are covers, "loss prevention" is protection and an "event limit" is a term:
+ * none of them is the telling of a loss.
+ */
+const LOSS_TELLING = /\b(?:loss(?:es)?(?!\s+(?:of\s+(?:rent|rental|revenue|profits?|income|earnings)|prevention|control|mitigation|limits?))|claims?|(?<!\b(?:material|property|physical)\s)damage[ds]?|events?(?!\s+limits?)|incidents?)\b/i;
+const toldAsLoss = (s: { heading: string; section: string }) => LOSS_TELLING.test(s.heading) || LOSS_TELLING.test(s.section);
+/** The policy now in force, where a memo also gives the terms asked for. */
+const CURRENT_POLICY = /\b(?:current|expiring|existing|previous|prior|in\s+force)\b/i;
+const isQuestion = (text: string) => /\?\s*$/.test(text);
+
+/**
+ * A word that denies what follows it: "no flood barriers", "not fitted with flood barriers",
+ * "excluding flood and business interruption". At most three words may stand between, with no
+ * comma, so "excluding flood, including business interruption" denies nothing, and neither does
+ * "no losses since the flood barriers were fitted".
+ */
+const governs = (words: string) => new RegExp(String.raw`\b(?:${words})\s+(?:(?!(?:since|after|following|once|until|when|because|as|but)\b)[\w'’-]+\s+){0,3}$`, "i");
+const DENIED = governs(String.raw`no|not|without|lacks?|lacking|never|nil|absence\s+of`);
+const LEFT_OUT = governs(String.raw`excluding|excludes?|excluded|excl\.?|no|not|without|nil|declined`);
+/** Straight after the thing: "Flood barriers: none", "the valves have not been fitted". */
+const DENIED_AFTER = /^(?:\s*[:(,-]\s*(?:no|none|nil|absent|not)\b|[^.;]{0,45}?\b(?:not\s+(?:yet\s+)?(?:installed|fitted|present|provided|in\s+place|available|connected)|(?:have|has|had)\s+not\s+(?:yet\s+)?been|(?:are|is|were|was)\s+not|absent|unavailable)\b)/i;
+
+// --- The depth of the basements ---
+
+const METRES = String.raw`(?<![\d.,])(\d{1,2}(?:\.\d+)?)\s*(?:m|metres?|meters?)\b(?!\s*(?:²|2\b|\^2|sq\b))`;
+const DEPTH_FORMS = [
+  new RegExp(String.raw`${METRES}\s*(?:below\s+(?:the\s+)?(?:ground|grade|street|road|surface|pavement)(?:\s+level)?|deep\b|in\s+depth|bgl\b)`, "gi"),
+  new RegExp(String.raw`\b(?:depth|deep(?:est)?)\b[^\d.;]{0,30}?${METRES}`, "gi"),
+  // A level written as a negative height: "B2 at -7.5 m". A dash with a space after it is a bullet or a pause, not a minus.
+  new RegExp(String.raw`(?:^|[\s(])(?:-|minus\s+)${METRES}`, "gi"),
+];
+/** A depth of water, which is not how deep the basement is. */
+const WATER_DEPTH = /\b(?:flood(?:ed|ing|s)?|inundat\w*|ingress|submerged|ponding|rose|reached|stood|water\s+(?:level|depth|mark)|of\s+water)\b/i;
+/** The height of one level, which is not the depth of them all. Nothing is multiplied. */
+const PER_LEVEL = /\b(?:each|per\s+(?:level|floor|storey)|floor[\s-]to[\s-]floor|ceiling|headroom|clearance|clear\s+height|high)\b/i;
+const DEPTH_RANGE = { min: 1, max: 60 } as const;
+
+/** How far the lowest basement floor is below ground, from the first statement about a basement that gives a depth. */
+function basementDepthIn(statements: Statement[]): Quoted<number> {
+  for (const s of statements) {
+    if (!BELOW_GROUND.test(s.text) || WATER_DEPTH.test(s.text) || PER_LEVEL.test(s.text)) continue;
+    const depths = DEPTH_FORMS.flatMap((form) => [...s.text.matchAll(form)].map((m) => Number(m[1]))).filter((d) => d >= DEPTH_RANGE.min && d <= DEPTH_RANGE.max);
+    // Several depths in one statement are the levels: the lowest floor is the deepest of them.
+    if (depths.length) return statedValue(Math.max(...depths), s.text);
+  }
+  return missingValue();
+}
+
+// --- Equipment below ground ---
+
+const EQUIPMENT_LEAD = String.raw`(?:(?:standby|back-?up|emergency|diesel|main|primary|fire|sump|sewage|water|booster|sprinkler|hydrant|transfer|fuel|storage|LV|MV|HV|low[\s-]voltage|medium[\s-]voltage|high[\s-]voltage|electrical|domestic|chilled[\s-]water|submersible|de-?watering|drainage)\s+)`;
+const EQUIPMENT_KIND = String.raw`(?:generators?|gen-?sets?|switchgear|switch\s?rooms?|switchboards?|transformers?|substations?|pump\s?(?:sets?|rooms?|stations?)|pumps?|tanks?|lift\s+(?:motors?|machinery|machine\s+rooms?|equipment)|elevator\s+(?:motors?|machinery)|server\s+rooms?|servers?|data\s+cent(?:re|er)s?|UPS(?:\s+(?:units?|rooms?|systems?))?|chillers?|boilers?|control\s+(?:panels?|rooms?)|distribution\s+boards?|BMS|plant\s?rooms?|batter(?:y|ies)\s+(?:rooms?|banks?)|compressors?|air\s+handling\s+units?|meter\s+rooms?|electrical\s+(?:rooms?|panels?|intake))`;
+const EQUIPMENT = new RegExp(String.raw`(?<![\w-])(${EQUIPMENT_LEAD}{0,2}${EQUIPMENT_KIND})(?![\w-])`, "gi");
+/** Equipment that was below ground once, or that the statement puts somewhere else. */
+const MOVED = /\b(?:relocat\w*|moved|removed|no\s+longer|formerly|previously|used\s+to|raised|elevated|decommissioned)\b/i;
+/** The telling of a past flood says where equipment stood then, which may not be where it stands now. */
+const HAPPENED = /\b(?:damaged?|destroyed|flooded|flooding|submerged|inundated|claims?|loss(?:es)?)\b/i;
+const ABOVE_GROUND = /\b(?:roof(?:top)?|above[\s-]+ground|podium|penthouse)\b/i;
+const SHORT_NAMES = new Set(["UPS", "BMS", "LV", "MV", "HV"]);
+
+/** The item as the document names it, in sentence case: "STANDBY GENERATOR" and "standby generator" are both "Standby generator". */
+function itemName(written: string): string {
+  const tidy = written.replace(/\s+/g, " ").trim();
+  const cased = /[a-z]/.test(tidy) ? tidy : tidy.replace(/[A-Za-z]+/g, (word) => (SHORT_NAMES.has(word) ? word : word.toLowerCase()));
+  return cased.charAt(0).toUpperCase() + cased.slice(1);
+}
+
+/**
+ * Each item of equipment a statement places in a basement or below ground: named in the same
+ * clause as the basement, named in the heading of a line that says where it is housed, or listed
+ * under a heading about the basement. A statement that denies it, says the item was moved, or
+ * tells of a past loss places nothing.
+ */
+function equipmentIn(statements: Statement[]): EquipmentItem[] {
+  const items: EquipmentItem[] = [];
+  const named = (text: string) => [...text.matchAll(EQUIPMENT)].map((m) => itemName(m[1]));
+  for (const s of statements) {
+    if (MOVED.test(s.text) || HAPPENED.test(s.text) || toldAsLoss(s) || isQuestion(s.text)) continue;
+    const here = BELOW_GROUND.exec(s.text);
+    let names: string[] = [];
+    if (here) {
+      if (NEGATED.test(s.text.slice(0, here.index))) continue;
+      // "Generators are in basement 2; the chillers are on the roof" places the generators only.
+      const clauses = s.text.split(/;|\b(?:while|whereas|but)\b/i).filter((clause) => BELOW_GROUND.test(clause) && !ABOVE_GROUND.test(clause));
+      names = clauses.flatMap(named);
+      if (!names.length && clauses.length) names = named(s.heading);
+    } else if (BELOW_GROUND.test(s.heading) && !/^\W*(?:no|none|nil)\b/i.test(s.text) && !ABOVE_GROUND.test(s.text)) {
+      names = named(s.text);
+    }
+    for (const name of names) items.push({ item: statedValue(name, s.text) });
+  }
+  return uniqueEquipment(items);
+}
+
+// --- The storm the drains are designed for ---
+
+const DRAIN = /\b(?:drains?|drainage|storm\s?water|storm\s+sewers?|culverts?|sewers?|gutters?|outfalls?|soakaways?)\b/i;
+const DESIGNED = String.raw`\b(?:design(?:ed)?|sized|engineered|specified|capacity|standard)\b`;
+/** "1-in-50", "1:50 year", "50-year". "12 years old" and "8 years ago" are ages. */
+const RETURN_PERIOD = String.raw`(?:(?<![\d.,])1[\s-]*(?:in|[:/])[\s-]*(\d{1,4})(?![\d]|[.,]\d)|(?<![\d.,:/])(\d{1,4})[\s-]*(?:years?|yrs?)\b(?!\s+(?:old|ago)))`;
+const DESIGN_FORMS = [new RegExp(String.raw`${DESIGNED}([^.;\d]{0,60}?)${RETURN_PERIOD}`, "i"), new RegExp(String.raw`${RETURN_PERIOD}([^.;\d]{0,25}?)\b(?:design|standard|capacity)\b`, "i")];
+/** Between the design word and the figure, these make it something else: a design life, or the storm that beat the design. */
+const NOT_THE_DESIGN = /\b(?:life(?:span|time)?|warranty|guarantee|lease|exceed\w*|overwhelm\w*|overtopp\w*|surcharg\w*|flood\w*|events?|rainfall|by)\b/i;
+const MOST_DESIGN_YEARS = 1000;
+
+/**
+ * The return period the site's drains are designed for, from a statement about drains that
+ * says so: "designed for a 1-in-50 year storm", "25-year design standard". The return period of
+ * a flood that happened is not a design. Two statements that give different designs leave it
+ * not stated.
+ */
+function drainDesignIn(statements: Statement[]): Quoted<number> {
+  const found: Quoted<number>[] = [];
+  for (const s of statements) {
+    if ((!DRAIN.test(s.text) && !DRAIN.test(s.heading)) || isQuestion(s.text)) continue;
+    for (const [i, form] of DESIGN_FORMS.entries()) {
+      const m = form.exec(s.text);
+      if (!m) continue;
+      const between = i === 0 ? m[1] : m[3];
+      const years = Number(i === 0 ? (m[2] ?? m[3]) : (m[1] ?? m[2]));
+      if (NOT_THE_DESIGN.test(between) || years < 1 || years > MOST_DESIGN_YEARS) continue;
+      found.push(statedValue(years, s.text));
+      break;
+    }
+  }
+  return agreed(found) ?? missingValue();
+}
+
+// --- Sump pumps ---
+
+const SUMP = /\b(?:sump|de-?watering|submersible)\b/i;
+const FLOW_UNIT = String.raw`(?:l\s?\/\s?s(?:ec)?\b|lps\b|l\s?\/\s?min\b|lpm\b|l\s?\/\s?h(?:r|our)?\b|lit(?:re|er)s?\s*(?:per|\/|a)\s*(?:second|sec|minute|min|hour|hr)\b|m(?:3|³)\s?\/\s?(?:h(?:r|our)?|s(?:ec)?|min)\b|cubic\s+met(?:re|er)s?\s+(?:per|an?)\s+(?:hour|second|minute)\b|gpm\b|gallons?\s+per\s+(?:minute|hour)\b)`;
+const POWER_UNIT = String.raw`(?:kW\b|hp\b|horsepower\b)`;
+/** "2 x 15 l/s", "500 litres per minute", "30 m³/h each". A flow first; a motor rating only when no flow is given. */
+const capacityIn = (unit: string) => new RegExp(String.raw`(?:(?<![\d.,])\d{1,2}\s*(?:x|×|no\.?|nos\.?)\s*)?(?<![\d.,])\d[\d,]*(?:\.\d+)?\s*${unit}(?:\s+each\b)?`, "i");
+const CAPACITY_FORMS = [capacityIn(FLOW_UNIT), capacityIn(POWER_UNIT)];
+
+const BACKUP_SOURCE = String.raw`(?:the\s+|a\s+)?(?:(?:standby|back-?up|emergency|diesel|building(?:'s|’s)?)\s+){0,2}(?:generators?|gen-?sets?|UPS|essential\s+(?:supply|power|circuit|board)|emergency\s+(?:supply|power))`;
+const BACKUP_POWER = new RegExp(
+  [
+    String.raw`\bback-?\s?up\s+(?:power|supply|supplies|generators?|electricity|batter(?:y|ies))\b`,
+    String.raw`\b(?:power|battery|generator)\s+back-?\s?up\b`,
+    String.raw`\b(?:connected|wired|linked|fed|supplied|powered|backed(?:\s+up)?|runs?|running|operat\w+)\s+(?:\w+\s+){0,2}?(?:to|on|by|from|off)\s+${BACKUP_SOURCE}\b`,
+    String.raw`\bon\s+(?:the\s+)?essential\s+(?:supply|power|circuit|board)\b`,
+    String.raw`\bdual\s+(?:power\s+)?(?:supply|feed)\b`,
+    String.raw`\b(?:UPS|battery|generator)[\s-]backed\b`,
+  ].join("|"),
+  "i",
+);
+
+/** Whether a statement about the sump pumps says they have backup power. null when it does not say. */
+function backupIn(text: string): YesNo | null {
+  if (/\bmains(?:\s+(?:power|supply|electricity))?\s+only\b/i.test(text)) return "no";
+  const m = BACKUP_POWER.exec(text);
+  if (!m) return null;
+  return DENIED.test(text.slice(0, m.index)) || DENIED_AFTER.test(text.slice(m.index + m[0].length)) ? "no" : "yes";
+}
+
+/** Another kind of pump named under a heading about the sump pumps. Its figures are not theirs. */
+const OTHER_PUMP = /\b(?:fire|sprinkler|hydrant|booster|domestic|jockey|transfer|fuel|water\s+supply)\b/i;
+
+/**
+ * The sump pumps' capacity, in the document's own words, and whether they have backup power:
+ * each from the first statement that says, among those that name the sump pumps or stand under
+ * a heading that does.
+ */
+function sumpPumpsIn(statements: Statement[]): { capacity: Quoted<string>; backup: Quoted<YesNo> } {
+  let capacity: Quoted<string> = missingValue();
+  let backup: Quoted<YesNo> = missingValue();
+  for (const s of statements) {
+    if (isQuestion(s.text)) continue;
+    if (!SUMP.test(s.text) && (!(SUMP.test(s.heading) || SUMP.test(s.section)) || OTHER_PUMP.test(s.text))) continue;
+    if (capacity.value === null) {
+      const m = CAPACITY_FORMS.map((form) => form.exec(s.text)).find(Boolean);
+      if (m) capacity = statedValue(m[0].replace(/\s+/g, " ").trim(), s.text);
+    }
+    if (backup.value === null) {
+      const has = backupIn(s.text);
+      if (has) backup = statedValue(has, s.text);
+    }
+  }
+  return { capacity, backup };
+}
+
+// --- Flood barriers and non-return valves ---
+
+const BARRIER = /\b(?:flood\s+(?:barriers?|gates?|boards?|doors?|shields?|walls?|bunds?|defen[cs]es?)|demountable\s+(?:flood\s+)?barriers?|stop\s?logs?)\b/i;
+const VALVE = /\b(?:non[\s-]?return\s+valves?|NRVs?|back[\s-]?(?:flow|water)\s+(?:valves?|preventers?|prevention)|anti[\s-]?flood\s+valves?|flap\s+valves?|check\s+valves?)\b/i;
+/** Something talked about but not there yet, or not known. The rules cannot be sure, so it is left not stated. */
+const NOT_SETTLED = /\b(?:recommend\w*|propos\w*|plan(?:s|ned)?|consider\w*|budget\w*|to\s+be|will\s+be|should|awaiting|pending|quot(?:e[ds]?|ation)|under\s+review|require[sd]?|requirements?|subject\s+to|condition(?:al)?|advis\w*|suggest\w*|unknown|unclear|unconfirmed|tbc|whether)\b/i;
+
+/** Whether the document says the thing is fitted or says there is none. Statements that disagree leave it not stated. */
+function presenceIn(statements: Statement[], thing: RegExp): Quoted<Presence> {
+  const found: Quoted<Presence>[] = [];
+  for (const s of statements) {
+    const m = thing.exec(s.text);
+    if (!m || isQuestion(s.text)) continue;
+    if (DENIED.test(s.text.slice(0, m.index)) || DENIED_AFTER.test(s.text.slice(m.index + m[0].length))) found.push(statedValue<Presence>("absent", s.text));
+    else if (!NOT_SETTLED.test(s.text)) found.push(statedValue<Presence>("present", s.text));
+  }
+  return agreed(found) ?? missingValue();
+}
+
+// --- The value split ---
+
+/** A label with what stands in brackets left off: "Buildings (reinstatement value)" is "Buildings". */
+const bareLabel = (label: string) => label.replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
+const VALUE_WORDS = String.raw`(?:\s+(?:values?|sums?\s+insured))?`;
+const VALUE_LABELS = {
+  building: new RegExp(String.raw`^(?:(?:main\s+)?buildings?(?:\s+(?:structures?|works|only))?(?:\s*(?:and|&|,)\s*(?:fixtures|fittings|improvements|services|structures?|civil\s+works|foundations|external\s+works)[\w\s,&]*)?|structures?|civil\s+works)${VALUE_WORDS}$`, "i"),
+  machinery: new RegExp(String.raw`^(?:(?:fixed\s+)?(?:plant|machinery|equipment|M\s?&\s?E)(?:\s*(?:and|&|,|\/)\s*(?:plant|machinery|equipment))*|mechanical\s+(?:and|&)\s+electrical(?:\s+(?:plant|services|equipment|installations?))?)${VALUE_WORDS}$`, "i"),
+  contents: new RegExp(String.raw`^(?:(?:general\s+)?contents?(?:\s*(?:and|&|,)\s*(?:stocks?|fixtures|fittings|furniture|equipment))*|(?:furniture|fixtures)(?:\s*(?:and|&|,)\s*(?:fittings|fixtures|furniture|equipment))*)${VALUE_WORDS}$`, "i"),
+  stock: new RegExp(String.raw`^(?:stocks?(?:\s+(?:in\s+trade|and\s+(?:materials|inventory|contents)))?|inventory|raw\s+materials?(?:\s+and\s+finished\s+goods)?|finished\s+goods)${VALUE_WORDS}$`, "i"),
+};
+
+/**
+ * One part of the insured value, from a line labelled with that part alone and a KES amount:
+ * "Buildings: KES 3,400,000,000". Never from the telling of a past loss. null when no line
+ * gives it; not stated when lines give different amounts, as for several buildings.
+ */
+function valuePartIn(lines: Line[], sections: string[], label: RegExp): Quoted<number> | null {
+  const found = lines.flatMap((line, i) => {
+    if (line.label === null || !label.test(bareLabel(line.label)) || LOSS_TELLING.test(`${line.heading} ${sections[i]}`)) return [];
+    const [amount] = amountsIn(line.value);
+    return amount ? [statedValue(amount.kes, line.text)] : [];
+  });
+  return agreed(found);
+}
+
+const VALUED = String.raw`\b(?:valued\s+at|worth|value\s+of|values?\s+(?:is|are|totals?|totalling|amounts?\s+to)|replacement\s+(?:cost|value)(?:\s+of)?|insured\s+(?:for|at)|sums?\s+insured(?:\s+of)?|value[ds]?)\b`;
+const PLANT_OR_CONTENTS = /\b(?:plant|machinery|equipment|contents|M\s?&\s?E|generators?|switchgear|installations?|assets?|stocks?|services)\b/i;
+/** Amounts that are not the value of what is kept below ground. */
+const NOT_A_VALUE = /\b(?:loss(?:es)?|claims?|damage[ds]?|destroyed|paid|settled|flooded|flooding|events?|incidents?|repair(?:s|ed)?|limits?|deductibles?|excess|premiums?|TIV|total\s+(?:insured\s+value|sums?\s+insured))\b/i;
+
+/**
+ * The value of the machinery and contents the document says are below ground, where one
+ * statement names the basement, what is kept there and its value. An amount as large as the
+ * whole insured value is the building's, not the basement's, and is not read.
+ */
+function valueBelowGroundIn(statements: Statement[], tivKes: number | null): Quoted<number> {
+  const found: Quoted<number>[] = [];
+  for (const s of statements) {
+    if (!BELOW_GROUND.test(s.text) || !PLANT_OR_CONTENTS.test(s.text) || NOT_A_VALUE.test(s.text) || toldAsLoss(s) || isQuestion(s.text)) continue;
+    const amount = amountBeside(s.text, new RegExp(VALUED, "i"));
+    if (!amount || amount.kes <= 0 || (tivKes !== null && amount.kes >= tivKes)) continue;
+    found.push(statedValue(amount.kes, s.text));
+  }
+  return agreed(found) ?? missingValue();
+}
+
+// --- Rent or revenue for one year ---
+
+const RENT = /\b(?:gross\s+)?rent(?:al)?s?(?:\s+(?:income|roll|revenue|receipts))?\b/i;
+const REVENUE = /\b(?:revenue|turnover|gross\s+(?:profit|income|earnings))\b/i;
+const YEARLY = /(?:\bannual(?:ly|ised|ized)?\b|\bper\s+annum\b|\bp\.\s?a\.|\bpa\b|\bper\s+year\b|\ba\s+year\b|\byearly\b|\beach\s+year\b|\b12[\s-]months?\b|\btwelve[\s-]months?\b)/i;
+/** A figure for a month, a quarter or a square metre is never multiplied up. */
+const NOT_YEARLY = /(?:\bmonthly\b|\bper\s+month\b|\ba\s+month\b|\beach\s+month\b|\bp\.\s?m\.|\bquarter(?:ly)?\b|\bweek(?:ly)?\b|\bdaily\b|\bper\s+day\b|(?:\bper\s+|\/\s?)(?:m²|m2\b|sq\b|square\b))/i;
+const NOT_RENT = /\b(?:premiums?|deductibles?|excess|limits?|sub-?limits?|claims?|paid|settled|increase[ds]?|growth|arrears)\b/i;
+
+/** A year's rent, else a year's revenue, where a statement gives the figure as a yearly one. */
+function annualRentIn(statements: Statement[]): Quoted<number> {
+  const yearly = (word: RegExp) =>
+    agreed(
+      statements.flatMap((s) => {
+        if (!word.test(s.text) || !YEARLY.test(s.text) || NOT_YEARLY.test(s.text) || NOT_RENT.test(s.text) || toldAsLoss(s) || isQuestion(s.text)) return [];
+        const amount = amountBeside(s.text, word);
+        return amount ? [statedValue(amount.kes, s.text)] : [];
+      }),
+    );
+  return yearly(RENT) ?? yearly(REVENUE) ?? missingValue();
+}
+
+// --- Business interruption cover ---
+
+const BI_WORDS = /\b(?:business\s+interruption|loss\s+of\s+(?:rent(?:al)?(?:\s+income)?|revenue|profits?|income|earnings)|consequential\s+loss(?:es)?|rent(?:al)?\s+guarantee)\b/i;
+/** The letters alone, in capitals: "BI". */
+const BI_LETTERS = /\bBI\b/;
+const BI_LEFT_OUT_AFTER = /^[^.;]{0,45}?\b(?:excluded|not\s+(?:covered|included|insured|required|requested|sought|applicable|purchased|taken)|none|nil|n\/a|no\s+cover)\b/i;
+const BI_COVER_WORDS = /\b(?:cover(?:ed|age|s)?|insured|included?|including|incl\.?|inclusive|extensions?|requested|sought|required|indemnity|sums?\s+insured|section|material\s+damage|property\s+damage|all\s+risks)\b/i;
+/** An interruption that happened is part of a loss, not a statement about the cover. */
+const BI_HAPPENED = /\b(?:claim(?:s|ed)?|paid|settled|incurred|suffered|downtime|outage|closed|closure)\b/i;
+
+/**
+ * Whether the offer asks for business interruption or loss of rent to be insured. "Covered"
+ * needs a statement that names it with a word of cover or a sum insured; "excluded" one that
+ * leaves it out. Where the two disagree, the terms asked for outrank the policy now in force,
+ * and if they still disagree it is left not stated.
+ */
+function biCoverIn(statements: Statement[]): Quoted<BiCover> {
+  const covered: Statement[] = [];
+  const excluded: Statement[] = [];
+  for (const s of statements) {
+    const m = BI_WORDS.exec(s.text) ?? BI_LETTERS.exec(s.text);
+    if (!m || toldAsLoss(s) || isQuestion(s.text)) continue;
+    const before = s.text.slice(0, m.index);
+    const after = s.text.slice(m.index + m[0].length);
+    if (LEFT_OUT.test(before) || BI_LEFT_OUT_AFTER.test(after)) excluded.push(s);
+    else if (!BI_HAPPENED.test(`${before} ${after}`) && (BI_COVER_WORDS.test(`${before} ${after}`) || amountsIn(s.text).length > 0)) covered.push(s);
+  }
+  const asked = (list: Statement[]) => list.filter((s) => !CURRENT_POLICY.test(`${s.heading} ${s.section} ${s.text}`));
+  const [yes, no] = covered.length && excluded.length ? [asked(covered), asked(excluded)] : [covered, excluded];
+  if (yes.length && !no.length) return statedValue<BiCover>("covered", yes[0].text);
+  if (no.length && !yes.length) return statedValue<BiCover>("excluded", no[0].text);
+  return missingValue();
+}
+
+// --- The annual premium ---
+
+/** A premium that is not the policy's annual premium for all risks. */
+const NOT_THE_PREMIUM = /\b(?:flood|additional|extra|reinstatement|deposit|adjust\w*|minimum|returns?|refund\w*|loading|discount|savings?|instal?ments?|monthly|quarterly|earned|cumulative|per\s+mille)\b/i;
+/** A premium over several years is not one year's. */
+const MANY_YEARS = /(?<![\d.,])\d{1,2}[\s-]*(?:years|yrs)\b/i;
+const PROPOSED = /\b(?:propos\w*|target\w*|indicat\w*|quot\w*|renewal|requested|sought|expected|budget\w*|estimated?)\b/i;
+
+/**
+ * The offer's annual premium: a KES amount straight after the word "premium", or straight
+ * before it. The premium now paid is taken before a proposed one. Different amounts that
+ * cannot be told apart leave it not stated.
+ */
+function premiumIn(statements: Statement[]): Quoted<number> {
+  const current: Quoted<number>[] = [];
+  const proposed: Quoted<number>[] = [];
+  for (const s of statements) {
+    const word = /\bpremiums?\b/i.exec(s.text);
+    if (!word || toldAsLoss(s) || isQuestion(s.text) || MANY_YEARS.test(s.text)) continue;
+    const end = word.index + word[0].length;
+    const amounts = amountsIn(s.text);
+    // "Annual premium: KES 12,500,000", "premium of approximately KES 12.5 million", "KES 12.5 million annual premium".
+    const amount = amounts.find((a) => a.index >= end && a.index - end <= 40 && !/\d/.test(s.text.slice(end, a.index))) ?? amounts.find((a) => a.end <= word.index && /^\s*(?:(?:annual|gross|total|current|expiring)\s+)*$/i.test(s.text.slice(a.end, word.index)));
+    if (!amount) continue;
+    const about = s.text.slice(0, Math.max(end, amount.index));
+    if (NOT_THE_PREMIUM.test(about)) continue;
+    (PROPOSED.test(`${s.heading} ${about}`) && !CURRENT_POLICY.test(about) ? proposed : current).push(statedValue(amount.kes, s.text));
+  }
+  return agreed(current) ?? agreed(proposed) ?? missingValue();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -419,7 +820,7 @@ export const extractByRules: ExtractByRules = (documentText, knownPlaces = []) =
     }
     if (row.tivKes.value === null && typed) {
       // One amount in a typed description, with nothing saying it is anything else, is the value.
-      const plain = sentences.flatMap((s) => (/\b(?:deductible|excess|limit)\b/i.test(s) || perM2.test(s) ? [] : amountsIn(s).map((a) => ({ a, s }))));
+      const plain = sentences.flatMap((s) => (/\b(?:deductible|excess|limit|rent(?:al)?s?|revenue|turnover|premiums?)\b/i.test(s) || perM2.test(s) ? [] : amountsIn(s).map((a) => ({ a, s }))));
       if (plain.length === 1) row.tivKes = statedValue(plain[0].a.kes, plain[0].s);
     }
   }
@@ -612,5 +1013,25 @@ export const extractByRules: ExtractByRules = (documentText, knownPlaces = []) =
   terms.floodHistoryYears = historyYearsIn(lines);
   const floodLosses = uniqueLosses([...floodLossesIn(lines), ...(typed ? typedFloodLosses(sentences) : [])]);
 
-  return { rows: [row], terms, notes, floodLosses };
+  // --- What the loss drivers need: each from a statement that says it, never from what is usual.
+  const sections = sectionsOf(lines);
+  const statements = statementsOf(lines, sections);
+  terms.basementDepthM = basementDepthIn(statements);
+  terms.drainDesignRp = drainDesignIn(statements);
+  const pumps = sumpPumpsIn(statements);
+  terms.sumpPumpCapacity = pumps.capacity;
+  terms.sumpPumpBackup = pumps.backup;
+  terms.floodBarriers = presenceIn(statements, BARRIER);
+  terms.nonReturnValves = presenceIn(statements, VALVE);
+  terms.valueBuildingKes = valuePartIn(lines, sections, VALUE_LABELS.building) ?? missingValue();
+  terms.valueMachineryKes = valuePartIn(lines, sections, VALUE_LABELS.machinery) ?? missingValue();
+  // Stock stands in for contents only when the document gives no contents figure. The two are never added.
+  terms.valueContentsKes = valuePartIn(lines, sections, VALUE_LABELS.contents) ?? valuePartIn(lines, sections, VALUE_LABELS.stock) ?? missingValue();
+  terms.valueBelowGroundKes = valueBelowGroundIn(statements, row.tivKes.value);
+  terms.annualRentKes = annualRentIn(statements);
+  terms.biCovered = biCoverIn(statements);
+  terms.premiumKes = premiumIn(statements);
+  const equipmentBelowGround = equipmentIn(statements);
+
+  return { rows: [row], terms, notes, floodLosses, equipmentBelowGround };
 };

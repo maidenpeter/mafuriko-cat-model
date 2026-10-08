@@ -3,8 +3,10 @@ import type { Usage } from "../agents/provider";
 import type { Check } from "../checks";
 import type { DrainageState } from "../geo/drainageView";
 import type { GeoCollection, WardProps, WaterwayProps } from "../geo/layers";
+import type { LossMode } from "../model/drivers";
 import type { InsuranceTerms } from "../model/terms";
 import type { Dataset, HazardKind, Hotspot, HousingClass, ModelParams, Raster } from "../model/types";
+import type { OfferJudgement } from "./judgement";
 
 /**
  * Price a single offer: the contract every file in lib/offer is written against.
@@ -80,6 +82,18 @@ export type FloodCover = (typeof FLOOD_COVERS)[number];
 export const DEDUCTIBLE_BASES = ["percent_of_loss", "percent_of_sum_insured"] as const;
 export type DeductibleBasis = (typeof DEDUCTIBLE_BASES)[number];
 
+/** A question the document answers one way or the other: whether the sump pumps have backup power. */
+export const YES_NO = ["yes", "no"] as const;
+export type YesNo = (typeof YES_NO)[number];
+
+/** Whether a flood protection measure is fitted ("present") or the document says there is none ("absent"). */
+export const PRESENCES = ["present", "absent"] as const;
+export type Presence = (typeof PRESENCES)[number];
+
+/** Whether the offer asks for business interruption or loss of rent to be insured ("covered") or leaves it out ("excluded"). */
+export const BI_COVERS = FLOOD_COVERS;
+export type BiCover = FloodCover;
+
 /** The values of one insured building, in the exposure file's shape. One per row. */
 export interface OfferRowValues {
   name: Quoted<string>;
@@ -134,10 +148,70 @@ export interface OfferTerms {
    * fromFlatReply, extractByRules and verifyExtraction always fill it; read an absent one as missing.
    */
   floodHistoryYears?: Quoted<number>;
+
+  // What the loss drivers beyond flood depth need (see judgement.ts). Each is read only when the
+  // document states it: a value that is not stated is asked of the broker (questions.ts), and the
+  // price uses a marked assumption until it is answered. Optional in the type for the same reason
+  // as floodHistoryYears: fromFlatReply, extractByRules and verifyExtraction always fill them, and
+  // an absent one reads as missing.
+
+  /** How far the lowest basement floor is below ground, in metres. The total, never one level's height. */
+  basementDepthM?: Quoted<number>;
+  /** The return period, in years, the site's storm drains are designed for: 50 for "a 1-in-50 year storm". */
+  drainDesignRp?: Quoted<number>;
+  /** The capacity of the basement sump pumps, in the document's own words: "2 x 15 l/s". */
+  sumpPumpCapacity?: Quoted<string>;
+  /** Whether the sump pumps have backup power. */
+  sumpPumpBackup?: Quoted<YesNo>;
+  /** Flood barriers, gates or boards at the openings. */
+  floodBarriers?: Quoted<Presence>;
+  /** Non-return or backflow valves on the drains. */
+  nonReturnValves?: Quoted<Presence>;
+  /** The insured value of the building itself, when the document splits the total. */
+  valueBuildingKes?: Quoted<number>;
+  /** The insured value of plant and machinery. */
+  valueMachineryKes?: Quoted<number>;
+  /** The insured value of contents, or of stock when that is the only such figure given. */
+  valueContentsKes?: Quoted<number>;
+  /** The value of the machinery and contents the document says are below ground. Stated, never added up. */
+  valueBelowGroundKes?: Quoted<number>;
+  /** Rent or revenue for one year. Only a yearly figure that is written; never a monthly one multiplied. */
+  annualRentKes?: Quoted<number>;
+  /** Whether business interruption or loss of rent is to be insured. */
+  biCovered?: Quoted<BiCover>;
+  /** The offer's stated annual premium, all risks. */
+  premiumKes?: Quoted<number>;
 }
 
-/** The offer-level values that are always present. floodHistoryYears stands apart: see its note above. */
-export type CoreTermKey = Exclude<keyof OfferTerms, "floodHistoryYears">;
+/** The offer-level values the loss drivers beyond flood depth read. All optional on OfferTerms. */
+export const DRIVER_TERM_KEYS = [
+  "basementDepthM",
+  "drainDesignRp",
+  "sumpPumpCapacity",
+  "sumpPumpBackup",
+  "floodBarriers",
+  "nonReturnValves",
+  "valueBuildingKes",
+  "valueMachineryKes",
+  "valueContentsKes",
+  "valueBelowGroundKes",
+  "annualRentKes",
+  "biCovered",
+  "premiumKes",
+] as const satisfies readonly (keyof OfferTerms)[];
+export type DriverTermKey = (typeof DRIVER_TERM_KEYS)[number];
+
+/** The offer-level values that are always present. floodHistoryYears and the loss drivers' values stand apart: see their notes above. */
+export type CoreTermKey = Exclude<keyof OfferTerms, "floodHistoryYears" | DriverTermKey>;
+
+/**
+ * One item of equipment the document says is in a basement or below ground: a generator,
+ * switchgear, pumps, a tank, a lift motor, a server room. The value names the item in a few
+ * words; the quote is the sentence that says where it is.
+ */
+export interface EquipmentItem {
+  item: Quoted<string>;
+}
 
 /**
  * One past flood or water damage loss the document states for the site: river or storm water
@@ -185,6 +259,12 @@ export interface OfferExtraction {
    * Optional in the type for the same reason as floodHistoryYears; read an absent list as empty.
    */
   floodLosses?: FloodLoss[];
+  /**
+   * The equipment the document places in a basement or below ground, in the order it lists it,
+   * each item once. Empty when the document names none. Optional in the type for the same reason
+   * as floodLosses; read an absent list as empty.
+   */
+  equipmentBelowGround?: EquipmentItem[];
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -209,6 +289,19 @@ export const OFFER_TERM_FIELDS = [
   "river_name",
   "river_distance_m",
   "flood_history_years",
+  "basement_depth_m",
+  "drain_design_rp",
+  "sump_pump_capacity",
+  "sump_pump_backup",
+  "flood_barriers",
+  "non_return_valves",
+  "value_building_kes",
+  "value_machinery_kes",
+  "value_contents_kes",
+  "value_below_ground_kes",
+  "annual_rent_kes",
+  "bi_covered",
+  "premium_kes",
 ] as const;
 export type OfferTermField = (typeof OFFER_TERM_FIELDS)[number];
 
@@ -216,8 +309,12 @@ export type OfferTermField = (typeof OFFER_TERM_FIELDS)[number];
 export const OFFER_LOSS_FIELDS = ["flood_loss_year", "flood_loss_amount_kes"] as const;
 export type OfferLossField = (typeof OFFER_LOSS_FIELDS)[number];
 
-/** Every field name the model may reply with: row fields, offer-level fields, past flood loss fields, then the note kinds (row = 0). */
-export const OFFER_FIELDS = [...OFFER_ROW_FIELDS, ...OFFER_TERM_FIELDS, ...OFFER_LOSS_FIELDS, ...NOTE_KINDS] as const;
+/** Equipment below ground. Sent with row = the item's number, from 1, one entry per item, in the same flat style as the past flood losses. */
+export const OFFER_EQUIPMENT_FIELDS = ["equipment_below_ground"] as const;
+export type OfferEquipmentField = (typeof OFFER_EQUIPMENT_FIELDS)[number];
+
+/** Every field name the model may reply with: row fields, offer-level fields, past flood loss fields, equipment below ground, then the note kinds (row = 0). */
+export const OFFER_FIELDS = [...OFFER_ROW_FIELDS, ...OFFER_TERM_FIELDS, ...OFFER_LOSS_FIELDS, ...OFFER_EQUIPMENT_FIELDS, ...NOTE_KINDS] as const;
 export type OfferField = (typeof OFFER_FIELDS)[number];
 
 /** Flat field name to the key that holds it on OfferRowValues. */
@@ -245,6 +342,19 @@ export const OFFER_TERM_KEYS = {
   river_name: "riverName",
   river_distance_m: "riverDistanceM",
   flood_history_years: "floodHistoryYears",
+  basement_depth_m: "basementDepthM",
+  drain_design_rp: "drainDesignRp",
+  sump_pump_capacity: "sumpPumpCapacity",
+  sump_pump_backup: "sumpPumpBackup",
+  flood_barriers: "floodBarriers",
+  non_return_valves: "nonReturnValves",
+  value_building_kes: "valueBuildingKes",
+  value_machinery_kes: "valueMachineryKes",
+  value_contents_kes: "valueContentsKes",
+  value_below_ground_kes: "valueBelowGroundKes",
+  annual_rent_kes: "annualRentKes",
+  bi_covered: "biCovered",
+  premium_kes: "premiumKes",
 } as const satisfies Record<OfferTermField, keyof OfferTerms>;
 
 /** Flat field name to the key that holds it on FloodLoss. */
@@ -262,15 +372,18 @@ export const OFFER_LOSS_KEYS = {
  *                 units or scale words: "4250000000", "48500", "1800", "5", "-1.2921", "2018"
  *   lat and lon   decimal degrees, south and west negative
  *   housing_class one of HOUSING_CLASSES
- *   occupancy, flood_cover, flood_deductible_basis: one of their lists above
- *   text fields and notes: a short phrase
+ *   occupancy, flood_cover, flood_deductible_basis, sump_pump_backup, flood_barriers,
+ *   non_return_valves, bi_covered: one of their lists above
+ *   drain_design_rp the years alone: "50" for "a 1-in-50 year storm"
+ *   text fields, equipment below ground and notes: a short phrase
  * A field the document does not state is left out. It is never guessed and never sent empty.
  */
 export interface OfferFlatEntry {
   field: OfferField;
   /**
    * The building's number, counted from 1, for a row field. The loss's number, counted from 1,
-   * for a past flood loss field. 0 for offer-level fields and notes.
+   * for a past flood loss field. The item's number, counted from 1, for equipment below ground.
+   * 0 for offer-level fields and notes.
    */
   row: number;
   value: string;
@@ -278,7 +391,7 @@ export interface OfferFlatEntry {
   quote: string;
 }
 
-/** The whole reply. A row or loss field repeated for the same number keeps its last entry; notes may repeat and all are kept. */
+/** The whole reply. A row or loss field repeated for the same number keeps its last entry; notes and equipment below ground may repeat and all are kept. */
 export interface OfferFlatReply {
   entries: OfferFlatEntry[];
 }
@@ -694,12 +807,20 @@ export type NumberInQuote = (value: number, quote: string) => boolean;
  * The loss history is checked the same way: the years it covers, and the year and the amount of
  * every past flood loss ("KES 4.2 million" and "KES 4,200,000" both hold 4200000). The result
  * always carries terms.floodHistoryYears and floodLosses, missing and empty when nothing was read.
+ * So are the values the loss drivers read (DRIVER_TERM_KEYS) and each item of equipment below
+ * ground. A drain design return period must also be written as one in its quote: "50-year" and
+ * "1-in-50" hold 50, "50 mm" does not. The result always carries every one of those values and
+ * equipmentBelowGround, missing and empty when nothing was read.
  * documentText is the text the extraction was made from: the redacted text, on both paths.
  */
 export type VerifyExtraction = (extraction: OfferExtraction, documentText: string) => OfferExtraction;
 
-/** The value when its status is one of USABLE_STATUSES and it is not null, otherwise null. The one rule for "may this be used". */
-export type UsableValue = <T>(quoted: Quoted<T>) => T | null;
+/**
+ * The value when its status is one of USABLE_STATUSES and it is not null, otherwise null. The one
+ * rule for "may this be used". A value that is absent altogether (an optional one on terms built
+ * by hand) is not stated, so it gives null too.
+ */
+export type UsableValue = <T>(quoted: Quoted<T> | null | undefined) => T | null;
 
 /** Points at one value in an extraction, for the edit and confirm buttons. */
 export type ValueRef =
@@ -707,7 +828,9 @@ export type ValueRef =
   | { scope: "terms"; key: keyof OfferTerms }
   | { scope: "note"; index: number }
   /** One value of one past flood loss: index is its place in OfferExtraction.floodLosses, from 0. */
-  | { scope: "loss"; index: number; key: keyof FloodLoss };
+  | { scope: "loss"; index: number; key: keyof FloodLoss }
+  /** One item of equipment below ground: index is its place in OfferExtraction.equipmentBelowGround, from 0. */
+  | { scope: "equipment"; index: number };
 
 /** An unverified value that feeds the price. Pricing waits until it is confirmed, edited or cleared. */
 export interface WaitingValue {
@@ -724,10 +847,17 @@ export interface WaitingValue {
  * pricingRows turns each one into a blocker, so nothing is priced around a value that failed its check.
  * The loss history is never in this list: an unverified year or amount is left out of the burning
  * cost until the underwriter confirms or edits it, and the rest of the price does not wait for it.
+ *
+ * With mode "all_drivers" the list also holds the five values that switch a loss driver on or set
+ * its size, when one is unverified: the number of basements, the value below ground, the drain
+ * design return period, whether business interruption is covered, and a year's rent (the rent only
+ * while interruption could be priced). An unverified one is never priced around with the
+ * assumption: the offer waits until it is confirmed, edited or cleared. With "depth_only", or with
+ * no mode given, none of the five is in the list and the offer is priced exactly as before.
  */
-export type WaitingValues = (extraction: OfferExtraction) => WaitingValue[];
+export type WaitingValues = (extraction: OfferExtraction, mode?: LossMode) => WaitingValue[];
 
-/** How many values hold each status: every row field, every offer-level field, both values of every past flood loss, and every note. */
+/** How many values hold each status: every row field, every offer-level field, both values of every past flood loss, every item of equipment below ground, and every note. */
 export type StatusCounts = (extraction: OfferExtraction) => Record<ValueStatus, number>;
 
 /**
@@ -735,7 +865,8 @@ export type StatusCounts = (extraction: OfferExtraction) => Record<ValueStatus, 
  * reason null, quote kept. A value of null clears it: status "missing". A typed value that cannot
  * be read for its field returns the extraction it was given, unchanged, so the caller can tell
  * by comparing the two. A "loss" reference one past the end of the list adds a loss with that
- * value, so a loss the reading missed can be typed in.
+ * value, so a loss the reading missed can be typed in. An "equipment" reference one past the end
+ * adds an item the same way.
  */
 export type EditValue = (extraction: OfferExtraction, ref: ValueRef, value: string | number | null) => OfferExtraction;
 
@@ -756,7 +887,8 @@ export type BuildOfferPrompt = (documentText: string) => { system: string; user:
 /**
  * The flat reply turned into an extraction: rows numbered from 1 become rows in order, every row
  * has path "model", number text is parsed, and anything not stated is "missing". Past flood
- * losses numbered from 1 become floodLosses in order, a loss reported twice kept once. Statuses are
+ * losses numbered from 1 become floodLosses in order, a loss reported twice kept once. Equipment
+ * below ground becomes equipmentBelowGround in the order sent, an item sent twice kept once. Statuses are
  * provisional until verifyExtraction runs. Text that should be a number or a listed word but
  * is not keeps its quote with a null value, "unverified", and a reason.
  */
@@ -771,8 +903,13 @@ export type FromFlatReply = (reply: OfferFlatReply) => OfferExtraction;
  * knownPlaces are the ward and hotspot names: one found in the text becomes the place name, which
  * is how a typed sentence with no coordinates gets a location. The loss history is read too: the
  * number of years a loss or claims history says it covers, and each numbered or dated loss that is
- * flood or water damage, with its year and its KES amount. Statuses are provisional until
- * verifyExtraction runs. A text with nothing recognisable still returns one row of missing values.
+ * flood or water damage, with its year and its KES amount. So is what the loss drivers need, where
+ * the text states it in a regular way: the depth of the basements, equipment said to be in a
+ * basement or below ground, the storm the drains are designed for, the sump pumps and their backup
+ * power, flood barriers and non-return valves, a breakdown of the insured value, a year's rent or
+ * revenue, business interruption cover and the annual premium. Where the rules cannot be sure, the
+ * value stays not stated. Statuses are provisional until verifyExtraction runs. A text with
+ * nothing recognisable still returns one row of missing values.
  */
 export type ExtractByRules = (documentText: string, knownPlaces?: readonly string[]) => OfferExtraction;
 
@@ -950,7 +1087,7 @@ export type PriceOffer = (input: PriceOfferInput) => OfferPricing;
  *   offer-coordinates    per row    inside the maps or not, and how the location was read
  *   offer-river          per row    stated river distance against the distance on the map
  *   offer-value-per-m2   per row    insured value ÷ floor area against the dataset's range for the class
- *   offer-basements      per offer  basements present: water entering them is not modelled
+ *   offer-basements      per offer  basements present: the maps do not read water entering them (Basement ingress prices it)
  *   offer-flood-history  per row    past flood reported but dry in every tier, or the reverse
  *   offer-curve          per offer  a non-residential building on the residential damage curve
  * They use the existing check groups: "ai" for offer-values, "data" for offer-coordinates and
@@ -972,6 +1109,44 @@ export interface OfferChecksInput {
 
 /** Worded like the checks in lib/checks: a title that states what should hold, and a detail with the figures. */
 export type OfferChecks = (input: OfferChecksInput) => Check[];
+
+// --- questions.ts: brokerQuestions -------------------------------------------------------------
+
+/** One question to put to the broker about a value the document does not state. */
+export interface BrokerQuestion {
+  /** The value asked for: its key on the terms or the row ("drainDesignRp", "tivKes", "occupancy"), or "coordinates", "floodDeductible", "equipmentBelowGround", "valueSplit". One per question. */
+  id: string;
+  /** The question in plain words, ready to send. */
+  question: string;
+  /** One sentence on why the answer matters to the price, with what the model does until it is answered. */
+  why: string;
+  /**
+   * What the model uses until the question is answered: the assumptions it rests on and one plain
+   * sentence. null where nothing is assumed: the building is not priced without the value, the
+   * driver stays off, or the value is context only.
+   */
+  assumes: BrokerAssumption | null;
+}
+
+/** What stands in for one unanswered question. */
+export interface BrokerAssumption {
+  /**
+   * The judgement figures (judgement.ts) that stand in, for the Assumption badge and for linking to
+   * the figure. Empty for an assumption kept elsewhere: the example terms, a named area's centre.
+   */
+  keys: (keyof OfferJudgement)[];
+  /** One plain sentence with the figure in force: "The drains are taken as designed for a 1-in-25 (4% a year) event." */
+  text: string;
+}
+
+/**
+ * One question per value that matters to the price and is not stated, the answer that could move
+ * the price most first. Nothing is asked for a value the document states, whether or not its
+ * check has passed yet, and nothing is ever guessed. A value the underwriter typed counts as
+ * stated. judgement is the set of assumptions in force, so each "why" quotes the figure the price
+ * really uses meanwhile; the reference set when it is left out.
+ */
+export type BrokerQuestions = (extraction: OfferExtraction, judgement?: OfferJudgement) => BrokerQuestion[];
 
 // --- csv.ts: offerCsv --------------------------------------------------------------------------
 

@@ -12,18 +12,19 @@ import { geometryContains } from "../geo/spatial";
  * How to use it, from a client component:
  *
  *   const outline = await findFootprint(lat, lon, { signal });
- *   if (outline.found) draw outline.polygon and show outline.label
- *   else               draw a marker at the point and show outline.reason
+ *   const block = buildingBlock(lat, lon, outline, floorAreaM2);
+ *   draw block.polygon standing block.heightM high, and say where its shape and height came from
  *
- * findFootprint never throws and never rejects. Draw the marker straight away and add the outline
- * when it arrives: the lookup can take the whole timeout, twice over when the mirror is tried.
+ * findFootprint never throws and never rejects. Draw the block straight away (buildingBlock gives a
+ * square of approximate shape while there is no outline) and redraw it when the outline arrives: the
+ * lookup can take the whole timeout, twice over when the mirror is tried.
  * Pass an AbortSignal and abort it when the point changes or the screen goes away.
  *
  * OpenStreetMap data is open under the ODbL licence and must be credited where it is shown:
  * OSM_CREDIT holds the wording.
  *
- * The pure parts (buildFootprintQuery, footprintsFromOverpass, nearestFootprint and the distance
- * helpers) are exported so they can be tested and reused without the network.
+ * The pure parts (buildFootprintQuery, footprintsFromOverpass, nearestFootprint, buildingBlock and
+ * the distance helpers) are exported so they can be tested and reused without the network.
  */
 
 /** Shown, word for word, with every outline. */
@@ -58,6 +59,8 @@ export interface FootprintCandidate {
   name: string | null;
   /** The number of floors above ground, from the building:levels tag. null when it is not recorded. */
   levels: number | null;
+  /** The building's height in metres, from the height tag. null when it is not recorded or cannot be read. */
+  heightM: number | null;
 }
 
 export interface FootprintFound extends FootprintCandidate {
@@ -265,10 +268,24 @@ function joinRings(pieces: Position[][]): Position[][] {
   return rings;
 }
 
+/** A height tag above this is taken as a mistake in the map. */
+const MAX_HEIGHT_M = 1000;
+
+/**
+ * OpenStreetMap's height tag in metres. The tag is metres unless it says otherwise: "12", "12.5 m"
+ * and "40 ft" are read. Anything else ("tall", a height in feet and inches) is left as not recorded.
+ */
+export function heightTagM(tag: unknown): number | null {
+  const read = /^(\d+(?:\.\d+)?)\s*(m|metres?|meters?|ft|feet)?$/i.exec(typeof tag === "string" || typeof tag === "number" ? String(tag).trim() : "");
+  if (!read) return null;
+  const metres = Number(read[1]) * (/^f/i.test(read[2] ?? "") ? 0.3048 : 1);
+  return metres > 0 && metres <= MAX_HEIGHT_M ? metres : null;
+}
+
 function candidateOf(type: string, id: number, tags: Record<string, unknown> | undefined, rings: Position[][]): FootprintCandidate {
   const name = typeof tags?.name === "string" && tags.name.trim() ? tags.name.trim() : null;
   const levels = Number.parseFloat(String(tags?.["building:levels"] ?? ""));
-  return { polygon: { type: "Polygon", coordinates: rings }, osmId: `${type}/${id}`, name, levels: Number.isFinite(levels) && levels > 0 ? levels : null };
+  return { polygon: { type: "Polygon", coordinates: rings }, osmId: `${type}/${id}`, name, levels: Number.isFinite(levels) && levels > 0 ? levels : null, heightM: heightTagM(tags?.height) };
 }
 
 /**
@@ -307,6 +324,105 @@ export function footprintsFromOverpass(payload: unknown): FootprintCandidate[] |
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------------------------
+// The building as a block
+// ---------------------------------------------------------------------------------------------
+
+/** The height given to one level of a building, in metres. An assumption of this app. */
+export const LEVEL_HEIGHT_M = 3.2;
+/** The height of a block when nothing says how tall the building is, in metres. An assumption. */
+export const ASSUMED_HEIGHT_M = 12;
+/** The levels a building of that height has, to the nearest whole one. Used to size a block that has no outline. */
+export const ASSUMED_LEVELS = Math.round(ASSUMED_HEIGHT_M / LEVEL_HEIGHT_M);
+/** The side of the square drawn when there is neither an outline nor a floor area, in metres. */
+export const ASSUMED_SQUARE_M = 30;
+/** A square block is never drawn smaller or larger than this, in metres a side. */
+export const SQUARE_SIDE_RANGE_M = { min: 8, max: 200 };
+/** More levels than this cannot be one building: the floor area then covers more than the outline found. */
+export const MAX_IMPLIED_LEVELS = 50;
+
+/**
+ * Where a block's height came from, in the order they are tried:
+ *   osm_height  OpenStreetMap's own height tag
+ *   osm_levels  OpenStreetMap's building:levels tag × LEVEL_HEIGHT_M
+ *   floor_area  the stated floor area ÷ the outline's area gives the levels, × LEVEL_HEIGHT_M
+ *   assumed     ASSUMED_HEIGHT_M, because none of the three is there
+ * The last two are not measurements and are shown as assumptions.
+ */
+export type BlockHeightFrom = "osm_height" | "osm_levels" | "floor_area" | "assumed";
+
+/** The building drawn as a solid block: the shape it stands on and how tall it is. */
+export interface BuildingBlock {
+  /** The base of the block: the OpenStreetMap outline, or a square centred on the stated point. */
+  polygon: FootprintPolygon;
+  /** "osm" when the base is the OpenStreetMap outline, "approximate" when it is the square. */
+  shape: "osm" | "approximate";
+  /** The side of the square in metres. null when the base is the OpenStreetMap outline. */
+  sideM: number | null;
+  /** The ground area of the base in m². */
+  areaM2: number;
+  heightM: number;
+  heightFrom: BlockHeightFrom;
+  /** The number of levels behind the height: OpenStreetMap's, the count the floor area implies, or the assumed count. null when the height tag gave the height. */
+  levels: number | null;
+  /** The middle of the base as [lon, lat]: where a label for the block is anchored. */
+  centre: Position;
+}
+
+/** A square of sideM metres centred on the point, as a closed ring. Same flat grid as the distances. */
+function squareRing(lat: number, lon: number, sideM: number): Position[] {
+  const dLon = sideM / 2 / (M_PER_DEG_LON * Math.cos((lat * Math.PI) / 180));
+  const dLat = sideM / 2 / M_PER_DEG_LAT;
+  return [
+    [lon - dLon, lat - dLat],
+    [lon + dLon, lat - dLat],
+    [lon + dLon, lat + dLat],
+    [lon - dLon, lat + dLat],
+    [lon - dLon, lat - dLat],
+  ];
+}
+
+/** The middle of a ring's bounding box. */
+function ringCentre(ring: Position[]): Position {
+  let west = Infinity;
+  let south = Infinity;
+  let east = -Infinity;
+  let north = -Infinity;
+  for (const [x, y] of ring) {
+    west = Math.min(west, x);
+    east = Math.max(east, x);
+    south = Math.min(south, y);
+    north = Math.max(north, y);
+  }
+  return [(west + east) / 2, (south + north) / 2];
+}
+
+/**
+ * The block to draw for a building at an exact position. Nothing is fetched here.
+ *
+ * Shape: the OpenStreetMap outline when the lookup found one. Otherwise (still looking, nothing in
+ * reach, or no answer) a square centred on the stated point whose area is the stated floor area
+ * ÷ ASSUMED_LEVELS, or ASSUMED_SQUARE_M a side when no floor area is stated. The square is a
+ * stand-in and must be called approximate wherever it is drawn.
+ *
+ * Height: see BlockHeightFrom. A floor area that would give the outline more than
+ * MAX_IMPLIED_LEVELS levels is not that outline's alone, so the height is then assumed.
+ */
+export function buildingBlock(lat: number, lon: number, footprint: Footprint | null, floorAreaM2: number | null): BuildingBlock {
+  const area = floorAreaM2 !== null && Number.isFinite(floorAreaM2) && floorAreaM2 > 0 ? floorAreaM2 : null;
+  if (!footprint?.found) {
+    const sideM = area === null ? ASSUMED_SQUARE_M : Math.min(SQUARE_SIDE_RANGE_M.max, Math.max(SQUARE_SIDE_RANGE_M.min, Math.sqrt(area / ASSUMED_LEVELS)));
+    return { polygon: { type: "Polygon", coordinates: [squareRing(lat, lon, sideM)] }, shape: "approximate", sideM, areaM2: sideM * sideM, heightM: ASSUMED_HEIGHT_M, heightFrom: "assumed", levels: ASSUMED_LEVELS, centre: [lon, lat] };
+  }
+  const areaM2 = footprintAreaM2(footprint.polygon);
+  const base = { polygon: footprint.polygon, shape: "osm" as const, sideM: null, areaM2, centre: ringCentre(footprint.polygon.coordinates[0]) };
+  if (footprint.heightM !== null) return { ...base, heightM: footprint.heightM, heightFrom: "osm_height", levels: null };
+  if (footprint.levels !== null) return { ...base, heightM: footprint.levels * LEVEL_HEIGHT_M, heightFrom: "osm_levels", levels: footprint.levels };
+  const implied = area !== null && areaM2 > 0 ? Math.max(1, Math.round(area / areaM2)) : null;
+  if (implied !== null && implied <= MAX_IMPLIED_LEVELS) return { ...base, heightM: implied * LEVEL_HEIGHT_M, heightFrom: "floor_area", levels: implied };
+  return { ...base, heightM: ASSUMED_HEIGHT_M, heightFrom: "assumed", levels: null };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -386,7 +502,7 @@ export async function findFootprint(lat: number, lon: number, options: Footprint
     }
     return missing(cause);
   } catch {
-    // Nothing above is expected to throw. The outline is a courtesy, so even a surprise ends in the marker.
+    // Nothing above is expected to throw. The outline is a courtesy, so even a surprise ends in the square block.
     return missing("failed");
   }
 }

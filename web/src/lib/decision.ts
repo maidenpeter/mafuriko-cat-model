@@ -106,6 +106,21 @@ export type OfferFacts = {
   drainagePoor: boolean;
   grossLoss100Kes: number | null;
   tivKes: number | null;
+  /**
+   * The facts behind the loss drivers beyond flood depth. Each may be left out (the fact is then
+   * not looked at); null means the document does not say. buildOfferFocus fills them from the
+   * document's usable values once the offer is priced.
+   */
+  /** How many items of equipment the document places below ground. */
+  equipmentBelowGround?: number;
+  /** True when the document states the return period the site's drains were designed for; false when the price uses an assumed one. */
+  drainDesignStated?: boolean;
+  /** Whether the basement sump pumps have backup power. */
+  sumpPumpBackup?: "yes" | "no" | null;
+  floodBarriers?: "present" | "absent" | null;
+  nonReturnValves?: "present" | "absent" | null;
+  /** Whether business interruption is covered for flood. */
+  interruptionCover?: "covered" | "excluded" | null;
 };
 
 export const EMPTY_FACTS: OfferFacts = {
@@ -142,6 +157,9 @@ export const NEAR_WET_CELL_M = 250;
 
 const pct = (fraction: number) => `${(fraction * 100).toFixed(1).replace(/\.0$/, "")}%`;
 
+/** The flags with one of these ids, in the order the page has them. Ids only: no flag's words are read. */
+const flagged = (flags: Flag[], ids: readonly string[]): string[] => flags.filter((flag) => ids.includes(flag.id)).map((flag) => flag.id);
+
 /** Flags whose id or title mentions one of the words. Matching is on whole words, ignoring case. */
 function flagsAbout(flags: Flag[], words: RegExp): string[] {
   return flags.filter((flag) => words.test(`${flag.id.replace(/[_-]+/g, " ")} ${flag.title}`)).map((flag) => flag.id);
@@ -150,6 +168,11 @@ function flagsAbout(flags: Flag[], words: RegExp): string[] {
 /**
  * Suggestions drawn from the flags and the facts. Each one appears only when a fact or a flag supports it,
  * and says why. They are suggestions: the underwriter ticks the ones to apply.
+ *
+ * The suggestions on the loss drivers beyond depth (the drain design, pump backup, barriers and
+ * valves, business interruption) and the one on drainage upkeep rest on the facts alone: a fact
+ * that is left out is not looked at, and no flag's wording stands in for it. Where the fact holds,
+ * the flags named beside it (by id) are listed as its support.
  */
 export function suggestedConditions(flags: Flag[], facts: OfferFacts): SuggestedCondition[] {
   const out: SuggestedCondition[] = [];
@@ -170,8 +193,63 @@ export function suggestedConditions(flags: Flag[], facts: OfferFacts): Suggested
   add(
     "relocate_plant",
     "Consider asking for critical plant to be moved out of the basement, or protected where it stands (raised plinths, flood barriers, sump pumps).",
-    [facts.criticalPlantInBasement && "The offer places critical plant in a basement, where flood water collects first."],
+    [
+      facts.criticalPlantInBasement && "The offer places critical plant in a basement, where flood water collects first.",
+      (facts.equipmentBelowGround ?? 0) > 0 &&
+        (facts.equipmentBelowGround === 1
+          ? "The offer lists 1 item of equipment below ground."
+          : `The offer lists ${facts.equipmentBelowGround} items of equipment below ground.`),
+    ],
     flagsAbout(flags, /\b(basements?|plant)\b/i),
+  );
+
+  // A building the document says has no basement is asked for nothing that protects one.
+  const mayHaveBasement = facts.basements !== 0;
+  // The flags that support a suggestion, by id, counted only when the fact behind the suggestion holds.
+  const support = (holds: boolean, ...ids: string[]) => (holds ? flagged(flags, ids) : []);
+
+  const designAssumed = facts.drainDesignStated === false;
+  add(
+    "drain_design",
+    "Consider asking for the return period the site's storm drains were designed for, with the drawings or a drainage survey that shows it.",
+    [designAssumed && "The offer does not state what storm the drains were designed for, so the Drain overload loss rests on an assumed design."],
+    support(designAssumed, "drain-overload"),
+  );
+
+  const noBackup = mayHaveBasement && facts.sumpPumpBackup === "no";
+  const backupNotSaid = mayHaveBasement && facts.sumpPumpBackup === null;
+  add(
+    "pump_backup",
+    "Consider requiring backup power for the basement sump pumps, tested on a schedule.",
+    [
+      noBackup && "The offer says the sump pumps have no backup power, and the mains often fail in the storm that floods a basement.",
+      backupNotSaid && "The offer does not say whether the sump pumps have backup power.",
+    ],
+    support(noBackup || backupNotSaid, "basement-ingress"),
+  );
+
+  const noBarriers = mayHaveBasement && facts.floodBarriers === "absent";
+  const barriersNotSaid = mayHaveBasement && facts.floodBarriers === null;
+  const noValves = mayHaveBasement && facts.nonReturnValves === "absent";
+  const valvesNotSaid = mayHaveBasement && facts.nonReturnValves === null;
+  add(
+    "ingress_protection",
+    "Consider requiring flood barriers at the basement ramps and openings, and non-return valves on the drains that serve the basement.",
+    [
+      noBarriers && "The offer says there are no flood barriers.",
+      barriersNotSaid && "The offer does not say whether flood barriers are fitted.",
+      noValves && "The offer says there are no non-return valves.",
+      valvesNotSaid && "The offer does not say whether non-return valves are fitted.",
+    ],
+    support(noBarriers || barriersNotSaid || noValves || valvesNotSaid, "basement-ingress"),
+  );
+
+  const coverNotSaid = facts.interruptionCover === null;
+  add(
+    "confirm_interruption",
+    "Consider confirming in writing whether business interruption or loss of rent is insured for flood, and leaving it out of the cover until its sum insured is declared.",
+    [coverNotSaid && "The offer does not say whether business interruption is covered, so no loss of rent or revenue is in the price."],
+    support(coverNotSaid, "interruption-not-stated"),
   );
 
   add(
@@ -213,15 +291,17 @@ export function suggestedConditions(flags: Flag[], facts: OfferFacts): Suggested
   add(
     "drainage_evidence",
     "Consider asking for evidence that site drainage is maintained (cleaning records, photographs, a maintenance contract).",
+    // Only on a report of poor drainage. An open question about the drains, assumed ponding or an
+    // overloaded drain design is not a report on how the drains are kept.
     [facts.drainagePoor && "Drainage at or around the site is reported as poor."],
-    flagsAbout(flags, /\b(drainage|drains?)\b/i),
+    support(facts.drainagePoor, "drainage-condition"),
   );
 
   add(
     "revaluation",
     "Consider asking for a revaluation of the sums insured, or applying an average clause.",
     [facts.underInsured && "The declared values look low for the property described, so under-insurance is possible."],
-    flagsAbout(flags, /\b(under ?insur\w*|valuation|revaluation)\b/i),
+    flagsAbout(flags, /\b(under[ -]?insur\w*|valuation|revaluation)\b/i),
   );
 
   add(

@@ -4,9 +4,12 @@ import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import { describeReading, inKenya, parseCoordinates } from "../src/lib/offer/coords";
 import { docxToText, readOfferFile } from "../src/lib/offer/docx";
+import { DRIVER_FIELDS, DRIVER_GROUPS, driverFieldDef, driverFields, fieldDefOf, fieldText, HISTORY_YEARS_FIELD, historyFieldDef, historyFields, TERM_FIELDS } from "../src/lib/offer/fields";
+import { brokerQuestions } from "../src/lib/offer/questions";
 import { describeRemoved, redact } from "../src/lib/offer/redact";
+import { extractByRules } from "../src/lib/offer/rules";
 import type { OfferExtraction, OfferFile, OfferRow, OfferTerms, Quoted } from "../src/lib/offer/types";
-import { confirmValue, editValue, numberInQuote, quoteInDocument, usableValue, verifyExtraction } from "../src/lib/offer/verify";
+import { confirmValue, editValue, numberInQuote, quoteInDocument, statusCounts, usableValue, verifyExtraction, waitingValues } from "../src/lib/offer/verify";
 
 // Every name, address, number and sentence in this file is invented for the tests.
 
@@ -623,6 +626,343 @@ describe("checking a whole extraction", () => {
 });
 
 // ---------------------------------------------------------------------------------------------
+// The document's own loss history
+// ---------------------------------------------------------------------------------------------
+
+describe("checking the loss history", () => {
+  const HISTORY = `LOSS HISTORY (11 YEARS: 2014-2024)
+In April 2018 storm water filled the lower basement.
+The 2018 claim was settled at KES 4.2 million.
+Summary: 2019 flood, KES 4,200,000 paid.
+A pipe burst on level 3 in 2021 and no claim was made.
+Excess applied in each case: KES 2,024.`;
+  const heading = "LOSS HISTORY (11 YEARS: 2014-2024)";
+  const extraction: OfferExtraction = {
+    rows: [row()],
+    terms: terms({ floodHistoryYears: said(11, heading) }),
+    notes: [],
+    floodLosses: [
+      // An amount in millions, on a sentence of its own.
+      { year: said(2018, "In April 2018 storm water filled the lower basement."), amountKes: said(4200000, "The 2018 claim was settled at KES 4.2 million.") },
+      // An amount written in full, on the same line as its year.
+      { year: said(2019, "Summary: 2019 flood, KES 4,200,000 paid."), amountKes: said(4200000, "Summary: 2019 flood, KES 4,200,000 paid.") },
+      // A year only.
+      { year: said(2021, "A pipe burst on level 3 in 2021 and no claim was made."), amountKes: unsaid() },
+      // A year that is not in its sentence, and an amount whose sentence is not in the document.
+      { year: said(2020, "A pipe burst on level 3 in 2021 and no claim was made."), amountKes: said(900000, "The 2020 claim was settled at KES 900,000.") },
+      // The figure 2,024 is an amount of money, not the year 2024.
+      { year: said(2024, "Excess applied in each case: KES 2,024."), amountKes: said(4500000, "The 2018 claim was settled at KES 4.2 million.") },
+    ],
+  };
+  const checked = verifyExtraction(extraction, HISTORY);
+  const losses = checked.floodLosses!;
+
+  it("verifies the years of history, and each loss's year and amount, against their quotes", () => {
+    expect(checked.terms.floodHistoryYears).toEqual({ value: 11, quote: heading, status: "verified", reason: null });
+    expect(losses[0].year).toMatchObject({ value: 2018, status: "verified", reason: null });
+    // "KES 4.2 million" and "KES 4,200,000" are the same amount, and both hold it.
+    expect(losses[0].amountKes).toMatchObject({ value: 4200000, status: "verified" });
+    expect(losses[1].amountKes).toMatchObject({ value: 4200000, status: "verified" });
+    expect(usableValue(losses[0].amountKes)).toBe(4200000);
+  });
+
+  it("leaves a loss with no amount as a verified year and an amount that is not stated", () => {
+    expect(losses[2].year.status).toBe("verified");
+    expect(losses[2].amountKes).toEqual({ value: null, quote: "", status: "missing", reason: null });
+    expect(usableValue(losses[2].amountKes)).toBeNull();
+  });
+
+  it("marks a year or an amount unverified, with the reason, when a check fails", () => {
+    expect(losses[3].year).toMatchObject({ status: "unverified", reason: "The number 2,020 is not written in the quoted sentence." });
+    expect(losses[3].amountKes).toMatchObject({ status: "unverified", reason: "The quoted sentence is not in the document as written." });
+    expect(losses[4].year).toMatchObject({ status: "unverified", reason: "The year 2024 is not written in the quoted sentence." });
+    expect(losses[4].amountKes).toMatchObject({ status: "unverified", reason: "The number 4,500,000 is not written in the quoted sentence." });
+    expect(usableValue(losses[3].amountKes)).toBeNull();
+    // A wrong number of years is held back the same way.
+    expect(verifyExtraction({ ...extraction, terms: terms({ floodHistoryYears: said(10, heading) }) }, HISTORY).terms.floodHistoryYears?.status).toBe("unverified");
+  });
+
+  it("gives an extraction built with no loss history an empty list and a years value that is not stated", () => {
+    const bare = verifyExtraction({ rows: [row()], terms: terms(), notes: [] }, HISTORY);
+    expect(bare.floodLosses).toEqual([]);
+    expect(bare.terms.floodHistoryYears).toEqual({ value: null, quote: "", status: "missing", reason: null });
+  });
+
+  it("counts the loss history's values with the rest", () => {
+    const bare = statusCounts(verifyExtraction({ rows: [row()], terms: terms(), notes: [] }, HISTORY));
+    const full = statusCounts(checked);
+    // The years of history, then two values for each of the five losses.
+    expect(full.verified - bare.verified).toBe(1 + 5);
+    expect(full.unverified - bare.unverified).toBe(4);
+    // The years value is no longer missing; one loss has no amount.
+    expect(full.missing - bare.missing).toBe(1 - 1);
+    // Terms built by hand, with no years value at all, count it as not stated.
+    expect(statusCounts({ rows: [row()], terms: terms(), notes: [] }).missing).toBe(bare.missing);
+  });
+
+  it("never holds the price back for the loss history", () => {
+    expect(waitingValues(checked)).toEqual([]);
+  });
+
+  it("lets the underwriter confirm, type over, clear and add a loss", () => {
+    const confirmed = confirmValue(checked, { scope: "loss", index: 3, key: "amountKes" });
+    expect(confirmed.floodLosses![3].amountKes).toMatchObject({ value: 900000, status: "confirmed", reason: null });
+    expect(checked.floodLosses![3].amountKes.status).toBe("unverified");
+    // A second check keeps the confirmation.
+    expect(verifyExtraction(confirmed, HISTORY).floodLosses![3].amountKes.status).toBe("confirmed");
+
+    const typed = editValue(checked, { scope: "loss", index: 2, key: "amountKes" }, "KES 1.5 million");
+    expect(typed.floodLosses![2].amountKes).toEqual({ value: 1500000, quote: "", status: "edited", reason: null });
+    expect(editValue(checked, { scope: "loss", index: 3, key: "year" }, "2021").floodLosses![3].year).toMatchObject({ value: 2021, status: "edited" });
+    expect(editValue(checked, { scope: "terms", key: "floodHistoryYears" }, "12").terms.floodHistoryYears).toMatchObject({ value: 12, status: "edited" });
+
+    // A cleared loss keeps its place, so the ones after it keep their numbers.
+    const cleared = editValue(checked, { scope: "loss", index: 0, key: "amountKes" }, null);
+    expect(cleared.floodLosses).toHaveLength(5);
+    expect(cleared.floodLosses![0].amountKes.status).toBe("missing");
+
+    // One past the end adds a loss the reading did not find.
+    const added = editValue(checked, { scope: "loss", index: 5, key: "year" }, 2023);
+    expect(added.floodLosses).toHaveLength(6);
+    expect(added.floodLosses![5]).toEqual({ year: { value: 2023, quote: "", status: "edited", reason: null }, amountKes: { value: null, quote: "", status: "missing", reason: null } });
+    const first = editValue({ rows: [row()], terms: terms(), notes: [] }, { scope: "loss", index: 0, key: "amountKes" }, "950,000");
+    expect(first.floodLosses).toHaveLength(1);
+    expect(editValue({ rows: [row()], terms: terms(), notes: [] }, { scope: "terms", key: "floodHistoryYears" }, 9).terms.floodHistoryYears).toMatchObject({ value: 9, status: "edited" });
+  });
+
+  it("ignores a typed value the loss history cannot hold", () => {
+    expect(editValue(checked, { scope: "loss", index: 0, key: "year" }, "18")).toBe(checked);
+    expect(editValue(checked, { scope: "loss", index: 0, key: "year" }, "2018.5")).toBe(checked);
+    expect(editValue(checked, { scope: "loss", index: 0, key: "amountKes" }, -5)).toBe(checked);
+    expect(editValue(checked, { scope: "terms", key: "floodHistoryYears" }, 0)).toBe(checked);
+    // Two past the end points at nothing, and clearing a loss that is not there adds none.
+    expect(editValue(checked, { scope: "loss", index: 7, key: "year" }, 2023)).toBe(checked);
+    expect(editValue(checked, { scope: "loss", index: 5, key: "year" }, null)).toBe(checked);
+    expect(confirmValue(checked, { scope: "loss", index: 5, key: "year" })).toBe(checked);
+    expect(confirmValue(checked, { scope: "loss", index: 0, key: "year" })).toBe(checked);
+  });
+});
+
+describe("the loss history as a list for the screen", () => {
+  const extraction: OfferExtraction = {
+    rows: [row()],
+    terms: terms({ floodHistoryYears: { value: 11, quote: "LOSS HISTORY (11 YEARS: 2014-2024)", status: "verified", reason: null } }),
+    notes: [],
+    floodLosses: [{ year: { value: 2018, quote: "LOSS #1: 2018, April", status: "verified", reason: null }, amountKes: { value: 4200000, quote: "Amount paid: KES 4.2 million", status: "verified", reason: null } }],
+  };
+
+  it("names each value in plain words and writes it with its unit", () => {
+    const list = historyFields(extraction);
+    expect(list.map((f) => [f.id, f.label, f.value])).toEqual([
+      ["terms:floodHistoryYears", "Years of loss history", "11 years"],
+      ["loss:0:year", "Past flood loss 1: year", "2018"],
+      ["loss:0:amountKes", "Past flood loss 1: amount", "KES 4,200,000"],
+    ]);
+    expect(list.map((f) => f.ref)).toEqual([
+      { scope: "terms", key: "floodHistoryYears" },
+      { scope: "loss", index: 0, key: "year" },
+      { scope: "loss", index: 0, key: "amountKes" },
+    ]);
+    expect(list[2].quoted).toBe(extraction.floodLosses![0].amountKes);
+    // Each reference points at the value it names: an edit through it lands there.
+    expect(editValue(extraction, list[1].ref, 2019).floodLosses![0].year.value).toBe(2019);
+  });
+
+  it("gives one entry, not stated, for an offer with no loss history", () => {
+    const list = historyFields({ rows: [row()], terms: terms(), notes: [] });
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ id: "terms:floodHistoryYears", label: "Years of loss history", value: "", quoted: { value: null, status: "missing" } });
+  });
+
+  it("finds the box a loss history value is typed into, and leaves the other values to their own lists", () => {
+    expect(historyFieldDef({ scope: "terms", key: "floodHistoryYears" })?.kind).toBe("years");
+    expect(historyFieldDef({ scope: "loss", index: 2, key: "year" })?.kind).toBe("year");
+    expect(historyFieldDef({ scope: "loss", index: 2, key: "amountKes" })?.kind).toBe("kes");
+    expect(historyFieldDef({ scope: "terms", key: "floodLimitKes" })).toBeNull();
+    expect(historyFieldDef({ scope: "note", index: 0 })).toBeNull();
+    // The years value is listed with the losses, so it is not also among the offer-level boxes.
+    expect(TERM_FIELDS.some((f) => (f.key as string) === "floodHistoryYears")).toBe(false);
+    expect(fieldText(1, HISTORY_YEARS_FIELD)).toBe("1 year");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// What the loss drivers beyond flood depth read
+// ---------------------------------------------------------------------------------------------
+
+describe("checking what the loss drivers read", () => {
+  const SITE = `The tower has three basement levels, the lowest 9.5 m below ground.
+The storm drains are designed for a 1-in-50 year storm.
+Rain of 50 mm fell in one hour in April 2018.
+The channel was rebuilt to a 25-year standard.
+Sump pumps: 2 x 15 l/s, with no backup power.
+Flood barriers are fitted at both ramps.
+Plant in the basements is valued at KES 260 million.
+Annual rent: KES 300,000,000. Business interruption is excluded.
+Annual premium: KES 9.6 million.
+The standby generator is in basement 2.`;
+  const drains = "The storm drains are designed for a 1-in-50 year storm.";
+  const extraction: OfferExtraction = {
+    rows: [row()],
+    terms: terms({
+      basementDepthM: said(9.5, "The tower has three basement levels, the lowest 9.5 m below ground."),
+      drainDesignRp: said(50, drains),
+      sumpPumpCapacity: said("2 x 15 l/s", "Sump pumps: 2 x 15 l/s, with no backup power."),
+      sumpPumpBackup: said("no", "Sump pumps: 2 x 15 l/s, with no backup power."),
+      floodBarriers: said("present", "Flood barriers are fitted at both ramps."),
+      // A sentence the document does not hold.
+      nonReturnValves: said("present", "Non-return valves are fitted."),
+      valueBelowGroundKes: said(260000000, "Plant in the basements is valued at KES 260 million."),
+      // A number that is not in its sentence.
+      annualRentKes: said(320000000, "Annual rent: KES 300,000,000."),
+      biCovered: said("excluded", "Business interruption is excluded."),
+      premiumKes: said(9600000, "Annual premium: KES 9.6 million."),
+    }),
+    notes: [],
+    equipmentBelowGround: [{ item: said("Standby generator", "The standby generator is in basement 2.") }, { item: said("Fire pumps", "The fire pumps are in basement 1.") }],
+  };
+  const checked = verifyExtraction(extraction, SITE);
+
+  it("verifies each one against its sentence, numbers and words alike", () => {
+    for (const key of ["basementDepthM", "drainDesignRp", "sumpPumpCapacity", "sumpPumpBackup", "floodBarriers", "valueBelowGroundKes", "biCovered", "premiumKes"] as const) {
+      expect(`${key}: ${checked.terms[key]?.status}`).toBe(`${key}: verified`);
+    }
+    expect(usableValue(checked.terms.drainDesignRp)).toBe(50);
+    expect(checked.equipmentBelowGround![0].item).toMatchObject({ value: "Standby generator", status: "verified", reason: null });
+  });
+
+  it("marks one unverified, with the reason, when a check fails", () => {
+    expect(checked.terms.nonReturnValves).toMatchObject({ status: "unverified", reason: "The quoted sentence is not in the document as written." });
+    expect(checked.terms.annualRentKes).toMatchObject({ status: "unverified", reason: "The number 320,000,000 is not written in the quoted sentence." });
+    expect(checked.equipmentBelowGround![1].item).toMatchObject({ status: "unverified", reason: "The quoted sentence is not in the document as written." });
+    expect(usableValue(checked.terms.annualRentKes)).toBeNull();
+  });
+
+  it("takes a return period only where the sentence writes one", () => {
+    const design = (value: number, quote: string) => verifyExtraction({ rows: [row()], terms: terms({ drainDesignRp: said(value, quote) }), notes: [] }, SITE).terms.drainDesignRp;
+    // "50-year", "1-in-50", "1:50" and "return period of 50 years" all hold 50.
+    expect(design(25, "The channel was rebuilt to a 25-year standard.")?.status).toBe("verified");
+    expect(verifyExtraction({ rows: [row()], terms: terms({ drainDesignRp: said(50, "Drains: 1:50 design.") }), notes: [] }, "Drains: 1:50 design.").terms.drainDesignRp?.status).toBe("verified");
+    expect(verifyExtraction({ rows: [row()], terms: terms({ drainDesignRp: said(50, "The design return period of the drains is 50 years.") }), notes: [] }, "The design return period of the drains is 50 years.").terms.drainDesignRp?.status).toBe("verified");
+    // 50 mm of rain holds the number 50, but not as a return period.
+    expect(design(50, "Rain of 50 mm fell in one hour in April 2018.")).toMatchObject({
+      status: "unverified",
+      reason: "50 is not written as a number of years, or as a 1-in-50 chance, in the quoted sentence.",
+    });
+    // The 1 of "1-in-50" is not a one-year storm, and 2018 is a date.
+    expect(design(1, drains)?.status).toBe("unverified");
+    expect(design(2018, "Rain of 50 mm fell in one hour in April 2018.")?.status).toBe("unverified");
+    expect(design(100, drains)).toMatchObject({ status: "unverified", reason: "The number 100 is not written in the quoted sentence." });
+  });
+
+  it("gives terms built by hand every one of them, not stated, and counts them", () => {
+    const bare = verifyExtraction({ rows: [row()], terms: terms(), notes: [] }, SITE);
+    for (const f of DRIVER_FIELDS) expect(bare.terms[f.key]).toEqual({ value: null, quote: "", status: "missing", reason: null });
+    expect(bare.equipmentBelowGround).toEqual([]);
+    // An absent value is read as not stated everywhere.
+    expect(usableValue(terms().drainDesignRp)).toBeNull();
+    expect(statusCounts({ rows: [row()], terms: terms(), notes: [] })).toEqual(statusCounts(bare));
+    const full = statusCounts(checked);
+    const none = statusCounts(bare);
+    // Eight of the ten values hold, and one of the two items.
+    expect(full.verified - none.verified).toBe(8 + 1);
+    expect(full.unverified - none.unverified).toBe(2 + 1);
+    expect(none.missing - full.missing).toBe(10);
+  });
+
+  it("never holds the price back for them", () => {
+    expect(waitingValues(checked)).toEqual([]);
+  });
+
+  it("lets the underwriter confirm, type over and clear them, read the way they are written", () => {
+    expect(confirmValue(checked, { scope: "terms", key: "annualRentKes" }).terms.annualRentKes).toMatchObject({ value: 320000000, status: "confirmed", reason: null });
+    expect(editValue(checked, { scope: "terms", key: "drainDesignRp" }, "1-in-25").terms.drainDesignRp).toMatchObject({ value: 25, status: "edited", reason: null });
+    expect(editValue(checked, { scope: "terms", key: "drainDesignRp" }, "1 in 100 years").terms.drainDesignRp?.value).toBe(100);
+    expect(editValue(checked, { scope: "terms", key: "drainDesignRp" }, "10-year").terms.drainDesignRp?.value).toBe(10);
+    expect(editValue(checked, { scope: "terms", key: "drainDesignRp" }, 5).terms.drainDesignRp?.value).toBe(5);
+    // The letter m after a depth is metres, never millions.
+    expect(editValue(checked, { scope: "terms", key: "basementDepthM" }, "7.5 m").terms.basementDepthM?.value).toBe(7.5);
+    expect(editValue(checked, { scope: "terms", key: "valueBelowGroundKes" }, "380m").terms.valueBelowGroundKes?.value).toBe(380000000);
+    expect(editValue(checked, { scope: "terms", key: "sumpPumpBackup" }, "Yes").terms.sumpPumpBackup).toMatchObject({ value: "yes", status: "edited" });
+    expect(editValue(checked, { scope: "terms", key: "floodBarriers" }, "absent").terms.floodBarriers?.value).toBe("absent");
+    expect(editValue(checked, { scope: "terms", key: "biCovered" }, "covered").terms.biCovered?.value).toBe("covered");
+    expect(editValue(checked, { scope: "terms", key: "sumpPumpCapacity" }, "3 x 20 l/s").terms.sumpPumpCapacity?.value).toBe("3 x 20 l/s");
+    expect(editValue(checked, { scope: "terms", key: "premiumKes" }, null).terms.premiumKes?.status).toBe("missing");
+    // A value typed into terms that never held one.
+    expect(editValue({ rows: [row()], terms: terms(), notes: [] }, { scope: "terms", key: "drainDesignRp" }, "50").terms.drainDesignRp).toMatchObject({ value: 50, status: "edited" });
+
+    // What the field cannot hold changes nothing.
+    expect(editValue(checked, { scope: "terms", key: "drainDesignRp" }, "0")).toBe(checked);
+    expect(editValue(checked, { scope: "terms", key: "drainDesignRp" }, "soon")).toBe(checked);
+    expect(editValue(checked, { scope: "terms", key: "floodBarriers" }, "maybe")).toBe(checked);
+    expect(editValue(checked, { scope: "terms", key: "basementDepthM" }, -3)).toBe(checked);
+  });
+
+  it("lets the underwriter confirm, rename, clear and add an item of equipment", () => {
+    const confirmed = confirmValue(checked, { scope: "equipment", index: 1 });
+    expect(confirmed.equipmentBelowGround![1].item).toMatchObject({ value: "Fire pumps", status: "confirmed", reason: null });
+    expect(verifyExtraction(confirmed, SITE).equipmentBelowGround![1].item.status).toBe("confirmed");
+    expect(editValue(checked, { scope: "equipment", index: 0 }, "Two standby generators").equipmentBelowGround![0].item).toMatchObject({ value: "Two standby generators", status: "edited" });
+    // A cleared item keeps its place; one past the end adds an item.
+    const cleared = editValue(checked, { scope: "equipment", index: 0 }, null);
+    expect(cleared.equipmentBelowGround).toHaveLength(2);
+    expect(cleared.equipmentBelowGround![0].item.status).toBe("missing");
+    const added = editValue(checked, { scope: "equipment", index: 2 }, "LV switchgear");
+    expect(added.equipmentBelowGround![2]).toEqual({ item: { value: "LV switchgear", quote: "", status: "edited", reason: null } });
+    expect(editValue({ rows: [row()], terms: terms(), notes: [] }, { scope: "equipment", index: 0 }, "Lift motors").equipmentBelowGround).toHaveLength(1);
+    // Nothing to do: already verified, past the end, or nothing typed for an item that is not there.
+    expect(confirmValue(checked, { scope: "equipment", index: 0 })).toBe(checked);
+    expect(editValue(checked, { scope: "equipment", index: 4 }, "Tanks")).toBe(checked);
+    expect(editValue(checked, { scope: "equipment", index: 2 }, null)).toBe(checked);
+  });
+
+  it("lists them for the screen in their groups, each with its unit, stated or not", () => {
+    expect(DRIVER_GROUPS.map((g) => [g.title, g.fields.map((f) => f.key)])).toEqual([
+      ["Below ground", ["basementDepthM", "valueBelowGroundKes"]],
+      ["Value split", ["valueBuildingKes", "valueMachineryKes", "valueContentsKes", "annualRentKes"]],
+      ["Drainage and protection", ["drainDesignRp", "sumpPumpCapacity", "sumpPumpBackup", "floodBarriers", "nonReturnValves"]],
+      ["Cover and premium", ["biCovered", "premiumKes"]],
+    ]);
+    const list = driverFields(checked);
+    const shown = Object.fromEntries(list.map((f) => [f.id, [f.group, f.label, f.value]]));
+    expect(shown["terms:basementDepthM"]).toEqual(["Below ground", "Depth of the lowest basement floor", "9.5 m"]);
+    expect(shown["terms:valueBelowGroundKes"]).toEqual(["Below ground", "Value below ground", "KES 260,000,000"]);
+    expect(shown["equipment:0"]).toEqual(["Below ground", "Equipment below ground 1", "Standby generator"]);
+    // A return period is written as everywhere else, with its annual chance.
+    expect(shown["terms:drainDesignRp"]).toEqual(["Drainage and protection", "Drain design return period", "1-in-50 (2% a year)"]);
+    expect(shown["terms:sumpPumpBackup"]).toEqual(["Drainage and protection", "Sump pumps have backup power", "No"]);
+    expect(shown["terms:floodBarriers"]).toEqual(["Drainage and protection", "Flood barriers", "Present"]);
+    expect(shown["terms:biCovered"]).toEqual(["Cover and premium", "Business interruption", "Excluded"]);
+    expect(shown["terms:valueBuildingKes"]).toEqual(["Value split", "Value of the building", ""]);
+    expect(list.map((f) => f.id).slice(0, 4)).toEqual(["terms:basementDepthM", "terms:valueBelowGroundKes", "equipment:0", "equipment:1"]);
+    // Each reference points at the value it names.
+    const pumps = list.find((f) => f.id === "equipment:1")!;
+    expect(editValue(checked, pumps.ref, "Booster pumps").equipmentBelowGround![1].item.value).toBe("Booster pumps");
+
+    // An offer that states none of it still lists the thirteen values, every one not stated.
+    const none = driverFields({ rows: [row()], terms: terms(), notes: [] });
+    expect(none).toHaveLength(13);
+    expect(none.every((f) => f.value === "" && f.quoted.status === "missing")).toBe(true);
+  });
+
+  it("finds the box any value is typed into, and keeps the new values out of the old list", () => {
+    expect(driverFieldDef({ scope: "terms", key: "drainDesignRp" })?.kind).toBe("returnPeriod");
+    expect(driverFieldDef({ scope: "equipment", index: 3 })?.kind).toBe("text");
+    expect(driverFieldDef({ scope: "terms", key: "floodLimitKes" })).toBeNull();
+    expect(fieldDefOf({ scope: "terms", key: "floodLimitKes" })?.kind).toBe("kes");
+    expect(fieldDefOf({ scope: "terms", key: "floodHistoryYears" })?.kind).toBe("years");
+    expect(fieldDefOf({ scope: "terms", key: "basementDepthM" })?.kind).toBe("depth");
+    expect(fieldDefOf({ scope: "row", row: 0, key: "tivKes" })?.kind).toBe("kes");
+    expect(fieldDefOf({ scope: "loss", index: 0, key: "year" })?.kind).toBe("year");
+    expect(fieldDefOf({ scope: "equipment", index: 0 })?.label).toBe("Equipment below ground");
+    expect(fieldDefOf({ scope: "note", index: 0 })).toBeNull();
+    // The offer-level boxes shown before are the same ones: code that reads them unguarded still can.
+    expect(TERM_FIELDS.some((f) => DRIVER_FIELDS.some((d) => (d.key as string) === f.key))).toBe(false);
+    expect(TERM_FIELDS).toHaveLength(11);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
 // The two test offers, when they are on this machine. Nothing of their text is printed:
 // every assertion is on a yes or no, or a count.
 // ---------------------------------------------------------------------------------------------
@@ -650,6 +990,43 @@ describe.skipIf(offers.length === 0)("the test offers", () => {
       const reading = gps ? parseCoordinates(gps) : null;
       expect(reading !== null && !reading.conflict && inKenya(reading.lat, reading.lon), label).toBe(true);
       expect(gps !== undefined && quoteInDocument(gps, sent.text), label).toBe(true);
+    }
+  });
+
+  it("give up their loss history to the rules, each flood or water loss once and every value verified", async () => {
+    for (const [i, file] of offers.entries()) {
+      const label = `offer ${i + 1}`;
+      const text = redact(await docxToText(readFileSync(join(TEST_DATA, file)))).text;
+      const read = verifyExtraction(extractByRules(text), text);
+      const losses = read.floodLosses ?? [];
+      expect(read.terms.floodHistoryYears?.status === "verified" && (read.terms.floodHistoryYears.value ?? 0) > 0, label).toBe(true);
+      expect(losses.length > 0, label).toBe(true);
+      expect(losses.every((l) => l.year.status === "verified" && l.amountKes.status === "verified"), label).toBe(true);
+      // Both memos tell a loss in more than one place. No year is listed twice.
+      expect(new Set(losses.map((l) => l.year.value)).size === losses.length, label).toBe(true);
+      // The other perils in the same history are left out: fewer losses are read than loss lines are written.
+      const lossLines = text.split("\n").filter((line) => /^(?:LOSS #\d+:|\d+\.\s+(?:19|20)\d{2}\s)/.test(line.trim())).length;
+      expect(lossLines > losses.length, label).toBe(true);
+    }
+  });
+
+  it("give the rules what the loss drivers read only in the document's own words, and the rest becomes questions", async () => {
+    for (const [i, file] of offers.entries()) {
+      const label = `offer ${i + 1}`;
+      const text = redact(await docxToText(readFileSync(join(TEST_DATA, file)))).text;
+      const read = verifyExtraction(extractByRules(text), text);
+      const equipment = read.equipmentBelowGround ?? [];
+      const stated = DRIVER_FIELDS.filter((f) => read.terms[f.key]?.status !== "missing").map((f) => f.key as string);
+      // Whatever the rules read passes the same checks as every other value. Nothing is guessed.
+      expect(DRIVER_FIELDS.every((f) => ["verified", "missing"].includes(read.terms[f.key]?.status ?? "missing")), label).toBe(true);
+      expect(equipment.every((e) => e.item.status === "verified"), label).toBe(true);
+      // No value the document states is asked of the broker, and each of these is asked when it is not stated.
+      const asked = brokerQuestions(read).map((q) => q.id);
+      expect(asked.some((id) => stated.includes(id)), label).toBe(false);
+      for (const key of ["drainDesignRp", "biCovered", "premiumKes"]) expect(asked.includes(key) !== stated.includes(key), label).toBe(true);
+      expect(asked.includes("equipmentBelowGround"), label).toBe(equipment.length === 0 && read.terms.basements.value !== 0);
+      // Each memo gives the rules some of what the drivers read, and names equipment below ground.
+      expect(stated.length > 0 && equipment.length > 0, label).toBe(true);
     }
   });
 });

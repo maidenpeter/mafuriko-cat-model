@@ -186,6 +186,387 @@ describe("the rules on other wording", () => {
   });
 });
 
+// Invented loss histories, in the three shapes a memo writes them in.
+const HISTORY = `CLAIMS AND LOSS HISTORY (8 YEARS: 2017-2024)
+
+LOSS #1: 2018, April
+Description: Storm water entered the lower ground car park
+Cause: Blocked culvert on the service road
+Damage: Lift pit and two pump sets, stock in the store room worth KES 9,000,000
+Amount paid: KES 4.2 million
+Status: Closed
+
+LOSS #2: 2020, July
+Description: Fire in the kitchen extract duct
+Cause: Grease build-up
+Damage: Duct and ceiling, water damage from the sprinklers
+Amount paid: KES 600,000
+
+LOSS #3: 2022, November
+Description: Burst pipe on the second floor
+Cause: Failed joint
+Status: Repaired by the tenant, no claim made
+
+Total losses: KES 4,800,000 over 8 years
+GPS COORDINATES: 1.0000°S, 36.9000°E`;
+
+const TOLD_THREE_TIMES = `FLOOD EVENT #1 (May 2019):
+Rainfall: Three days of heavy rain
+Damage:
+  - Stock on the ground floor: KES 1,100,000
+  - Total claim: KES 2,400,000 (reduced from KES 2.6M to KES 2,150,000 after adjustment)
+
+SUMMARY OF FLOOD LOSSES:
+Event 1 (2019): KES 2,150,000 (0.3 m of water)
+Event 2 (2021): KES 800,000
+TOTAL (6 years): KES 2,950,000
+
+ALL CLAIMS (6 years):
+1. 2019 Flood: KES 2,150,000 paid
+2. 2021 Flood: KES 800,000 paid
+3. 2022 Theft of copper cable: KES 95,000 paid
+4. 2023 Machinery breakdown: KES 310,000 paid`;
+
+const DATED = `LOSS HISTORY (5 YEARS):
+- April 2018: storm water flooded the basement, stock worth KES 30 million was moved in time, claim paid KES 4,200,000
+- 2020: fire in the kitchen, KES 600,000
+- 2021: burst pipe on the second floor, no amount recorded
+- 2022: no flood losses
+
+IMPROVEMENTS:
+- 2023 flood barrier at the ramp: KES 2,000,000 spent`;
+
+describe("the document's own loss history, by the rules", () => {
+  const missing = { value: null, quote: "", status: "missing", reason: null };
+
+  it("reads the years the history covers from its heading", () => {
+    const read = extractByRules(HISTORY);
+    expect(read.terms.floodHistoryYears).toEqual({ value: 8, quote: "CLAIMS AND LOSS HISTORY (8 YEARS: 2017-2024)", status: "unverified", reason: null });
+  });
+
+  it("reads a numbered flood loss with its year and amount, each with its own line", () => {
+    const [first] = extractByRules(HISTORY).floodLosses!;
+    expect(first.year).toEqual({ value: 2018, quote: "LOSS #1: 2018, April", status: "unverified", reason: null });
+    // The amount paid, not the value of the stock that stood in the water.
+    expect(first.amountKes).toEqual({ value: 4_200_000, quote: "Amount paid: KES 4.2 million", status: "unverified", reason: null });
+  });
+
+  it("leaves out the fire, and lists the loss with no amount by its year alone", () => {
+    const losses = extractByRules(HISTORY).floodLosses!;
+    // The fire's own lines mention water from the sprinklers. It is still a fire.
+    expect(losses.map((l) => l.year.value)).toEqual([2018, 2022]);
+    expect(losses[1].year.quote).toBe("LOSS #3: 2022, November");
+    // The total for all losses, after the blank line, is never taken for this loss.
+    expect(losses[1].amountKes).toEqual(missing);
+  });
+
+  it("verifies each value against the document, and counts them", () => {
+    const checked = verifyExtraction(extractByRules(HISTORY), HISTORY);
+    expect(checked.terms.floodHistoryYears).toMatchObject({ value: 8, status: "verified" });
+    expect(checked.floodLosses!.map((l) => [l.year.status, l.amountKes.status])).toEqual([
+      ["verified", "verified"],
+      ["verified", "missing"],
+    ]);
+  });
+
+  it("keeps a flood once when the memo tells it in three places, at the figure the claim ended at", () => {
+    const read = extractByRules(TOLD_THREE_TIMES);
+    expect(read.floodLosses!.map((l) => [l.year.value, l.amountKes.value])).toEqual([
+      [2019, 2_150_000],
+      [2021, 800_000],
+    ]);
+    expect(read.floodLosses![0].amountKes.quote).toBe("- Total claim: KES 2,400,000 (reduced from KES 2.6M to KES 2,150,000 after adjustment)");
+    // The second flood has no heading of its own: the summary it stands in says what it was.
+    expect(read.floodLosses![1].year.quote).toBe("Event 2 (2021): KES 800,000");
+    expect(read.terms.floodHistoryYears).toMatchObject({ value: 6, quote: "TOTAL (6 years): KES 2,950,000" });
+    const checked = verifyExtraction(read, TOLD_THREE_TIMES);
+    expect(checked.floodLosses!.flatMap((l) => [l.year.status, l.amountKes.status])).toEqual(["verified", "verified", "verified", "verified"]);
+  });
+
+  it("reads lines that open with the date, and only where losses are being listed", () => {
+    const read = extractByRules(DATED);
+    expect(read.terms.floodHistoryYears?.value).toBe(5);
+    expect(read.floodLosses!.map((l) => [l.year.value, l.amountKes.value])).toEqual([
+      [2018, 4_200_000],
+      [2021, null],
+    ]);
+    // "No flood losses" is not a loss, and money spent on a barrier is not one either.
+    expect(read.floodLosses!.some((l) => l.year.value === 2022 || l.year.value === 2023)).toBe(false);
+  });
+
+  it("gives an empty list and a years value that is not stated when the document has no loss history", () => {
+    for (const read of [extractByRules(MEMO, PLACES), extractByRules(SHOP, PLACES), extractByRules("Please call me when you have a moment.")]) {
+      expect(read.floodLosses).toEqual([]);
+      expect(read.terms.floodHistoryYears).toEqual(missing);
+    }
+    const checked = verifyExtraction(extractByRules(MEMO, PLACES), MEMO);
+    expect(checked.floodLosses).toEqual([]);
+    expect(checked.terms.floodHistoryYears).toEqual(missing);
+  });
+
+  it("does not read a range of dates, a return period or an age as years of history", () => {
+    const years = (text: string) => extractByRules(text).terms.floodHistoryYears?.value;
+    expect(years("LOSS HISTORY (2014-2024):\nNo losses reported.")).toBeNull();
+    expect(years("Storm drains are sized for a 25-year storm, and no flood claims have been made.")).toBeNull();
+    expect(years("The block is 12 years old and has had no losses.")).toBeNull();
+    expect(years("Loss frequency: 3 events in 11 years")).toBe(11);
+    expect(years("The insured has a 7-year claims history with this office.")).toBe(7);
+  });
+
+  it("reads a flood and its loss from a typed sentence, apart from the insured value", () => {
+    const typed = "Masonry shop in Kibera worth KES 8 million, flooded in 2018 with a loss of KES 1.2 million, 10 years of loss history";
+    const read = extractByRules(typed, PLACES);
+    expect(read.rows[0].tivKes.value).toBe(8_000_000);
+    expect(read.floodLosses!.map((l) => [l.year.value, l.amountKes.value])).toEqual([[2018, 1_200_000]]);
+    expect(read.terms.floodHistoryYears?.value).toBe(10);
+    const checked = verifyExtraction(read, typed);
+    expect(checked.floodLosses![0]).toMatchObject({ year: { status: "verified" }, amountKes: { status: "verified" } });
+    // A year the building was put up in, beside a request for flood cover, is not a flood.
+    expect(extractByRules("Masonry shop in Kibera built in 2018, worth KES 8 million, flood cover requested", PLACES).floodLosses).toEqual([]);
+    expect(extractByRules("Masonry shop in Kibera worth KES 8 million, has not flooded since 2018", PLACES).floodLosses).toEqual([]);
+  });
+});
+
+// An invented memo that states everything the loss drivers beyond flood depth read.
+const DRIVERS = `PLACEMENT NOTE
+CLIENT: Mwangaza Court Limited
+GPS COORDINATES: 1.2700°S, 36.8100°E
+CONSTRUCTION CLASSIFICATION: Reinforced concrete frame
+Storeys: 14 above ground and 3 basement levels
+The lowest basement floor is 9.5 m below ground level.
+
+SUMS INSURED:
+- Buildings: KES 3,100,000,000
+- Plant and machinery: KES 420,000,000
+- Contents: KES 180,000,000
+- Stock: KES 15,000,000
+- Loss of rent (12 months): KES 300,000,000
+TOTAL SUM INSURED: KES 4,000,000,000
+
+BASEMENT PLANT:
+- Standby generators (2 x 800 kVA)
+- LV switchgear and fire pumps
+- Diesel tank, bunded
+The chillers are on the roof.
+Plant and equipment in the basements is valued at KES 260 million.
+
+SITE DRAINAGE:
+The storm drains are designed for a 1-in-10 year storm and were
+overwhelmed in the long rains of 2018.
+- Sump pumps: 2 x 15 l/s, connected to the standby generator
+- Non-return valves are fitted on both outfalls
+- There are no flood barriers at the ramp
+
+COVER REQUESTED:
+Material damage including flood, and business interruption (loss of rent, 12 months indemnity).
+ANNUAL PREMIUM: KES 9,600,000
+TERM: 12 months (1 January 2028 - 31 December 2028)`;
+
+// An invented memo full of things that look like those values and are not.
+const TRAPS = `RISK NOTES
+The building has 2 basement levels, each 3.2 m high.
+In 2019 the lower basement flooded to a depth of 1.4 m.
+The generator was moved from the basement to the roof in 2020.
+No plant is kept below ground.
+
+DRAINAGE:
+The April 2019 storm was a 1-in-50 year event that overwhelmed the drains.
+The drainage pipes have a design life of 40 years.
+Flood barriers are recommended at the ramp.
+Are non-return valves fitted?
+The sump pumps stand next to the standby generator room.
+
+LOSS #1: 2019, April
+Description: Storm water in the basement damaged switchgear worth KES 45,000,000
+Business interruption: 6 days, claim paid KES 3,000,000
+Amount paid: KES 12,000,000
+
+FINANCIALS:
+Monthly rent roll: KES 20,000,000
+Additional premium for flood: KES 1,200,000
+Premiums paid over 5 years: KES 40,000,000
+Machinery breakdown: KES 310,000 paid`;
+
+const DRIVER_KEYS = [
+  "basementDepthM",
+  "drainDesignRp",
+  "sumpPumpCapacity",
+  "sumpPumpBackup",
+  "floodBarriers",
+  "nonReturnValves",
+  "valueBuildingKes",
+  "valueMachineryKes",
+  "valueContentsKes",
+  "valueBelowGroundKes",
+  "annualRentKes",
+  "biCovered",
+  "premiumKes",
+] as const;
+
+describe("what the loss drivers need, by the rules", () => {
+  const missing = { value: null, quote: "", status: "missing", reason: null };
+  const read = extractByRules(DRIVERS);
+  const { terms } = read;
+
+  it("reads the depth of the basements, and the equipment listed under the basement heading", () => {
+    expect(terms.basements.value).toBe(3);
+    expect(terms.basementDepthM).toEqual({ value: 9.5, quote: "The lowest basement floor is 9.5 m below ground level.", status: "unverified", reason: null });
+    expect(read.equipmentBelowGround!.map((e) => [e.item.value, e.item.quote])).toEqual([
+      ["Standby generators", "- Standby generators (2 x 800 kVA)"],
+      ["LV switchgear", "- LV switchgear and fire pumps"],
+      ["Fire pumps", "- LV switchgear and fire pumps"],
+      ["Diesel tank", "- Diesel tank, bunded"],
+    ]);
+    // The chillers are on the roof, and the sump pumps are not said to be below ground.
+    expect(read.equipmentBelowGround!.some((e) => /chiller|sump/i.test(e.item.value ?? ""))).toBe(false);
+  });
+
+  it("reads the storm the drains are designed for, over a line break, and not the year they failed", () => {
+    expect(terms.drainDesignRp).toMatchObject({ value: 10, quote: "The storm drains are designed for a 1-in-10 year storm and were overwhelmed in the long rains of 2018." });
+  });
+
+  it("reads the sump pumps, their backup power, the valves and the missing barriers", () => {
+    const pumps = "- Sump pumps: 2 x 15 l/s, connected to the standby generator";
+    expect(terms.sumpPumpCapacity).toMatchObject({ value: "2 x 15 l/s", quote: pumps });
+    expect(terms.sumpPumpBackup).toMatchObject({ value: "yes", quote: pumps });
+    expect(terms.nonReturnValves).toMatchObject({ value: "present", quote: "- Non-return valves are fitted on both outfalls" });
+    expect(terms.floodBarriers).toMatchObject({ value: "absent", quote: "- There are no flood barriers at the ramp" });
+  });
+
+  it("reads each part of the insured value from its own line, and never adds stock to contents", () => {
+    expect(terms.valueBuildingKes).toMatchObject({ value: 3_100_000_000, quote: "- Buildings: KES 3,100,000,000" });
+    expect(terms.valueMachineryKes).toMatchObject({ value: 420_000_000, quote: "- Plant and machinery: KES 420,000,000" });
+    expect(terms.valueContentsKes).toMatchObject({ value: 180_000_000, quote: "- Contents: KES 180,000,000" });
+    expect(terms.valueBelowGroundKes).toMatchObject({ value: 260_000_000, quote: "Plant and equipment in the basements is valued at KES 260 million." });
+    // The total is still the insured value, and no part of the split is taken for it.
+    expect(read.rows[0].tivKes.value).toBe(4_000_000_000);
+  });
+
+  it("reads a year's rent, the business interruption cover and the annual premium", () => {
+    expect(terms.annualRentKes).toMatchObject({ value: 300_000_000, quote: "- Loss of rent (12 months): KES 300,000,000" });
+    expect(terms.biCovered?.value).toBe("covered");
+    expect(terms.premiumKes).toMatchObject({ value: 9_600_000, quote: "ANNUAL PREMIUM: KES 9,600,000" });
+  });
+
+  it("leaves every one provisional, and every one then passes the checks against the document", () => {
+    for (const key of DRIVER_KEYS) expect(`${key}: ${terms[key]?.status}`).toBe(`${key}: unverified`);
+    const checked = verifyExtraction(read, DRIVERS);
+    for (const key of DRIVER_KEYS) expect(`${key}: ${checked.terms[key]?.status}`).toBe(`${key}: verified`);
+    expect(checked.equipmentBelowGround!.map((e) => e.item.status)).toEqual(["verified", "verified", "verified", "verified"]);
+  });
+
+  it("reads none of them from a height, a water depth, a past storm, a plan, a question or a loss", () => {
+    const traps = extractByRules(TRAPS);
+    for (const key of DRIVER_KEYS) expect(`${key}: ${traps.terms[key]?.status}`).toBe(`${key}: missing`);
+    // The generator was moved out, the plant is denied, and the switchgear is only named in a past loss.
+    expect(traps.equipmentBelowGround).toEqual([]);
+    // What the rules read before is still read: the levels, and the loss with its amount.
+    expect(traps.terms.basements.value).toBe(2);
+    expect(traps.floodLosses!.map((l) => [l.year.value, l.amountKes.value])).toEqual([[2019, 12_000_000]]);
+  });
+
+  it("reads a depth below ground however it is written, the deepest level where several are given", () => {
+    const depth = (text: string) => extractByRules(text).terms.basementDepthM?.value;
+    expect(depth("Basement levels: B1 at -3.5 m, B2 at -7.0 m")).toBe(7);
+    expect(depth("The basement car park is 6 m deep.")).toBe(6);
+    expect(depth("Depth of the lowest basement: 10.5 metres")).toBe(10.5);
+    // A dash before a figure is not a minus sign, and a clearance is not a depth.
+    expect(depth("Basement parking - 3 m clearance")).toBeNull();
+    // An area is not a depth.
+    expect(depth("The basement covers 40 m² below ground.")).toBeNull();
+  });
+
+  it("places equipment only where the statement places it", () => {
+    const items = (text: string) => extractByRules(text).equipmentBelowGround!.map((e) => e.item.value);
+    expect(items("Generators and switchgear are in basement 2; the chillers are on the roof.")).toEqual(["Generators", "Switchgear"]);
+    expect(items("No plant is kept in the basement: the generator is on the podium.")).toEqual([]);
+    expect(items("UNDERGROUND SERVICES:\n- Fuel tanks (2 x 20,000 litres)\n- Fire pump room")).toEqual(["Fuel tanks", "Fire pump room"]);
+    // The same item named twice is one item.
+    expect(items("The UPS room is in the basement.\nBASEMENT 1:\n- UPS room and server room")).toEqual(["UPS room", "Server room"]);
+  });
+
+  it("reads the sump pumps from under their own heading, and not another pump's figures", () => {
+    const { terms } = extractByRules("SUMP PUMP SYSTEM\n\nFire pumps: 2 x 30 l/s\nCapacity: 2 x 20 l/s\nPower: mains with generator backup");
+    expect(terms.sumpPumpCapacity).toMatchObject({ value: "2 x 20 l/s", quote: "Capacity: 2 x 20 l/s" });
+    expect(terms.sumpPumpBackup).toMatchObject({ value: "yes", quote: "Power: mains with generator backup" });
+  });
+
+  it("reads the design storm however it is written, and leaves two different designs not stated", () => {
+    const design = (text: string) => extractByRules(text).terms.drainDesignRp?.value;
+    expect(design("Storm water drains are sized for the 25-year storm.")).toBe(25);
+    expect(design("DRAIN DESIGN STANDARD: 1 in 5 years")).toBe(5);
+    expect(design("SITE DRAINS:\n- Open channels, 1:50 design capacity")).toBe(50);
+    expect(design("The site drains are designed for a 1-in-10 year storm.\nThe road culvert is designed for a 1-in-25 year storm.")).toBeNull();
+    // A design that was beaten says nothing about what the design is.
+    expect(design("The design capacity of the drains was exceeded by the 1-in-100 year storm of 2018.")).toBeNull();
+    // A building is not a drain.
+    expect(design("The tower is designed for a 50-year life.")).toBeNull();
+  });
+
+  it("tells backup power from none, and something fitted from something absent", () => {
+    const of = (text: string) => extractByRules(text).terms;
+    expect(of("Sump pumps have no backup power.").sumpPumpBackup?.value).toBe("no");
+    expect(of("The sump pumps run on mains only.").sumpPumpBackup?.value).toBe("no");
+    expect(of("SUMP PUMPS:\n- Capacity: 500 litres per minute each\n- Backup power: Yes").sumpPumpCapacity?.value).toBe("500 litres per minute each");
+    expect(of("SUMP PUMPS:\n- Capacity: 500 litres per minute each\n- Backup power: Yes").sumpPumpBackup?.value).toBe("yes");
+    expect(of("Flood barriers are fitted at both ramps.").floodBarriers?.value).toBe("present");
+    expect(of("Demountable flood barriers: none").floodBarriers?.value).toBe("absent");
+    // "No losses since" denies the losses, not the barriers.
+    expect(of("No losses since the flood barriers were fitted in 2021.").floodBarriers?.value).toBe("present");
+    expect(of("Backflow preventers have not been fitted on the basement drains.").nonReturnValves?.value).toBe("absent");
+    // One statement says there are, another says there are not: the rules cannot tell which holds.
+    expect(of("Flood barriers are fitted at the ramp.\nThere are no flood barriers at the loading bay.").floodBarriers).toEqual(missing);
+  });
+
+  it("reads business interruption as excluded only where it is what is left out", () => {
+    const cover = (text: string) => extractByRules(text).terms.biCovered?.value;
+    expect(cover("Cover: material damage only, business interruption is excluded.")).toBe("excluded");
+    expect(cover("All risks excluding flood and business interruption.")).toBe("excluded");
+    expect(cover("All risks excluding flood, including business interruption.")).toBe("covered");
+    // The terms asked for outrank the policy now in force.
+    expect(cover("CURRENT POLICY:\nBusiness interruption is not covered.\n\nTERMS ASKED FOR:\nLoss of rent cover is requested for 12 months.")).toBe("covered");
+    // Said in passing, with no word of cover, it is not a statement about the cover.
+    expect(cover("The owner worries about business interruption.")).toBeNull();
+  });
+
+  it("takes a yearly rent only, and the premium now paid before a proposed one", () => {
+    const of = (text: string) => extractByRules(text).terms;
+    expect(of("The annual rental income is KES 420 million.").annualRentKes?.value).toBe(420_000_000);
+    // A monthly figure is never multiplied up.
+    expect(of("Rent is KES 35 million per month.").annualRentKes).toEqual(missing);
+    expect(of("Annual turnover: KES 2.1 billion").annualRentKes?.value).toBe(2_100_000_000);
+    expect(of("CURRENT ANNUAL PREMIUM: KES 11,000,000\nPROPOSED PREMIUM: KES 12,500,000").premiumKes).toMatchObject({ value: 11_000_000, quote: "CURRENT ANNUAL PREMIUM: KES 11,000,000" });
+    expect(of("The flood limit sought is KES 3.2 billion, with one reinstatement at full premium.").premiumKes).toEqual(missing);
+  });
+
+  it("does not take the whole insured value for the value below ground", () => {
+    const read = extractByRules("The tower has 3 basements housing the plant and is valued at KES 4,000,000,000.\nTOTAL SUM INSURED: KES 4,000,000,000");
+    expect(read.rows[0].tivKes.value).toBe(4_000_000_000);
+    expect(read.terms.valueBelowGroundKes).toEqual(missing);
+  });
+
+  it("names the generator from the heading of the line that says where it is housed", () => {
+    // The first memo of this file: a standby generator on basement level 2.
+    expect(extractByRules(MEMO, PLACES).equipmentBelowGround!.map((e) => e.item.value)).toEqual(["Standby generator"]);
+  });
+
+  it("leaves an offer that states none of this exactly as it was read before", () => {
+    for (const text of [SHOP, "Please call me when you have a moment.", "Timber workshop at -1.3110, 36.7880, 240 m2, rebuilding at KES 35,000 per m2"]) {
+      const plain = extractByRules(text, PLACES);
+      for (const key of DRIVER_KEYS) expect(plain.terms[key]).toEqual(missing);
+      expect(plain.equipmentBelowGround).toEqual([]);
+    }
+    // The values read before these existed are untouched by them.
+    const shop = extractByRules(SHOP, PLACES);
+    expect(shop.rows[0].tivKes.value).toBe(8_000_000);
+    expect(shop.rows[0].housingClass.value).toBe("permanent_masonry");
+    expect(shop.terms.placeName.value).toBe("Kibera");
+    const checked = verifyExtraction(shop, SHOP);
+    for (const key of DRIVER_KEYS) expect(checked.terms[key]).toEqual(missing);
+    expect(checked.equipmentBelowGround).toEqual([]);
+  });
+});
+
 describe("one typed sentence", () => {
   it("gives a class from the wording, a value, and a place name for the locator, with no coordinates", () => {
     const read = extractByRules(SHOP, PLACES);
@@ -355,6 +736,176 @@ describe("turning the flat reply into rows", () => {
     const none = fromFlatReply({ entries: [] });
     expect(none.rows).toHaveLength(1);
     expect(none.rows[0]).toMatchObject({ path: "model", tivKes: { status: "missing" } });
+  });
+
+  it("gives an empty loss history when the reply holds none", () => {
+    expect(made.floodLosses).toEqual([]);
+    expect(made.terms.floodHistoryYears).toEqual({ value: null, quote: "", status: "missing", reason: null });
+  });
+});
+
+describe("the loss history in the flat reply", () => {
+  const entry = (field: OfferFlatEntry["field"], row: number, value: string, quote: string): OfferFlatEntry => ({ field, row, value, quote });
+  // An invented document, and a made-up reply to it.
+  const TEXT = `Loss history (11 years: 2014 to 2024)
+In April 2018 storm water filled the lower basement.
+The 2018 claim was settled at KES 4.2 million.
+A pipe burst on level 3 in 2021; no claim was made.
+Summary of flood losses: 2018 flood, KES 4,200,000.
+A further loss followed the long rains of 2023, put at about KES 2 million.`;
+  const made = fromFlatReply({
+    entries: [
+      entry("flood_history_years", 0, "11", "Loss history (11 years: 2014 to 2024)"),
+      entry("flood_loss_year", 1, "2018", "In April 2018 storm water filled the lower basement."),
+      entry("flood_loss_amount_kes", 1, "4200000", "The 2018 claim was settled at KES 4.2 million."),
+      entry("flood_loss_year", 2, "2021", "A pipe burst on level 3 in 2021; no claim was made."),
+      // The same flood, listed again from the summary. The model skipped number 3.
+      entry("flood_loss_year", 4, "2018", "Summary of flood losses: 2018 flood, KES 4,200,000."),
+      entry("flood_loss_amount_kes", 4, "4200000", "Summary of flood losses: 2018 flood, KES 4,200,000."),
+      entry("flood_loss_year", 5, "2023", "A further loss followed the long rains of 2023, put at about KES 2 million."),
+      entry("flood_loss_amount_kes", 5, "about 2 million", "A further loss followed the long rains of 2023, put at about KES 2 million."),
+      entry("flood_loss_amount_kes", 6, "not stated", ""),
+    ],
+  });
+
+  it("builds one loss per number, in order, with a missing amount where none was sent", () => {
+    expect(made.terms.floodHistoryYears).toEqual({ value: 11, quote: "Loss history (11 years: 2014 to 2024)", status: "unverified", reason: null });
+    expect(made.floodLosses!.map((l) => [l.year.value, l.amountKes.value])).toEqual([
+      [2018, 4_200_000],
+      [2021, null],
+      [2023, null],
+    ]);
+    expect(made.floodLosses![1].amountKes).toEqual({ value: null, quote: "", status: "missing", reason: null });
+  });
+
+  it("keeps a loss listed twice once, and holds words sent for an amount with the reason", () => {
+    expect(made.floodLosses!.filter((l) => l.year.value === 2018)).toHaveLength(1);
+    expect(made.floodLosses![2].amountKes).toMatchObject({ value: null, status: "unverified", quote: "A further loss followed the long rains of 2023, put at about KES 2 million." });
+    expect(made.floodLosses![2].amountKes.reason).toMatch(/not a plain number/);
+  });
+
+  it("does not take a figure that is not a year, or no years at all, for the history", () => {
+    const odd = fromFlatReply({ entries: [entry("flood_loss_year", 1, "18", "flooded in '18"), entry("flood_loss_year", 2, "2018.5", "mid 2018"), entry("flood_history_years", 0, "0", "no history is held")] });
+    expect(odd.floodLosses!.map((l) => [l.year.value, l.year.status])).toEqual([
+      [null, "unverified"],
+      [null, "unverified"],
+    ]);
+    expect(odd.floodLosses![0].year.reason).toMatch(/not a year/);
+    expect(odd.terms.floodHistoryYears).toMatchObject({ value: null, status: "unverified" });
+  });
+
+  it("files a single loss sent under 0 as the first loss", () => {
+    const one = fromFlatReply({ entries: [entry("flood_loss_year", 0, "2019", "The yard flooded in 2019."), entry("flood_loss_amount_kes", 0, "950000", "The 2019 flood cost KES 950,000.")] });
+    expect(one.floodLosses!.map((l) => [l.year.value, l.amountKes.value])).toEqual([[2019, 950_000]]);
+  });
+
+  it("verifies an amount written in millions and one written in full the same way", () => {
+    const checked = verifyExtraction(made, TEXT);
+    expect(checked.terms.floodHistoryYears?.status).toBe("verified");
+    expect(checked.floodLosses![0]).toMatchObject({ year: { value: 2018, status: "verified" }, amountKes: { value: 4_200_000, status: "verified" } });
+    const inFull = verifyExtraction(fromFlatReply({ entries: [entry("flood_loss_year", 1, "2018", "Summary of flood losses: 2018 flood, KES 4,200,000."), entry("flood_loss_amount_kes", 1, "4200000", "Summary of flood losses: 2018 flood, KES 4,200,000.")] }), TEXT);
+    expect(inFull.floodLosses![0].amountKes).toMatchObject({ value: 4_200_000, status: "verified" });
+    // A year with no amount is still a verified year, and the amount stays not stated.
+    expect(checked.floodLosses![1]).toMatchObject({ year: { status: "verified" }, amountKes: { status: "missing" } });
+  });
+
+  it("asks the model for each loss once, with its sentence, and never for an estimate", () => {
+    const { system } = buildOfferPrompt("THE DOCUMENT TEXT");
+    expect(system).toMatch(/List each loss once/);
+    expect(system).toMatch(/Never invent, estimate or add up an amount/);
+    expect(system).toMatch(/listed with its year only/);
+    expect(system).toMatch(/Leave out fire, theft, machinery breakdown/);
+  });
+});
+
+describe("what the loss drivers need, in the flat reply", () => {
+  const entry = (field: OfferFlatEntry["field"], row: number, value: string, quote: string): OfferFlatEntry => ({ field, row, value, quote });
+  const missing = { value: null, quote: "", status: "missing", reason: null };
+  // A made-up reply to the invented memo above.
+  const made = fromFlatReply({
+    entries: [
+      entry("basements", 0, "3", "Storeys: 14 above ground and 3 basement levels"),
+      entry("basement_depth_m", 0, "9.5", "The lowest basement floor is 9.5 m below ground level."),
+      entry("drain_design_rp", 0, "10", "The storm drains are designed for a 1-in-10 year storm and were overwhelmed in the long rains of 2018."),
+      entry("sump_pump_capacity", 0, "2 x 15 l/s", "- Sump pumps: 2 x 15 l/s, connected to the standby generator"),
+      entry("sump_pump_backup", 0, "Yes", "- Sump pumps: 2 x 15 l/s, connected to the standby generator"),
+      entry("flood_barriers", 0, "absent", "- There are no flood barriers at the ramp"),
+      entry("non_return_valves", 0, "fitted", "- Non-return valves are fitted on both outfalls"),
+      entry("value_building_kes", 0, "3100000000", "- Buildings: KES 3,100,000,000"),
+      entry("value_machinery_kes", 0, "420 million", "- Plant and machinery: KES 420,000,000"),
+      entry("value_below_ground_kes", 0, "260000000", "Plant and equipment in the basements is valued at KES 260 million."),
+      entry("annual_rent_kes", 0, "300000000", "- Loss of rent (12 months): KES 300,000,000"),
+      entry("bi_covered", 0, "covered", "Material damage including flood, and business interruption (loss of rent, 12 months indemnity)."),
+      entry("premium_kes", 0, "not stated", ""),
+      // The model numbered the items 1, 2 and 4, named one twice, and sent one with a sentence and no name.
+      entry("equipment_below_ground", 2, "LV switchgear", "- LV switchgear and fire pumps"),
+      entry("equipment_below_ground", 1, "Standby generators", "- Standby generators (2 x 800 kVA)"),
+      entry("equipment_below_ground", 4, "standby generator", "- Sump pumps: 2 x 15 l/s, connected to the standby generator"),
+      entry("equipment_below_ground", 4, "", "- Diesel tank, bunded"),
+      entry("equipment_below_ground", 5, "", ""),
+    ],
+  });
+
+  it("builds each value with its sentence, numbers as numbers and listed words as listed", () => {
+    const { terms } = made;
+    expect(terms.basementDepthM).toEqual({ value: 9.5, quote: "The lowest basement floor is 9.5 m below ground level.", status: "unverified", reason: null });
+    expect(terms.drainDesignRp?.value).toBe(10);
+    expect(terms.sumpPumpCapacity?.value).toBe("2 x 15 l/s");
+    expect(terms.sumpPumpBackup?.value).toBe("yes");
+    expect(terms.floodBarriers?.value).toBe("absent");
+    expect(terms.valueBuildingKes?.value).toBe(3_100_000_000);
+    expect(terms.valueBelowGroundKes?.value).toBe(260_000_000);
+    expect(terms.annualRentKes?.value).toBe(300_000_000);
+    expect(terms.biCovered?.value).toBe("covered");
+  });
+
+  it("keeps the quote, with no value and a reason, where the reply is not a number or a listed word", () => {
+    expect(made.terms.nonReturnValves).toMatchObject({ value: null, status: "unverified", quote: "- Non-return valves are fitted on both outfalls" });
+    expect(made.terms.nonReturnValves?.reason).toMatch(/"fitted" is not one of: present, absent/);
+    expect(made.terms.valueMachineryKes).toMatchObject({ value: null, status: "unverified" });
+    expect(made.terms.valueMachineryKes?.reason).toMatch(/not a plain number/);
+    const odd = fromFlatReply({ entries: [entry("drain_design_rp", 0, "0", "The drains have no design standard."), entry("basement_depth_m", 0, "-7", "B2 is at -7 m.")] });
+    expect(odd.terms.drainDesignRp?.reason).toMatch(/not a return period in years/);
+    expect(odd.terms.basementDepthM?.reason).toMatch(/below zero/);
+  });
+
+  it("treats what is left out, or sent as not stated, as missing: nothing is filled in", () => {
+    expect(made.terms.premiumKes).toEqual(missing);
+    expect(made.terms.valueContentsKes).toEqual(missing);
+    const none = fromFlatReply({ entries: [entry("tiv_kes", 1, "8000000", SHOP)] });
+    for (const key of DRIVER_KEYS) expect(none.terms[key]).toEqual(missing);
+    expect(none.equipmentBelowGround).toEqual([]);
+  });
+
+  it("lists the equipment in the order of its numbers, each item once", () => {
+    expect(made.equipmentBelowGround!.map((e) => [e.item.value, e.item.quote, e.item.status])).toEqual([
+      ["Standby generators", "- Standby generators (2 x 800 kVA)", "unverified"],
+      ["LV switchgear", "- LV switchgear and fire pumps", "unverified"],
+      // An item with a sentence and no name is kept under a plain name.
+      ["Equipment below ground", "- Diesel tank, bunded", "unverified"],
+    ]);
+  });
+
+  it("verifies them against the document like every other value", () => {
+    const checked = verifyExtraction(made, DRIVERS);
+    for (const key of ["basementDepthM", "drainDesignRp", "sumpPumpCapacity", "sumpPumpBackup", "floodBarriers", "valueBuildingKes", "valueBelowGroundKes", "annualRentKes", "biCovered"] as const) {
+      expect(`${key}: ${checked.terms[key]?.status}`).toBe(`${key}: verified`);
+    }
+    expect(checked.equipmentBelowGround!.every((e) => e.item.status === "verified")).toBe(true);
+    // A figure that is in the document, but not in the sentence quoted for it, is held back.
+    const wrong = verifyExtraction(fromFlatReply({ entries: [entry("value_below_ground_kes", 0, "420000000", "Plant and equipment in the basements is valued at KES 260 million.")] }), DRIVERS);
+    expect(wrong.terms.valueBelowGroundKes).toMatchObject({ status: "unverified", reason: "The number 420,000,000 is not written in the quoted sentence." });
+  });
+
+  it("asks the model for each of them with its sentence, and tells it plainly never to guess", () => {
+    const { system } = buildOfferPrompt("THE DOCUMENT TEXT");
+    expect(system).toMatch(/Never guess one, never work one out from other figures/);
+    expect(system).toMatch(/recorded as not stated, and the broker is asked for it/);
+    expect(system).toMatch(/Never multiply a number of levels by a height/);
+    expect(system).toMatch(/Never multiply a monthly figure/);
+    expect(system).toMatch(/"Designed for a 1-in-50 year storm" and "50-year design standard" are both "50"/);
+    expect(system).toMatch(/Equipment below ground \(row is the item's number, from 1\)/);
+    expect(system).toMatch(/"present", "absent"/);
   });
 });
 

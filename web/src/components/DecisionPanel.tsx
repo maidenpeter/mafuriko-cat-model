@@ -56,37 +56,41 @@ export function DecisionPanel({ decision, onDecision, conditionIds, children, cl
     <Card title="The underwriter's decision" className={className}>
       <p className="-mt-2 max-w-3xl text-sm leading-relaxed text-ink-2">{DECISION_STANCE}</p>
 
-      <fieldset className="mt-4 min-w-0">
-        <legend className="text-sm font-medium text-ink">Decision</legend>
-        <div className="mt-2 grid grid-cols-[repeat(auto-fit,minmax(min(13rem,100%),1fr))] gap-2">
-          {DECISION_CHOICES.map((choice) => {
-            const on = decision.choice === choice;
-            return (
-              <label key={choice} className={`flex min-w-0 cursor-pointer items-start gap-2.5 rounded-xl border p-3 ${on ? "border-ink bg-surface-2" : "border-line bg-surface hover:bg-surface-2"}`}>
-                <input type="radio" name={`${id}-choice`} checked={on} onChange={() => change({ choice })} className="mt-0.5 size-4 shrink-0 accent-accent" />
-                <span className="min-w-0">
-                  <span className={`block text-sm text-ink ${on ? "font-semibold" : "font-medium"}`}>{DECISION_LABELS[choice]}</span>
-                  <span className="block text-xs leading-relaxed text-muted">{CHOICE_NEEDS[choice]}</span>
-                </span>
-              </label>
-            );
-          })}
-        </div>
-      </fieldset>
+      {/* Where there is room the note sits beside the four choices, so the whole panel fits on one screen. */}
+      <div className="mt-4 grid gap-x-8 gap-y-4 @4xl:grid-cols-2">
+        <fieldset className="min-w-0">
+          <legend className="text-sm font-medium text-ink">Decision</legend>
+          <div className="mt-2 grid grid-cols-[repeat(auto-fit,minmax(min(13rem,100%),1fr))] gap-2">
+            {DECISION_CHOICES.map((choice) => {
+              const on = decision.choice === choice;
+              return (
+                <label key={choice} className={`flex min-w-0 cursor-pointer items-start gap-2.5 rounded-xl border p-3 ${on ? "border-ink bg-surface-2" : "border-line bg-surface hover:bg-surface-2"}`}>
+                  <input type="radio" name={`${id}-choice`} checked={on} onChange={() => change({ choice })} className="mt-0.5 size-4 shrink-0 accent-accent" />
+                  <span className="min-w-0">
+                    <span className={`block text-sm text-ink ${on ? "font-semibold" : "font-medium"}`}>{DECISION_LABELS[choice]}</span>
+                    <span className="block text-xs leading-relaxed text-muted">{CHOICE_NEEDS[choice]}</span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </fieldset>
 
-      <p className="mt-3 text-sm text-ink-2">
-        Suggested conditions ticked: <span className="tabular font-semibold text-ink">{ticked}</span> of {conditionIds.length}.
-      </p>
-
-      <label htmlFor={`${id}-note`} className="mt-4 block text-sm font-medium text-ink">Note</label>
-      <textarea
-        id={`${id}-note`}
-        value={decision.note}
-        onChange={(e) => change({ note: e.target.value })}
-        rows={4}
-        placeholder="Why this decision, and anything the next reader should know."
-        className="mt-1.5 block w-full rounded-xl border border-axis bg-surface p-3 text-sm leading-relaxed text-ink placeholder:text-muted"
-      />
+        <div className="min-w-0">
+          <label htmlFor={`${id}-note`} className="block text-sm font-medium text-ink">Note</label>
+          <textarea
+            id={`${id}-note`}
+            value={decision.note}
+            onChange={(e) => change({ note: e.target.value })}
+            rows={4}
+            placeholder="Why this decision, and anything the next reader should know."
+            className="mt-2 block w-full rounded-xl border border-axis bg-surface p-3 text-sm leading-relaxed text-ink placeholder:text-muted"
+          />
+          <p className="mt-2 text-sm text-ink-2">
+            Suggested conditions ticked: <span className="tabular font-semibold text-ink">{ticked}</span> of {conditionIds.length}.
+          </p>
+      </div>
+      </div>
 
       {tried && problems.length > 0 && (
         <ul role="alert" className="mt-3 space-y-1.5">

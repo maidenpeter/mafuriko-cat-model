@@ -16,6 +16,7 @@
 import { DECISION_LABELS, EVIDENCE_LABELS, SEVERITY_LABELS, sortFlags } from "./decision";
 import type { DecisionRecord, Flag } from "./decision";
 import { fmtKes, fmtNum } from "./format";
+import { perMille, rpLabel, SETTER_WORDS } from "./labels";
 
 export type DecisionNoteInput = {
   /** The offer in one line. */
@@ -30,12 +31,46 @@ export type DecisionNoteInput = {
     grossLoss100Kes: number | null;
     averageAnnualLossKes: number | null;
     pureRatePerMille: number | null;
-    /** Change to the portfolio's 1-in-100 gross loss when this offer is added, in shillings. */
+    /** The flood premium per mille of the sum insured, when a premium was built up. It then leads the third box, with the pure rate under it. */
+    floodRatePerMille?: number | null;
+    /** Change to the portfolio's 1-in-100 gross loss when this offer is added, in shillings: the figure the capital load is worked out from. The box says "gross". */
     portfolioChange100Kes: number | null;
     /** The same change as a fraction of the portfolio's 1-in-100 before the offer (0.004 is 0.4%). Optional. */
     portfolioChange100Fraction?: number | null;
   };
   lossByReturnPeriod: { returnPeriodYears: number; groundUpKes: number | null; grossKes: number | null }[];
+  /**
+   * The loss drivers behind the figures. Left out, the note is the short one: loss by return period
+   * and nothing on drivers. Given, the note carries the loss by driver, the premium build-up, the
+   * assumptions in force and the questions for the broker, and the rest is set tighter so a typical
+   * offer still prints on one page.
+   */
+  drivers?: {
+    /** "All loss drivers" or "Depth only": what the losses on the note count. */
+    basis: string;
+    /** The drivers that take part in the price, in the order they are added up. One column each. */
+    columns: { id: string; label: string }[];
+    /** The names of the drivers that take no part, said in one line under the table. */
+    off: string[];
+    /** One row per modelled return period. byDriverKes is ground-up, keyed by column id. */
+    rows: { returnPeriodYears: number; byDriverKes: Record<string, number>; groundUpKes: number; grossKes: number }[];
+  };
+  /** The premium build-up, top to bottom. Amounts in shillings a year. */
+  premium?: {
+    lines: { label: string; kes: number; ratePerMille: number; note?: string; total?: boolean }[];
+    floodPremiumKes: number;
+    floodRatePerMille: number;
+    /** "modelled" or "minimum rate": which of the two set the flood premium. */
+    setBy: string;
+    /** The offer's own premium for all risks, when it states one. */
+    stated?: { premiumKes: number; ratePerMille: number } | null;
+    /** The document's own flood loss history as one sentence: a sense check, not part of the price. */
+    history?: string;
+  };
+  /** Every assumption in force behind the drivers and the premium: its short name, its value in words, and who set it. */
+  assumptions?: { label: string; value: string; setBy: "offer" | "agents" | "typed" | "reference" }[];
+  /** The questions for the broker, in the order to ask them. */
+  questions?: string[];
   flags: Flag[];
   /** Every suggested condition on the page. The ticked ones are read from decision.conditions. */
   conditions: { id: string; text: string }[];
@@ -63,6 +98,13 @@ export const MAX_FLAGS_ON_NOTE = 6;
 export const MAX_CONDITIONS_ON_NOTE = 6;
 export const MAX_RETURN_PERIODS_ON_NOTE = 6;
 export const MAX_TERMS_ON_NOTE = 6;
+/** With the loss drivers on the note, fewer points are printed so the page still holds everything. */
+export const MAX_FLAGS_WITH_DRIVERS = 4;
+export const MAX_QUESTIONS_ON_NOTE = 8;
+const SET_BY_ORDER = ["offer", "agents", "typed", "reference"] as const;
+const headed = (text: string) => text[0].toUpperCase() + text.slice(1);
+/** Who set an assumption, in the words the note groups them under: the counted form of the one table in labels.ts (SETTER_WORDS). */
+export const SET_BY_LABELS = Object.fromEntries(SET_BY_ORDER.map((who) => [who, headed(SETTER_WORDS[who].counted)])) as Record<(typeof SET_BY_ORDER)[number], string>;
 const MAX_NOTE_CHARS = 600;
 const MAX_FLAG_TEXT_CHARS = 200;
 
@@ -111,8 +153,7 @@ function fmtSignedPct(fraction: number | null | undefined): string {
   return fraction === 0 ? body : `${fraction > 0 ? "+" : "-"}${body}`;
 }
 
-const fmtRate = (value: number | null) =>
-  value === null || !Number.isFinite(value) ? "n/a" : `${fmtNum(value, 2)} per mille`;
+const fmtRate = perMille;
 
 /** decision-note-acme-mills-ltd-2026-10-08.html. The date is the day in Nairobi. */
 export function decisionNoteFileName(insured: string, date: Date | string = new Date()): string {
@@ -169,6 +210,16 @@ li { margin: 0 0 3pt; break-inside: avoid; }
 .sign span { flex: 1; border-top: 0.5pt solid black; padding-top: 1.5pt; font-size: 8pt; }
 footer { margin-top: 8pt; padding-top: 3pt; border-top: 1pt solid black; font-size: 8pt; }
 .hint { border: 1pt dashed black; padding: 4pt 6pt; margin-bottom: 8pt; }
+.small { font-size: 8pt; }
+tr.total td { font-weight: 700; border-top: 1pt solid black; }
+ol.inline { margin: 0; padding: 0; list-style: none; font-size: 8pt; }
+ol.inline li { display: inline; margin: 0 6pt 0 0; }
+body.tight { font-size: 8.5pt; line-height: 1.24; }
+body.tight h2 { font-size: 8.5pt; margin: 6pt 0 2pt; }
+body.tight li { margin-bottom: 2pt; }
+body.tight .figure .value { font-size: 11pt; }
+body.tight .evidence { font-size: 8pt; }
+body.tight .sign { margin-top: 8pt; }
 @media print { body { padding: 0; max-width: none; } .hint { display: none; } }
 `;
 
@@ -177,12 +228,16 @@ export function buildDecisionNoteHtml(input: DecisionNoteInput): string {
   const e = escapeHtml;
   const { offer, figures, decision, terms, footer } = input;
 
+  // With the drivers on the note there is more to fit on the page, so the lists are set tighter.
+  const tight = Boolean(input.drivers || input.premium || input.assumptions?.length || input.questions);
+  const flagChars = tight ? 130 : MAX_FLAG_TEXT_CHARS;
+
   const allFlags = sortFlags(input.flags);
-  const flags = allFlags.slice(0, MAX_FLAGS_ON_NOTE);
+  const flags = allFlags.slice(0, tight ? MAX_FLAGS_WITH_DRIVERS : MAX_FLAGS_ON_NOTE);
   const flagItems = flags
     .map((flag) => {
-      const detail = clip(flag.detail, MAX_FLAG_TEXT_CHARS);
-      const evidence = clip(flag.evidence.text, MAX_FLAG_TEXT_CHARS);
+      const detail = clip(flag.detail, flagChars);
+      const evidence = clip(flag.evidence.text, flagChars);
       const quoted = flag.evidence.kind === "quote" ? `&quot;${e(evidence)}&quot;` : e(evidence);
       const evidenceLine =
         evidence && evidence !== detail
@@ -199,13 +254,74 @@ export function buildDecisionNoteHtml(input: DecisionNoteInput): string {
     ...input.conditions.filter((c) => !ticked.has(c.id)),
   ];
   const conditions = orderedConditions.slice(0, Math.max(MAX_CONDITIONS_ON_NOTE, orderedConditions.filter((c) => ticked.has(c.id)).length));
-  const conditionItems = conditions
-    .map((c) =>
-      ticked.has(c.id)
-        ? `<li><span class="box">[x]</span><strong>Selected.</strong> ${e(c.text)}</li>`
-        : `<li><span class="box">[ ]</span>Not selected. ${e(c.text)}</li>`,
-    )
-    .join("\n");
+  const selectedItem = (text: string) => `<li><span class="box">[x]</span><strong>Selected.</strong> ${e(text)}</li>`;
+  // On the tight page the suggestions not selected run on in one small paragraph; the selected ones keep a line each.
+  const unticked = conditions.filter((c) => !ticked.has(c.id));
+  const conditionItems = tight
+    ? [
+        ...conditions.filter((c) => ticked.has(c.id)).map((c) => selectedItem(c.text)),
+        ...(unticked.length > 0 ? [`<li class="small"><span class="box">[ ]</span>Not selected: ${unticked.map((c) => e(c.text.replace(/\.$/, ""))).join("; ")}.</li>`] : []),
+      ].join("\n")
+    : conditions.map((c) => (ticked.has(c.id) ? selectedItem(c.text) : `<li><span class="box">[ ]</span>Not selected. ${e(c.text)}</li>`)).join("\n");
+
+  // The loss by driver: one column per driver that takes part, then the ground-up loss they add up to and the gross loss.
+  const drivers = input.drivers;
+  const driverRows = drivers
+    ? [...drivers.rows]
+        .sort((a, b) => a.returnPeriodYears - b.returnPeriodYears)
+        .slice(-MAX_RETURN_PERIODS_ON_NOTE)
+        .map(
+          (row) =>
+            `<tr><td>${e(rpLabel(row.returnPeriodYears))}</td>${drivers.columns.map((c) => `<td>${e(fmtKes(row.byDriverKes[c.id] ?? 0))}</td>`).join("")}<td>${e(fmtKes(row.groundUpKes))}</td><td>${e(fmtKes(row.grossKes))}</td></tr>`,
+        )
+        .join("\n")
+    : "";
+  const driverTable = drivers
+    ? `<div id="loss-by-driver">
+<h2>Loss by driver, ground-up (${e(drivers.basis)})</h2>
+${driverRows ? `<table><thead><tr><th>Return period</th>${drivers.columns.map((c) => `<th>${e(c.label)}</th>`).join("")}<th>Ground-up</th><th>Gross</th></tr></thead><tbody>\n${driverRows}\n</tbody></table>` : "<p>No losses by driver were supplied.</p>"}
+${drivers.off.length > 0 ? `<p class="more">Not in this price: ${e(drivers.off.join(", "))}.</p>` : ""}
+</div>`
+    : "";
+
+  const premium = input.premium;
+  const premiumRows = premium
+    ? premium.lines
+        .map((line) => `<tr${line.total ? ' class="total"' : ""}><td>${e(line.label)}${line.note ? ` <span class="small">(${e(line.note)})</span>` : ""}</td><td>${e(fmtKes(line.kes))}</td><td>${e(fmtRate(line.ratePerMille))}</td></tr>`)
+        .join("\n")
+    : "";
+  const statedShare = premium?.stated && premium.stated.ratePerMille > 0 ? `${fmtNum((premium.floodRatePerMille / premium.stated.ratePerMille) * 100, 1)}%` : null;
+  const premiumBlock = premium
+    ? `<div id="premium">
+<h2>Premium build-up, a year</h2>
+<table><thead><tr><th>Line</th><th>KES</th><th>Rate</th></tr></thead><tbody>\n${premiumRows}\n</tbody></table>
+<p class="small">Flood premium ${e(fmtKes(premium.floodPremiumKes))}, ${e(fmtRate(premium.floodRatePerMille))}, set by the ${premium.setBy === "minimum rate" ? "minimum rate" : "modelled figures"}. ${
+        premium.stated
+          ? `The offer's own premium for all risks: ${e(fmtKes(premium.stated.premiumKes))}, ${e(fmtRate(premium.stated.ratePerMille))}${statedShare ? `; the flood rate is ${e(statedShare)} of it` : ""}.`
+          : "The offer states no premium for all risks."
+      }${premium.history ? ` ${e(premium.history)}` : ""}</p>
+</div>`
+    : "";
+
+  const assumed = input.assumptions ?? [];
+  const assumptionGroups = SET_BY_ORDER.map((who) => ({ who, items: assumed.filter((a) => a.setBy === who) })).filter((g) => g.items.length > 0);
+  const assumptionsBlock =
+    assumed.length > 0
+      ? `<div id="assumptions">
+<h2>Assumptions in force (${assumed.length}), and who set each</h2>
+${assumptionGroups.map((g) => `<p class="small"><strong>${e(SET_BY_LABELS[g.who])} (${g.items.length}):</strong> ${g.items.map((a) => `${e(a.label)} ${e(a.value)}`).join("; ")}.</p>`).join("\n")}
+</div>`
+      : "";
+
+  const allQuestions = input.questions ?? [];
+  const questions = allQuestions.slice(0, MAX_QUESTIONS_ON_NOTE);
+  const questionsBlock = input.questions
+    ? `<div id="questions">
+<h2>Questions for the broker (${allQuestions.length})</h2>
+${questions.length > 0 ? `<ol class="inline">\n${questions.map((q, i) => `<li><strong>${i + 1}.</strong> ${e(clip(q, 160))}</li>`).join("\n")}\n</ol>` : "<p>None: the document states every value the price needs.</p>"}
+${more(allQuestions.length - questions.length, "question", "questions")}
+</div>`
+    : "";
 
   const periods = [...input.lossByReturnPeriod]
     .sort((a, b) => a.returnPeriodYears - b.returnPeriodYears)
@@ -213,7 +329,7 @@ export function buildDecisionNoteHtml(input: DecisionNoteInput): string {
   const periodRows = periods
     .map(
       (row) =>
-        `<tr><td>1 in ${e(fmtNum(row.returnPeriodYears, 0))} years</td><td>${e(fmtKes(row.groundUpKes))}</td><td>${e(fmtKes(row.grossKes))}</td></tr>`,
+        `<tr><td>${e(rpLabel(row.returnPeriodYears))}</td><td>${e(fmtKes(row.groundUpKes))}</td><td>${e(fmtKes(row.grossKes))}</td></tr>`,
     )
     .join("\n");
 
@@ -244,24 +360,34 @@ export function buildDecisionNoteHtml(input: DecisionNoteInput): string {
 <title>Decision note: ${e(offer.insured)}</title>
 <style>${CSS}</style>
 </head>
-<body>
+<body${tight ? ' class="tight"' : ""}>
 <p class="hint">To keep a copy on paper or as a PDF, print this page (Ctrl+P, or Cmd+P on a Mac). This box is not printed.</p>
 <div class="head"><h1>Flood decision note</h1><span>${e(fmtNoteDate(footer.generatedAt ?? new Date()))}</span></div>
 <p class="offer" id="offer"><strong>${e(offer.insured)}</strong>, ${e(offer.location)}. Sum insured ${e(fmtKes(offer.sumInsuredKes))}. Cover sought: ${e(offer.coverSought)}.</p>
 
-<h2>Key figures</h2>
+<h2>Key figures${drivers ? ` (losses from: ${e(drivers.basis)})` : ""}</h2>
 <div class="figures" id="figures">
 ${figure("1-in-100 gross loss", fmtKes(figures.grossLoss100Kes))}
-${figure("Average annual loss", fmtKes(figures.averageAnnualLossKes))}
-${figure("Pure rate", fmtRate(figures.pureRatePerMille), "of sum insured")}
-${figure("Change to the portfolio's 1-in-100", fmtSignedKes(figures.portfolioChange100Kes), changePct)}
+${figure("Average annual loss, gross", fmtKes(figures.averageAnnualLossKes))}
+${
+  figures.floodRatePerMille !== null && figures.floodRatePerMille !== undefined
+    ? figure("Flood rate", fmtRate(figures.floodRatePerMille), `of sum insured; pure rate ${fmtRate(figures.pureRatePerMille)}`)
+    : figure("Pure rate", fmtRate(figures.pureRatePerMille), "of sum insured")
+}
+${figure("Change to the portfolio's 1-in-100, gross", fmtSignedKes(figures.portfolioChange100Kes), changePct)}
 </div>
 
+${driverTable}
+
 <div class="cols">
-<div id="loss-table">
+${
+  drivers
+    ? premiumBlock
+    : `<div id="loss-table">
 <h2>Loss by return period</h2>
 ${periodRows ? `<table><thead><tr><th>Return period</th><th>Ground-up</th><th>Gross</th></tr></thead><tbody>\n${periodRows}\n</tbody></table>` : "<p>No losses by return period were supplied.</p>"}
-</div>
+</div>`
+}
 <div id="terms">
 <h2>Terms used</h2>
 <p><strong>${e(termsSource)}</strong></p>
@@ -281,6 +407,11 @@ ${more(allFlags.length - flags.length, "flag", "flags")}
 ${conditionItems ? `<ul>\n${conditionItems}\n</ul>` : "<p>No conditions were suggested.</p>"}
 ${more(orderedConditions.length - conditions.length, "suggestion", "suggestions")}
 </div>
+
+${questionsBlock}
+
+${assumptionsBlock}
+${drivers ? "" : premiumBlock}
 
 <div id="decision">
 <h2>Underwriter's decision</h2>

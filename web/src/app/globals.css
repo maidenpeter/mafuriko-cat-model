@@ -10,7 +10,8 @@
   --surface-2: #f2f5f8;
   --ink: #0b1a2e;
   --ink-2: #4a5768;
-  --muted: #7b8696;
+  /* 4.65:1 on --plane, 5.3:1 on white: small grey text has to pass WCAG AA on every surface */
+  --muted: #616c7c;
   --line: #d9e0e8;
   --axis: #b5c0cc;
   --accent: #1d4f91;
@@ -102,6 +103,18 @@
   --seq-3: #2f78cf;
   --seq-4: #74aaee;
   --seq-5: #cfe2fb;
+}
+
+/* Text size. The whole layout is sized in rem, so it grows with this. Large is the default;
+   the header control sets data-text-size on <html>. lib/display.ts carries the same figures. */
+:root {
+  font-size: 112.5%;
+}
+:root[data-text-size="standard"] {
+  font-size: 100%;
+}
+:root[data-text-size="larger"] {
+  font-size: 125%;
 }
 
 @theme inline {

@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { aiChecks, deliberate, replay, type Deliberation } from "@/lib/agents/orchestrate";
 import { buildProfile } from "@/lib/agents/profile";
 import { ROLE_LABELS, ROLES, type Role } from "@/lib/agents/schema";
@@ -15,6 +15,7 @@ import { REFERENCE_PARAMS } from "@/lib/model/params";
 import { runModel } from "@/lib/model/pipeline";
 import type { Dataset } from "@/lib/model/types";
 import { loadRun, saveRun, type Active, type LogEntry, type Session } from "@/lib/session";
+import { DisplayControls } from "./DisplayControls";
 import { AgentsStep } from "./steps/AgentsStep";
 import { AuditStep } from "./steps/AuditStep";
 import { DataStep } from "./steps/DataStep";
@@ -29,6 +30,11 @@ import { Button, Segmented, StatusIcon, Tag } from "./ui";
 const STEPS = ["Upload", "Read the data", "Hazard", "Agents", "Vulnerability", "Loss engine", "Risk map", "Results", "Audit"];
 
 type AgentStatus = { model: string; configured: Record<Role, boolean> };
+
+// The page's side gutters, shared by the header bar, the key figures, the content and the Back and Next bar
+// so their edges line up. Backgrounds run the full width of the screen; only the contents take the gutters.
+// The cap is for very wide monitors, and is in rem so it widens with the text size.
+const GUTTER = "mx-auto w-full max-w-[120rem] px-4 sm:px-6 2xl:px-10";
 
 export function Walkthrough() {
   const [step, setStep] = useState(0);
@@ -54,9 +60,29 @@ export function Walkthrough() {
     fetch("/api/agents/status").then((r) => r.json()).then(setStatus).catch(() => setStatus(null));
   }, []);
 
+  const stepsRef = useRef<HTMLOListElement>(null);
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "smooth" });
+    // On a phone the steps are one row that scrolls sideways: bring the current one to the middle of it.
+    const list = stepsRef.current;
+    const item = list?.children[step];
+    if (list && item) {
+      const left = item.getBoundingClientRect().left - list.getBoundingClientRect().left + list.scrollLeft;
+      list.scrollTo({ left: left - (list.clientWidth - item.clientWidth) / 2, behavior: "smooth" });
+    }
   }, [step]);
+
+  // The header's height changes with the text size and with how many rows the bar needs.
+  // The step list sticks just below it, so the height is measured, not assumed.
+  const headerRef = useRef<HTMLElement>(null);
+  const [headerHeight, setHeaderHeight] = useState<number | null>(null);
+  useEffect(() => {
+    const header = headerRef.current;
+    if (!header) return;
+    const observer = new ResizeObserver(() => setHeaderHeight(header.offsetHeight));
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, []);
 
   const goTo = (i: number) => {
     setStep(i);
@@ -251,43 +277,59 @@ export function Walkthrough() {
   const isScore = session?.dataset.hazardKind === "score";
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-[1320px] flex-col px-4 sm:px-6">
-      <header className="z-20 -mx-4 sm:-mx-6 lg:sticky lg:top-0">
-        <div className="flex flex-wrap items-center justify-between gap-3 bg-navy px-4 py-3 text-white sm:px-6">
-          <div className="flex items-center gap-3">
-            <span aria-hidden className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
-                <path d="M2 9c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2 2-2 4-2" />
-                <path d="M2 14c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2 2-2 4-2" opacity="0.75" />
-                <path d="M2 19c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2 2-2 4-2" opacity="0.5" />
-              </svg>
-            </span>
-            <div className="leading-tight">
-              <div className="font-display text-lg font-semibold tracking-tight">Mafuriko</div>
-              <div className="hidden text-xs text-white/70 sm:block">Nairobi flood catastrophe model, built for the Kenya Re hackathon</div>
+    <div
+      className="flex min-h-screen w-full flex-col"
+      style={headerHeight != null ? ({ "--header-height": `${headerHeight}px` } as CSSProperties) : undefined}
+    >
+      <header ref={headerRef} className="z-20 lg:sticky lg:top-0">
+        <div className="@container bg-navy text-white">
+          <div className={`${GUTTER} flex flex-wrap items-center gap-x-2 gap-y-2.5 py-3`}>
+            {/* The brand asks only for the room its mark and name need, then takes what is left over.
+                That keeps the display controls beside it on the first row, down to a phone at the largest text. */}
+            <div className="flex min-w-0 flex-1 basis-28 items-center gap-2 sm:gap-3 @min-[104rem]:flex-none">
+              <span aria-hidden className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
+                  <path d="M2 9c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2 2-2 4-2" />
+                  <path d="M2 14c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2 2-2 4-2" opacity="0.75" />
+                  <path d="M2 19c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2 2-2 4-2" opacity="0.5" />
+                </svg>
+              </span>
+              <div className="min-w-0 leading-tight">
+                <div className="font-display text-lg font-semibold tracking-tight">Mafuriko</div>
+                <div className="hidden text-xs text-white/70 sm:block">Nairobi flood catastrophe model, built for the Kenya Re hackathon</div>
+              </div>
             </div>
+            <DisplayControls className="ml-auto @min-[104rem]:order-last" />
+            {/* The loaded dataset and its switches take their own row, so the bar does not rearrange itself
+                when a switch appears partway through. Where the bar is wide enough to hold everything they sit
+                on the first row, after the brand: a new switch is added at their right end and nothing moves. */}
+            {session && (
+              <div className="flex basis-full flex-wrap items-center gap-2 border-white/20 @min-[104rem]:ml-4 @min-[104rem]:min-w-0 @min-[104rem]:flex-1 @min-[104rem]:basis-0 @min-[104rem]:border-l @min-[104rem]:pl-6">
+                <span className="min-w-0 wrap-break-word text-sm text-white/80">{session.dataset.name}</span>
+                <Tag kind="synthetic">Synthetic portfolio</Tag>
+                <Tag kind={isScore ? "proxy" : "real"}>{isScore ? "Proxy hazard, not measured" : "Published depth maps"}</Tag>
+                {drainage && drainage.dataset === session.dataset && (
+                  <Segmented label="Hazard" value={useDrainage ? "on" : "off"} onChange={(v) => setUseDrainage(v === "on")} options={[{ value: "off", label: "Terrain only" }, { value: "on", label: "+ Drainage" }]} />
+                )}
+                {deliberation?.final && (
+                  <Segmented label="Assumptions" value={useAi ? "ai" : "reference"} onChange={(v) => setUseAi(v === "ai")} options={[{ value: "ai", label: "Agreed by agents" }, { value: "reference", label: "Without AI" }]} />
+                )}
+              </div>
+            )}
           </div>
-          {session && (
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm text-white/80">{session.dataset.name}</span>
-              <Tag kind="synthetic">Synthetic portfolio</Tag>
-              <Tag kind={isScore ? "proxy" : "real"}>{isScore ? "Proxy hazard, not measured" : "Published depth maps"}</Tag>
-              {drainage && drainage.dataset === session.dataset && (
-                <Segmented label="Hazard" value={useDrainage ? "on" : "off"} onChange={(v) => setUseDrainage(v === "on")} options={[{ value: "off", label: "Terrain only" }, { value: "on", label: "+ Drainage" }]} />
-              )}
-              {deliberation?.final && (
-                <Segmented label="Assumptions" value={useAi ? "ai" : "reference"} onChange={(v) => setUseAi(v === "ai")} options={[{ value: "ai", label: "Agreed by agents" }, { value: "reference", label: "Without AI" }]} />
-              )}
-            </div>
-          )}
         </div>
         <div className="h-[3px] bg-brand" />
         {view && active && <KeyFigures active={active} hazard={drainageOn ? "Terrain + drainage" : "Terrain only"} />}
       </header>
 
-      <div className="flex flex-1 flex-col gap-6 py-6 lg:flex-row lg:gap-10">
-        <nav aria-label="Steps" className="lg:sticky lg:top-36 lg:h-fit lg:w-52 lg:shrink-0">
-          <ol className="flex gap-1 overflow-x-auto lg:flex-col">
+      <div className={`${GUTTER} flex flex-1 flex-col gap-6 py-6 lg:flex-row lg:gap-8 2xl:gap-10`}>
+        {/* Stuck just below the header and never taller than the room between it and the Back and Next bar:
+            on a short screen at the larger sizes the list scrolls inside itself instead of running off the bottom. */}
+        <nav
+          aria-label="Steps"
+          className="lg:sticky lg:top-[calc(var(--header-height,9rem)+1rem)] lg:h-fit lg:max-h-[calc(100dvh-var(--header-height,9rem)-5.25rem)] lg:w-44 lg:shrink-0 lg:overflow-y-auto 2xl:w-52 lg:scrollbar-thin"
+        >
+          <ol ref={stepsRef} className="flex gap-1 overflow-x-auto lg:flex-col">
             {STEPS.map((name, i) => {
               const locked = i > reached;
               const current = i === step;
@@ -299,7 +341,7 @@ export function Walkthrough() {
                     aria-current={current ? "step" : undefined}
                     className={`flex w-full items-center gap-2.5 whitespace-nowrap rounded-xl px-3 py-2 text-left text-sm transition ${current ? "bg-surface font-semibold text-ink shadow-sm ring-1 ring-line" : locked ? "text-muted" : "text-ink-2 hover:bg-surface"}`}
                   >
-                    <span className={`tabular flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] ${current ? "bg-brand text-white" : i < reached ? "bg-surface-2 text-ink-2" : "border border-line text-muted"}`}>{i}</span>
+                    <span className={`tabular flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs ${current ? "bg-brand text-white" : i < reached ? "bg-surface-2 text-ink-2" : "border border-line text-muted"}`}>{i}</span>
                     {name}
                   </button>
                 </li>
@@ -316,7 +358,9 @@ export function Walkthrough() {
           )}
         </nav>
 
-        <main className="min-w-0 flex-1 pb-28">
+        {/* A container, so a step can lay itself out by the room it really has (the @ variants, measured in rem
+            of the chosen text size) and not by the width of the screen. */}
+        <main className="@container min-w-0 flex-1 pb-28">
           <AnimatePresence mode="wait">
             <motion.div key={step} initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.28, ease: "easeOut" }}>
               {step === 0 && (
@@ -365,15 +409,16 @@ export function Walkthrough() {
 
       {session && step > 0 && (
         <footer className="fixed inset-x-0 bottom-0 z-20 border-t border-line bg-plane/90 backdrop-blur">
-          <div className="mx-auto flex max-w-[1320px] items-center justify-between gap-3 px-4 py-3 sm:px-6">
+          {/* On a phone at the larger sizes the three buttons do not fit side by side: Next drops to a second row instead of breaking its label. */}
+          <div className={`${GUTTER} flex flex-wrap items-center justify-between gap-x-3 gap-y-2 py-3`}>
             <div className="flex items-center gap-2">
-              <Button variant="secondary" onClick={() => goTo(step - 1)}>Back</Button>
-              <Button variant="ghost" onClick={reset}>Start over</Button>
+              <Button variant="secondary" className="whitespace-nowrap" onClick={() => goTo(step - 1)}>Back</Button>
+              <Button variant="ghost" className="whitespace-nowrap" onClick={reset}>Start over</Button>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="ml-auto flex items-center gap-3">
               {step === 3 && !deliberation?.final && !agentsBusy && <span className="hidden text-xs text-muted sm:inline">Continuing without the agents uses reference assumptions.</span>}
               {step < STEPS.length - 1 && (
-                <Button onClick={() => goTo(step + 1)} disabled={agentsBusy}>
+                <Button className="whitespace-nowrap" onClick={() => goTo(step + 1)} disabled={agentsBusy}>
                   Next: {STEPS[step + 1]}
                 </Button>
               )}
@@ -400,12 +445,14 @@ function KeyFigures({ active, hazard }: { active: Active; hazard: string }) {
     { label: "Assumptions", value: active.source === "ai" ? "Agreed by agents" : "Reference, no AI" },
   ];
   return (
-    <div className="border-b border-line bg-plane/95 backdrop-blur">
-      <dl className="flex gap-6 overflow-x-auto px-4 py-2 sm:px-6">
+    <div className="@container border-b border-line bg-plane/95 backdrop-blur">
+      {/* Two columns on a phone, three on a tablet, then one band across the whole bar with a rule between figures.
+          The steps are measured against the strip in rem, so a larger text size keeps the rows until one band fits. */}
+      <dl className={`${GUTTER} grid grid-cols-2 gap-x-6 gap-y-2 py-2 @2xl:grid-cols-3 @4xl:grid-cols-[repeat(6,auto)] @4xl:gap-x-4 @5xl:gap-x-6`}>
         {items.map((x) => (
-          <div key={x.label} className="shrink-0">
-            <dt className="text-[11px] uppercase tracking-wide text-muted">{x.label}</dt>
-            <dd className={`tabular text-sm font-semibold ${x.strong ? "text-brand" : "text-ink"}`}>{x.value}</dd>
+          <div key={x.label} className="min-w-0 border-line @4xl:border-l @4xl:pl-4 @4xl:first:border-l-0 @4xl:first:pl-0 @5xl:pl-6">
+            <dt className="text-xs uppercase tracking-wide text-muted">{x.label}</dt>
+            <dd className={`tabular text-sm font-semibold @5xl:text-base ${x.strong ? "text-brand" : "text-ink"}`}>{x.value}</dd>
           </div>
         ))}
       </dl>

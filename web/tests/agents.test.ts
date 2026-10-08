@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { buildPrompt } from "../src/lib/agents/prompts";
 import { RESPONSE_SCHEMAS, responseSchemaFor } from "../src/lib/agents/responseSchema";
@@ -71,6 +72,21 @@ describe("agent replies", () => {
     }
     const critic = RESPONSE_SCHEMAS.critic as { properties: { challenges: { minItems: number; maxItems: number } } };
     expect(critic.properties.challenges).toMatchObject({ minItems: 3, maxItems: 6 });
+  });
+
+  it("sends, byte for byte, the instructions and the shapes it sent before offers were argued", () => {
+    // Fingerprints taken before the loss drivers beyond depth were added. With no offer loaded nothing an agent is sent may change.
+    const BEFORE: Record<string, { system: string; user: string; schema: string }> = {
+      optimist: { system: "51175ea3a4ac1e67", user: "f812c8e652d1d23a", schema: "f22bd8860db06612" },
+      cautious: { system: "7188ef8b822f58e7", user: "f812c8e652d1d23a", schema: "f22bd8860db06612" },
+      critic: { system: "a6bfadb513d0b335", user: "f812c8e652d1d23a", schema: "7aa935527893e87c" },
+      chair: { system: "a8ca001a696b42db", user: "63b18f2b589c8261", schema: "058b2bacd84d7d28" },
+    };
+    const sha = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 16);
+    for (const role of ROLES) {
+      const { system, user } = buildPrompt(role, { profile: { a: 1 } as never });
+      expect({ system: sha(system), user: sha(user), schema: sha(JSON.stringify(RESPONSE_SCHEMAS[role])) }).toEqual(BEFORE[role]);
+    }
   });
 
   it("nests a reply the same way whether or not the offer argument is given", () => {

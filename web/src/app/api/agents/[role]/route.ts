@@ -24,11 +24,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ role: s
   if (!apiKey) return NextResponse.json({ ok: false, error: `No API key configured for the ${role} agent. Set ${keySettings(role)} in web/.env.local.` }, { status: 503 });
 
   const body = (await req.json()) as AgentRequest;
-  // With an offer loaded the agents also argue its five judgement figures. Only the plain facts
-  // of the brief go into the prompt; anything else sent with it is dropped here.
+  // With an offer loaded the agents also argue the figures behind its loss drivers. Only the plain
+  // facts of the brief and its few short quotes go into the prompt; anything else sent with it is
+  // dropped here, so no other text of the document reaches a prompt or a log.
   const offer = readOfferBrief(body.offer);
   const hasOffer = offer !== null;
-  const prompt = buildPrompt(role, { profile: body.profile, chair: body.chair, offer });
+  // The basis is one known word or nothing: buildPrompt turns it into a sentence of its own.
+  const lossBasis = body.lossBasis === "all_drivers" ? body.lossBasis : undefined;
+  const prompt = buildPrompt(role, { profile: body.profile, chair: body.chair, offer, lossBasis });
   const enforced = responseSchemaFor(role, hasOffer);
   const expected = schemaFor(role, hasOffer);
   const started = Date.now();

@@ -1,8 +1,9 @@
 import type { Check } from "../checks";
 import { BOUNDS, enforceBounds, flattenParams, type Adjustment } from "../model/params";
+import type { LossMode } from "../model/drivers";
 import { resultFingerprint, runModel } from "../model/pipeline";
 import type { Dataset, ModelParams, ModelResult } from "../model/types";
-import { enforceJudgement, JUDGEMENT_BOUNDS, JUDGEMENT_KEYS, JUDGEMENT_LABELS, REFERENCE_JUDGEMENT, type JudgementAdjustment, type OfferJudgement } from "../offer/judgement";
+import { AGENT_JUDGEMENT_KEYS, BASEMENT_LADDER, enforceJudgement, JUDGEMENT_BOUNDS, JUDGEMENT_LABELS, OUTAGE_LADDER, REFERENCE_JUDGEMENT, type JudgementAdjustment, type OfferJudgement } from "../offer/judgement";
 import type { OfferBrief } from "./offerBrief";
 import { outcomeSummary, type DataProfile } from "./profile";
 import type { AgentRequest, ChairContext, ChairSide } from "./prompts";
@@ -30,25 +31,36 @@ export interface Scored {
   result: ModelResult;
 }
 
-/** One of the offer's five figures that code moved back into its range, and whose figure it was. */
+/**
+ * The basis the portfolio's losses are worked out on: the header's switch between "Depth only" and
+ * "All loss drivers", and the assumptions behind the drivers that act beyond depth (offer/judgement.ts).
+ */
+export interface ModelBasis {
+  mode: LossMode;
+  judgement: OfferJudgement;
+}
+
+/** One of the offer's figures that code corrected, and whose figure it was: moved back into its range, or raised so its ladder does not fall. */
 export interface RoleJudgementAdjustment extends JudgementAdjustment {
   role: "optimist" | "cautious" | "chair";
 }
 
 /**
- * What the agents settled about the offer: its five judgement figures (see offer/judgement.ts).
- * Every set here has been through enforceJudgement, so each figure is inside its range.
+ * What the agents settled about the offer: the figures behind its loss drivers that they may argue
+ * (AGENT_JUDGEMENT_KEYS in offer/judgement.ts). The figures set on screen only are never in these sets.
+ * Every set here has been through enforceJudgement, so each figure is inside its range and both
+ * ladders rise with rarity.
  */
 export interface OfferDeliberation {
-  /** The Optimist's five figures. null when its reply did not arrive. */
-  optimist: OfferJudgement | null;
-  /** The Cautious five figures. null when its reply did not arrive. */
-  cautious: OfferJudgement | null;
-  /** The Chair's five figures: the agreed set. null when the Chair did not decide. */
-  final: OfferJudgement | null;
-  /** The Chair's reason for each figure, by key ("siteRadiusM", not "offer.siteRadiusM"). Empty when the Chair did not decide. */
+  /** The Optimist's figures, by key. null when its reply did not arrive, or held none of them. */
+  optimist: Partial<OfferJudgement> | null;
+  /** The Cautious voice's figures. null as above. */
+  cautious: Partial<OfferJudgement> | null;
+  /** The Chair's figures: the agreed set. null when the Chair did not decide, or its reply held none of them. */
+  final: Partial<OfferJudgement> | null;
+  /** The Chair's reason for each figure, by key ("bufferRadiusM", not "offer.bufferRadiusM"). Empty when the Chair did not decide. */
   reasons: Record<string, { reason: string; basis: string; leans?: string }>;
-  /** Every figure code moved back into its range, in any of the three sets. */
+  /** Every figure code corrected, in any of the three sets: out of its range, or a ladder rung lower than the one before it. */
   adjustments: RoleJudgementAdjustment[];
   /** The facts of the offer the agents were given, so the screen can tell whether they ran with the offer now loaded. */
   brief: OfferBrief;
@@ -62,8 +74,13 @@ export interface Deliberation {
   optimist: Scored | null;
   cautious: Scored | null;
   final: Scored | null;
-  /** Fingerprint of the final result, so a replay can prove it reproduces. */
+  /**
+   * Fingerprint of the final parameters' result, so a replay can prove it reproduces. Always taken
+   * on "Depth only", the basis every check refers to, so it is the same whichever basis is shown.
+   */
   fingerprint: string | null;
+  /** The basis the three results above were worked out on. A run made before the switch existed has none: depth only. */
+  basis?: ModelBasis;
   /** There only when the agents ran with an offer loaded. A run made without one, or saved before offers were argued, has none. */
   offerJudgement?: OfferDeliberation | null;
 }
@@ -79,26 +96,48 @@ async function callAgent<R extends Role>(role: R, request: AgentRequest): Promis
   }
 }
 
-function score(dataset: Dataset, proposed: ModelParams): Scored {
+/** With no basis the engine runs exactly as it did before the loss drivers beyond depth existed. */
+function score(dataset: Dataset, proposed: ModelParams, basis?: ModelBasis): Scored {
   const { params, adjustments } = enforceBounds(proposed);
-  return { params, adjustments, result: runModel(dataset, params) };
+  return { params, adjustments, result: basis ? runModel(dataset, params, { mode: basis.mode, judgement: basis.judgement }) : runModel(dataset, params) };
 }
 
-/** The offer's five figures from the three replies, each kept inside its range by code, with what was moved and the Chair's reasons. */
+/** The depth-only fingerprint of a scored set: its own result when that is depth only, otherwise one more run of the engine. */
+const fingerprintOf = (dataset: Dataset, scored: Scored, basis?: ModelBasis): string =>
+  resultFingerprint(basis && basis.mode !== "depth_only" ? runModel(dataset, scored.params) : scored.result);
+
+/** A basis read back from a saved run: a known mode, and every figure inside its range. Anything else is no basis. */
+function savedBasis(raw: unknown): ModelBasis | undefined {
+  const { mode, judgement } = (typeof raw === "object" && raw !== null ? raw : {}) as { mode?: unknown; judgement?: unknown };
+  if (mode !== "depth_only" && mode !== "all_drivers") return undefined;
+  return { mode, judgement: enforceJudgement(typeof judgement === "object" && judgement !== null ? judgement : {}).judgement };
+}
+
+/**
+ * The offer's figures from the three replies, each kept inside its range and its ladders kept rising
+ * by code, with what was corrected and the Chair's reasons. Only the figures the agents argue are
+ * read: a reply saved under an earlier set of figures holds other keys, which are ignored, and a
+ * figure a reply lacks is left out, so the reference value stays in force for it.
+ */
 function settleJudgement(runs: Deliberation["runs"], brief: OfferBrief): OfferDeliberation {
   const adjustments: RoleJudgementAdjustment[] = [];
-  const enforce = (role: RoleJudgementAdjustment["role"], set: JudgementProposal | undefined): OfferJudgement | null => {
-    if (!set) return null;
-    const enforced = enforceJudgement(toJudgement(set));
-    adjustments.push(...enforced.adjustments.map((a) => ({ ...a, role })));
-    return enforced.judgement;
+  const enforce = (role: RoleJudgementAdjustment["role"], set: JudgementProposal | undefined): Partial<OfferJudgement> | null => {
+    const argued = toJudgement(set);
+    const keys = AGENT_JUDGEMENT_KEYS.filter((key) => key in argued);
+    if (keys.length === 0) return null;
+    const enforced = enforceJudgement(argued);
+    adjustments.push(...enforced.adjustments.filter((a) => keys.includes(a.key)).map((a) => ({ ...a, role })));
+    return Object.fromEntries(keys.map((key) => [key, enforced.judgement[key]]));
   };
   const decided: JudgementDecision | undefined = runs.chair.output?.offerJudgement;
   const optimist = enforce("optimist", runs.optimist.output?.offerJudgement);
   const cautious = enforce("cautious", runs.cautious.output?.offerJudgement);
   const final = enforce("chair", decided);
   const reasons: OfferDeliberation["reasons"] = {};
-  if (decided) for (const key of JUDGEMENT_KEYS) reasons[key] = { reason: decided[key].reason, basis: decided[key].basis, leans: decided[key].leans };
+  for (const key of AGENT_JUDGEMENT_KEYS) {
+    const entry = decided?.[key];
+    if (entry) reasons[key] = { reason: entry.reason, basis: entry.basis, leans: entry.leans };
+  }
   return { optimist, cautious, final, reasons, adjustments, brief };
 }
 
@@ -107,10 +146,15 @@ function settleJudgement(runs: Deliberation["runs"], brief: OfferBrief): OfferDe
  * on both proposals. Round 2: the Chair settles the final set. Code runs it.
  *
  * With an offer loaded, pass its brief: every agent is then also given the offer's facts, the
- * proposing agents and the Chair argue its five judgement figures beside the model's parameters,
- * and the result carries them under offerJudgement. Without one nothing about the run changes.
+ * proposing agents and the Chair argue the figures behind its loss drivers beside the model's
+ * parameters, and the result carries them under offerJudgement. Without one nothing about the run changes.
+ *
+ * Pass the basis shown on screen as `model`: every run of the engine here then uses it, so what each
+ * set of assumptions produces is on the same basis as the figures beside it. Left out, the engine
+ * reads depth at each building's point, as before.
  */
-export async function deliberate(dataset: Dataset, profile: DataProfile, onUpdate: (d: Deliberation) => void, offer?: OfferBrief | null): Promise<Deliberation> {
+export async function deliberate(dataset: Dataset, profile: DataProfile, onUpdate: (d: Deliberation) => void, offer?: OfferBrief | null, model?: ModelBasis | null): Promise<Deliberation> {
+  const basis = model ?? undefined;
   const d: Deliberation = {
     startedAt: new Date().toISOString(),
     datasetName: dataset.name,
@@ -126,8 +170,11 @@ export async function deliberate(dataset: Dataset, profile: DataProfile, onUpdat
     final: null,
     fingerprint: null,
   };
-  // The request is exactly as it was when no offer is loaded.
+  if (basis) d.basis = basis;
+  // The request is exactly as it was when no offer is loaded and the basis is depth only.
   const base: AgentRequest = offer ? { profile, offer } : { profile };
+  // Every agent is told when the portfolio's losses count more than the depth at each building's point.
+  if (basis?.mode === "all_drivers") base.lossBasis = basis.mode;
   const emit = () => {
     if (offer) d.offerJudgement = settleJudgement(d.runs, offer);
     onUpdate({ ...d, runs: { ...d.runs } });
@@ -137,12 +184,12 @@ export async function deliberate(dataset: Dataset, profile: DataProfile, onUpdat
   await Promise.all([
     callAgent("optimist", base).then((run) => {
       d.runs.optimist = run;
-      if (run.output) d.optimist = score(dataset, toParams(run.output));
+      if (run.output) d.optimist = score(dataset, toParams(run.output), basis);
       emit();
     }),
     callAgent("cautious", base).then((run) => {
       d.runs.cautious = run;
-      if (run.output) d.cautious = score(dataset, toParams(run.output));
+      if (run.output) d.cautious = score(dataset, toParams(run.output), basis);
       emit();
     }),
     callAgent("critic", base).then((run) => {
@@ -158,7 +205,7 @@ export async function deliberate(dataset: Dataset, profile: DataProfile, onUpdat
     return d;
   }
 
-  const side = (proposal: Proposal | undefined, scored: Scored | null, judgement: OfferJudgement | null | undefined): ChairSide | null => {
+  const side = (proposal: Proposal | undefined, scored: Scored | null, judgement: Partial<OfferJudgement> | null | undefined): ChairSide | null => {
     if (!proposal || !scored) return null;
     const out: ChairSide = { proposal, applied: scored.params, outcome: outcomeSummary(scored.result) };
     if (judgement) out.appliedOfferJudgement = judgement;
@@ -174,22 +221,32 @@ export async function deliberate(dataset: Dataset, profile: DataProfile, onUpdat
   emit();
   d.runs.chair = await callAgent("chair", { ...base, chair });
   if (d.runs.chair.output) {
-    d.final = score(dataset, toParams(d.runs.chair.output.decision));
-    d.fingerprint = resultFingerprint(d.final.result);
+    d.final = score(dataset, toParams(d.runs.chair.output.decision), basis);
+    d.fingerprint = fingerprintOf(dataset, d.final, basis);
   }
   emit();
   return d;
 }
 
-/** Re-score a saved deliberation against the current data, without calling any model. */
-export function replay(dataset: Dataset, saved: Deliberation): Deliberation {
-  const rescore = (proposal: { depthScaleM: unknown } | undefined) => (proposal ? score(dataset, toParams(proposal as Proposal)) : null);
+/**
+ * Re-score a saved deliberation against the current data, without calling any model.
+ *
+ * The engine runs on the basis given as `model`. Left out, it keeps the basis the run was saved
+ * with; a run saved before the switch existed has none and is re-scored on depth only, as it was made.
+ * The saved fingerprint is left alone: it is the depth-only one whatever the basis.
+ */
+export function replay(dataset: Dataset, saved: Deliberation, model?: ModelBasis | null): Deliberation {
+  const basis = model ?? savedBasis(saved.basis);
+  const rescore = (proposal: { depthScaleM: unknown } | undefined) => (proposal ? score(dataset, toParams(proposal as Proposal), basis) : null);
   const replayed: Deliberation = {
     ...saved,
     optimist: rescore(saved.runs.optimist.output),
     cautious: rescore(saved.runs.cautious.output),
     final: rescore(saved.runs.chair.output?.decision),
   };
+  // What was saved as the basis is used only after it has been read back and kept in range.
+  if (basis) replayed.basis = basis;
+  else delete replayed.basis;
   // The offer's figures are worked out again from the saved replies, like the parameters. A run saved without an offer stays without one.
   if (saved.offerJudgement) replayed.offerJudgement = settleJudgement(saved.runs, saved.offerJudgement.brief);
   return replayed;
@@ -231,7 +288,7 @@ export function buildLedger(reference: ModelParams, d: Deliberation): LedgerRow[
 }
 
 export interface JudgementLedgerRow {
-  /** Which of the five figures. */
+  /** Which of the figures the agents argue. */
   key: keyof OfferJudgement;
   /** Its plain name, with the unit. */
   label: string;
@@ -244,15 +301,19 @@ export interface JudgementLedgerRow {
   reason: string;
   basis: string;
   leans: string;
-  /** True when code moved the agreed figure back into its range. */
+  /** True when code corrected the agreed figure: moved it back into its range, or raised it so its ladder does not fall. */
   adjusted: boolean;
 }
 
-/** One row for each of the offer's five figures: every view side by side, and the Chair's reason for the agreed one. Empty when the agents ran without an offer. */
+/**
+ * One row for each figure the agents argue for the offer, in the order of AGENT_JUDGEMENT_KEYS: every
+ * view side by side, and the Chair's reason for the agreed one. A figure a saved reply does not hold
+ * is null there, and the reference value stays in force for it. Empty when the agents ran without an offer.
+ */
 export function judgementLedger(d: Deliberation | null | undefined): JudgementLedgerRow[] {
   const j = d?.offerJudgement;
   if (!j) return [];
-  return JUDGEMENT_KEYS.map((key) => ({
+  return AGENT_JUDGEMENT_KEYS.map((key) => ({
     key,
     label: JUDGEMENT_LABELS[key],
     reference: REFERENCE_JUDGEMENT[key],
@@ -265,6 +326,11 @@ export function judgementLedger(d: Deliberation | null | undefined): JudgementLe
     adjusted: j.adjustments.some((a) => a.role === "chair" && a.key === key),
   }));
 }
+
+const LADDER_KEYS: ReadonlySet<keyof OfferJudgement> = new Set([...BASEMENT_LADDER, ...OUTAGE_LADDER]);
+/** A ladder's allowed range in one phrase. Its rungs share one range in judgement.ts; the widest is quoted in case they ever differ. */
+const ladderRange = (name: string, ladder: (keyof OfferJudgement)[]) =>
+  `${name}: ${Math.min(...ladder.map((key) => JUDGEMENT_BOUNDS[key].min))} to ${Math.max(...ladder.map((key) => JUDGEMENT_BOUNDS[key].max))}, never falling as events get rarer`;
 
 export function aiChecks(dataset: Dataset, d: Deliberation): Check[] {
   const g = "ai" as const;
@@ -298,28 +364,46 @@ export function aiChecks(dataset: Dataset, d: Deliberation): Check[] {
   }
   out.push({ group: g, id: "reasons", title: "Every parameter has a reason", status: missing === 0 && counted > 0 ? "pass" : "fail", detail: `${counted - missing} of ${counted} proposed values carry a written reason.` });
 
-  // Only when the agents ran with an offer loaded: its five figures, checked like the parameters.
+  // Only when the agents ran with an offer loaded: the figures behind its loss drivers, checked like the parameters.
   const j = d.offerJudgement;
   if (j) {
     const argued: (JudgementProposal | undefined)[] = [d.runs.optimist.output?.offerJudgement, d.runs.cautious.output?.offerJudgement, d.runs.chair.output?.offerJudgement];
     let figures = 0;
     let unreasoned = 0;
+    let earlier = 0;
     for (const set of argued) {
       if (!set) continue;
-      for (const key of JUDGEMENT_KEYS) {
+      // A reply saved under an earlier set of figures holds none of these: nothing in it is used.
+      if (!AGENT_JUDGEMENT_KEYS.some((key) => set[key])) {
+        earlier += 1;
+        continue;
+      }
+      for (const key of AGENT_JUDGEMENT_KEYS) {
         figures += 1;
         if (!set[key]?.reason?.trim()) unreasoned += 1;
       }
     }
     const moved = j.adjustments;
-    const ranges = JUDGEMENT_KEYS.map((key) => `${JUDGEMENT_LABELS[key]}: ${JUDGEMENT_BOUNDS[key].min} to ${JUDGEMENT_BOUNDS[key].max}`).join("; ");
+    // A ladder correction starts from a value that was inside its range; a range correction does not.
+    const rungs = moved.filter((a) => LADDER_KEYS.has(a.key) && a.from >= JUDGEMENT_BOUNDS[a.key].min && a.from <= JUDGEMENT_BOUNDS[a.key].max).length;
+    const ranges = [
+      ...AGENT_JUDGEMENT_KEYS.filter((key) => !LADDER_KEYS.has(key)).map((key) => `${JUDGEMENT_LABELS[key]}: ${JUDGEMENT_BOUNDS[key].min} to ${JUDGEMENT_BOUNDS[key].max}`),
+      ladderRange("Basement damage ratio for each tier", BASEMENT_LADDER),
+      ladderRange("Outage days for each tier", OUTAGE_LADDER),
+    ].join("; ");
     const corrected = moved.slice(0, 3).map((a) => `${a.role} ${JUDGEMENT_LABELS[a.key]} ${a.from} to ${a.to} (${a.reason})`).join("; ");
     out.push({
-      group: g, id: "offer-judgement", title: "Every judgement figure for the offer is inside its range and has a reason",
-      status: figures === 0 || unreasoned > 0 ? "fail" : moved.length > 0 ? "warn" : "pass",
+      group: g, id: "offer-judgement", title: "Every figure the agents set for the offer is inside its range, has a reason, and the ladders rise with rarity",
+      status: figures === 0 ? (earlier > 0 ? "warn" : "fail") : unreasoned > 0 ? "fail" : moved.length > 0 ? "warn" : "pass",
       detail: figures === 0
-        ? "No agent returned the offer's five figures, so the reference values stay in force."
-        : `${figures - unreasoned} of ${figures} figures carry a written reason. ${moved.length === 0 ? `All are inside their ranges. ${ranges}.` : `${moved.length} value(s) were corrected by code: ${corrected}.`}`,
+        ? earlier > 0
+          ? "This run was saved before these figures were argued, so the reference values stay in force for the offer. Run the agents again to have them argued."
+          : "No agent returned the offer's figures, so the reference values stay in force."
+        : `${figures - unreasoned} of ${figures} figures carry a written reason. ${
+            moved.length === 0
+              ? `All are inside their ranges and both ladders rise. ${ranges}.`
+              : `${moved.length} value(s) were corrected by code, ${rungs} of them to keep a ladder from falling: ${corrected}.`
+          }`,
     });
   }
 
@@ -335,6 +419,7 @@ export function aiChecks(dataset: Dataset, d: Deliberation): Check[] {
   }
 
   if (d.final) {
+    // On depth only, the basis of the saved fingerprint, whichever basis the run is shown on.
     const again = resultFingerprint(runModel(dataset, d.final.params));
     out.push({
       group: g, id: "reproducible", title: "Re-running the engine on the saved parameters gives the same result",

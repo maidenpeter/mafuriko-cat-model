@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { flattenParams, REFERENCE_PARAMS } from "../model/params";
 import { HOUSING_CLASSES, SCORE_TIERS, type HousingClass, type ModelParams, type ScoreTier } from "../model/types";
-import { JUDGEMENT_KEYS, JUDGEMENT_PARAMETER_NAMES, type OfferJudgement } from "../offer/judgement";
+import { AGENT_JUDGEMENT_KEYS, JUDGEMENT_PARAMETER_NAMES, type OfferJudgement } from "../offer/judgement";
 
 export const ROLES = ["optimist", "cautious", "critic", "chair"] as const;
 export type Role = (typeof ROLES)[number];
@@ -18,8 +18,8 @@ export const PARAMETER_NAMES = flattenParams(REFERENCE_PARAMS).map((p) => p.path
 
 /**
  * The names an agent replies with. Without an offer these are the model's own parameters.
- * With an offer loaded, the offer's five judgement figures follow them ("offer.siteRadiusM"
- * and so on), so one reply settles both.
+ * With an offer loaded, the figures behind the offer's loss drivers that the agents may argue
+ * follow them ("offer.bufferRadiusM" and so on, see AGENT_JUDGEMENT_KEYS), so one reply settles both.
  */
 export const parameterNames = (hasOffer: boolean): string[] => (hasOffer ? [...PARAMETER_NAMES, ...JUDGEMENT_PARAMETER_NAMES] : PARAMETER_NAMES);
 
@@ -64,17 +64,22 @@ const parameterSet = <T extends z.ZodTypeAny>(item: T) =>
     returnPeriods: perTier(item),
   });
 
-// The offer's five judgement figures are argued like the parameters: a value, a reason and what it rests on.
+// The offer's judgement figures are argued like the parameters: a value, a reason and what it rests on.
 const offerReasoned = reasoned.extend({ basis: z.enum(OFFER_BASES).catch("judgement") });
 const offerDecided = offerReasoned.extend({ leans: z.enum(LEANS).catch("between") });
 
+/**
+ * One entry for each figure the agents argue, by key. The check demands every one of them. The type
+ * says "may be absent" because the same shape is read back from saved runs, and a run saved under an
+ * earlier set of figures holds other keys: those are ignored, and a figure it lacks takes the reference.
+ */
 const judgementSet = <T extends z.ZodTypeAny>(item: T) =>
-  z.object(Object.fromEntries(JUDGEMENT_KEYS.map((k) => [k, item])) as Record<keyof OfferJudgement, T>);
+  z.object(Object.fromEntries(AGENT_JUDGEMENT_KEYS.map((k) => [k, item]))) as unknown as z.ZodType<Partial<Record<keyof OfferJudgement, z.infer<T>>>>;
 
 export const proposalSchema = parameterSet(reasoned).extend({ stance: z.string().min(1) });
-/** A proposal made with an offer loaded: the model's parameters, and the five figures set aside under offerJudgement. */
+/** A proposal made with an offer loaded: the model's parameters, and the offer's figures set aside under offerJudgement. */
 export const offerProposalSchema = proposalSchema.extend({ offerJudgement: judgementSet(offerReasoned) });
-/** The five figures as a proposing agent argued them, by key ("siteRadiusM", not "offer.siteRadiusM"). */
+/** The offer's figures as a proposing agent argued them, by key ("bufferRadiusM", not "offer.bufferRadiusM"). */
 export type JudgementProposal = z.infer<typeof offerProposalSchema>["offerJudgement"];
 /** offerJudgement is there only when the agent ran with an offer loaded. */
 export type Proposal = z.infer<typeof proposalSchema> & { offerJudgement?: JudgementProposal };
@@ -110,7 +115,7 @@ export const decisionSchema = z.object({
 });
 /** The Chair's decision made with an offer loaded. */
 export const offerDecisionSchema = decisionSchema.extend({ offerJudgement: judgementSet(offerDecided) });
-/** The five figures as the Chair settled them, each with the side it leaned towards. */
+/** The offer's figures as the Chair settled them, each with the side it leaned towards. */
 export type JudgementDecision = z.infer<typeof offerDecisionSchema>["offerJudgement"];
 /** offerJudgement is there only when the Chair ran with an offer loaded. */
 export type Decision = z.infer<typeof decisionSchema> & { offerJudgement?: JudgementDecision };
@@ -129,7 +134,7 @@ const OFFER_SCHEMAS = {
   chair: offerDecisionSchema,
 } as const;
 
-/** The check a reply must pass. With an offer loaded, all five judgement figures must be there too. */
+/** The check a reply must pass. With an offer loaded, every one of the offer's figures must be there too. */
 export const schemaFor = (role: Role, hasOffer: boolean): z.ZodTypeAny => (hasOffer ? OFFER_SCHEMAS : SCHEMAS)[role];
 
 export type AgentOutput = { optimist: Proposal; cautious: Proposal; critic: Critique; chair: Decision };
@@ -148,9 +153,18 @@ export function toParams(set: ParameterSet): ModelParams {
   };
 }
 
-/** Strip the reasons from the offer's five figures and keep the numbers. Code then keeps them in range (enforceJudgement). */
-export function toJudgement(set: Record<keyof OfferJudgement, { value: number }>): OfferJudgement {
-  return Object.fromEntries(JUDGEMENT_KEYS.map((k) => [k, set[k].value])) as Record<keyof OfferJudgement, number>;
+/**
+ * Strip the reasons from the offer's figures and keep the numbers, for the figures the agents argue
+ * and nothing else. A figure the set does not hold is left out. Code then keeps them in range and
+ * the ladders rising (enforceJudgement).
+ */
+export function toJudgement(set: Partial<Record<string, { value?: unknown } | null>> | null | undefined): Partial<OfferJudgement> {
+  const out: Partial<OfferJudgement> = {};
+  for (const key of AGENT_JUDGEMENT_KEYS) {
+    const value = set?.[key]?.value;
+    if (typeof value === "number") out[key] = value;
+  }
+  return out;
 }
 
 /** Look up one reasoned value by its flat path, e.g. "fragility.concrete_rcc". */
@@ -175,7 +189,7 @@ export function nestParameters(entries: unknown): Record<string, unknown> {
   return out;
 }
 
-/** The offer's five figures picked out of the same flat list, by key: "offer.siteRadiusM" becomes siteRadiusM. A repeated name keeps its last entry. */
+/** The offer's figures picked out of the same flat list, by key: "offer.bufferRadiusM" becomes bufferRadiusM. A repeated name keeps its last entry. */
 export function nestJudgement(entries: unknown): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   if (!Array.isArray(entries)) return out;
@@ -190,7 +204,7 @@ export function nestJudgement(entries: unknown): Record<string, unknown> {
 
 /**
  * Replies arrive flat (see responseSchema.ts); the rest of the app works with the nested form.
- * With an offer loaded, the offer's five figures are set aside under offerJudgement, beside the
+ * With an offer loaded, the offer's figures are set aside under offerJudgement, beside the
  * model's parameters, so everything that reads the parameters is unchanged.
  */
 export function nestReply(role: Role, reply: unknown, hasOffer = false): unknown {
@@ -201,5 +215,5 @@ export function nestReply(role: Role, reply: unknown, hasOffer = false): unknown
   return role === "chair" ? { ...rest, decision: nested, ...offer } : { ...rest, ...nested, ...offer };
 }
 
-/** Where a reply fell short, named the way the agent names things so the retry can point at it: "offer.siteRadiusM", not the nested path. */
+/** Where a reply fell short, named the way the agent names things so the retry can point at it: "offer.bufferRadiusM", not the nested path. */
 export const issueName = (path: readonly PropertyKey[]): string => path.map(String).join(".").replace(/^offerJudgement\./, "offer.");

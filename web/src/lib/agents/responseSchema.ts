@@ -10,8 +10,9 @@ import { basesFor, parameterNames, type Role } from "./schema";
  * accepted by the API but never started producing text. The route turns the
  * flat list back into the nested form that the Zod schemas validate.
  *
- * With an offer loaded the same flat list is longer: the offer's five judgement
- * figures follow the model's parameters, and nothing is nested any deeper.
+ * With an offer loaded the same flat list is longer: the figures behind the offer's
+ * loss drivers that the agents argue follow the model's parameters, one entry each,
+ * and nothing is nested any deeper. A ladder is five entries, not a list inside one.
  */
 type Schema = Record<string, unknown>;
 

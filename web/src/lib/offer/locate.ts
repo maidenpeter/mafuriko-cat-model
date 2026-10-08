@@ -1,5 +1,5 @@
 import { cellSizeM } from "../geo/drainage";
-import type { Geometry, Position } from "../geo/layers";
+import type { GeoCollection, Geometry, Position, WaterwayKind, WaterwayProps } from "../geo/layers";
 import { assignPoints, geometryContains } from "../geo/spatial";
 import { cleanValue } from "../ingest/raster";
 import type { LocateByName, NearestWetCellM, PlaceMatch, RiverDistanceM, WardOf } from "./types";
@@ -183,27 +183,59 @@ export const riverDistanceM: RiverDistanceM = (point, riverName, waterways) => {
   if (matches.length === 0) matches = named.filter((n) => hasWords(n.key, wanted) || hasWords(wanted, n.key));
   if (matches.length === 0) return null;
 
-  // Degrees to metres around the point: accurate to well under 1% over the distances that matter here.
-  const mLon = M_PER_DEG_LON * Math.cos((point.lat * Math.PI) / 180);
   let distanceM = Infinity;
   let matchedName = "";
   for (const { feature } of matches) {
-    const g = feature.geometry;
-    const lines = g.type === "LineString" ? [g.coordinates] : g.type === "MultiLineString" ? g.coordinates : g.type === "Point" ? [[g.coordinates]] : [];
-    for (const line of lines) {
-      for (let i = 0; i < line.length; i++) {
-        const a = line[Math.max(0, i - 1)];
-        const b = line[i];
-        const d = toSegmentM((a[0] - point.lon) * mLon, (a[1] - point.lat) * M_PER_DEG_LAT, (b[0] - point.lon) * mLon, (b[1] - point.lat) * M_PER_DEG_LAT);
-        if (d < distanceM) {
-          distanceM = d;
-          matchedName = feature.properties.name ?? "";
-        }
-      }
+    const d = toGeometryM(point, feature.geometry);
+    if (d < distanceM) {
+      distanceM = d;
+      matchedName = feature.properties.name ?? "";
     }
   }
   return Number.isFinite(distanceM) ? { distanceM, matchedName } : null;
 };
+
+/** Metres from the point to the nearest stretch of a line, or to a point. Infinity for any other shape. */
+function toGeometryM(point: { lat: number; lon: number }, g: Geometry): number {
+  // Degrees to metres around the point: accurate to well under 1% over the distances that matter here.
+  const mLon = M_PER_DEG_LON * Math.cos((point.lat * Math.PI) / 180);
+  const lines = g.type === "LineString" ? [g.coordinates] : g.type === "MultiLineString" ? g.coordinates : g.type === "Point" ? [[g.coordinates]] : [];
+  let best = Infinity;
+  for (const line of lines) {
+    for (let i = 0; i < line.length; i++) {
+      const a = line[Math.max(0, i - 1)];
+      const b = line[i];
+      const d = toSegmentM((a[0] - point.lon) * mLon, (a[1] - point.lat) * M_PER_DEG_LAT, (b[0] - point.lon) * mLon, (b[1] - point.lat) * M_PER_DEG_LAT);
+      if (d < best) best = d;
+    }
+  }
+  return best;
+}
+
+/** The nearest waterway of the kinds asked for. */
+export interface WaterwayMatch {
+  distanceM: number;
+  /** The name as the layer spells it. null when the layer gives it none, which is usual for a drain. */
+  name: string | null;
+  kind: WaterwayKind;
+}
+
+/**
+ * The nearest waterway of the given kinds in the open waterways layer, whatever it is called:
+ * pass ["river", "stream"] for natural water, or the drain kinds for drains, ditches and canals.
+ * null when the layer is missing or holds nothing of those kinds.
+ */
+export function nearestWaterway(point: { lat: number; lon: number }, waterways: GeoCollection<WaterwayProps> | null, kinds: Iterable<string>): WaterwayMatch | null {
+  if (!waterways || !Number.isFinite(point.lat) || !Number.isFinite(point.lon)) return null;
+  const wanted = new Set(kinds);
+  let best: WaterwayMatch | null = null;
+  for (const f of waterways.features) {
+    if (!wanted.has(f.properties.kind)) continue;
+    const d = toGeometryM(point, f.geometry);
+    if (d < (best?.distanceM ?? Infinity)) best = { distanceM: d, name: f.properties.name?.trim() || null, kind: f.properties.kind };
+  }
+  return best;
+}
 
 // ---------------------------------------------------------------------------------------------
 // Nearest flooded cell

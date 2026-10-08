@@ -11,23 +11,20 @@
  *     onReplaceData={(zip) => ...}    a .zip given here is model data, not an offer
  *   />
  *
- * To accept another kind of document, add it to OFFER_FILE_TYPES below and nowhere else.
+ * Which files count as an offer is decided in lib/offerFiles/kind.ts, the same list the
+ * "Read the offer" step opens files with. OFFER_FILE_TYPES below only names them for the reader.
  */
 
 import { useId, useRef, useState } from "react";
-import { droppedFileKind } from "@/lib/dashboard";
+import { ACCEPT, offerFileKind, offerFileProblem } from "@/lib/offerFiles/kind";
 import { STEP_NAMES, stepIndex } from "@/lib/steps";
 import { Button, Card, StatusIcon } from "../ui";
 
-/** The documents this card takes as an offer. The picker, the sorting and the wording all read this list. */
-const OFFER_FILE_TYPES: readonly { ext: string; name: string }[] = [
-  { ext: ".docx", name: "Word (.docx)" },
-  { ext: ".txt", name: "text (.txt)" },
-];
-const OFFER_EXTENSIONS = OFFER_FILE_TYPES.map((t) => t.ext);
+/** The documents this card takes as an offer, as the reader is told them. */
+const OFFER_FILE_TYPES: readonly string[] = ["Word (.docx)", "PDF (.pdf)", "text (.txt)"];
 /** A zip is model data. The picker offers it too, so a different data set can be given from here. */
 const MODEL_DATA_EXTENSION = ".zip";
-const PICKER_ACCEPT = [...OFFER_EXTENSIONS, MODEL_DATA_EXTENSION].join(",");
+const PICKER_ACCEPT = `${ACCEPT},${MODEL_DATA_EXTENSION}`;
 const EXAMPLE = "two-storey masonry shop in Kibera worth KES 8 million";
 
 /** "Word (.docx) or text (.txt)", "A, B or C". */
@@ -35,7 +32,7 @@ function listed(names: string[]): string {
   if (names.length <= 1) return names.join("");
   return `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
 }
-const OFFER_TYPES_TEXT = listed(OFFER_FILE_TYPES.map((t) => t.name));
+const OFFER_TYPES_TEXT = listed([...OFFER_FILE_TYPES]);
 
 interface Props {
   /** The reader pressed "Read this offer". Exactly one of file and text is set. */
@@ -60,14 +57,13 @@ export function OfferDropCard({ onOffer, onReplaceData }: Props) {
   function take(given: File | undefined, others = 0) {
     if (!given) return;
     const extra = others > 0 ? ` Only the first of the ${others + 1} files was taken.` : "";
-    const kind = droppedFileKind(given.name, OFFER_EXTENSIONS);
-    if (kind === "model-data") {
+    // An old Word file and any other kind this app does not read are refused here, in the words the offer step uses.
+    const problem = offerFileProblem(offerFileKind(given.name, given.type));
+    if (given.name.trim().toLowerCase().endsWith(MODEL_DATA_EXTENSION)) {
       setMessage({ tone: "info", text: `${given.name} is a zip, so it is taken as model data, not as an offer. It replaces the model data now.${extra}` });
       onReplaceData(given);
-    } else if (kind === "old-word") {
-      setMessage({ tone: "warn", text: "Old Word format, please save as .docx" });
-    } else if (kind === "unsupported") {
-      setMessage({ tone: "warn", text: `${given.name} cannot be read here. An offer is a ${OFFER_TYPES_TEXT} file, or a description typed in the box.` });
+    } else if (problem) {
+      setMessage({ tone: "warn", text: problem });
     } else {
       setFile(given);
       // One source at a time: a chosen file takes the place of typed words.

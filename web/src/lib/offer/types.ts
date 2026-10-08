@@ -794,6 +794,20 @@ export interface ExtractionRun {
   model: string | null;
   usage: Usage | null;
   ms: number | null;
+  /**
+   * The model's reply as the route handed it back, written out as JSON text for the audit trail.
+   * Kept whenever a reply arrived, even one that could not be used. null or absent when there was none.
+   */
+  replyJson?: string | null;
+}
+
+/** One offer as it stands on screen. The walkthrough keeps it, so a visit to another step does not lose it. */
+export interface OfferState {
+  document: OfferDocument;
+  /** How the offer was read: the path, the text that was read and what was taken out of it. */
+  run: ExtractionRun;
+  /** What was read, with the underwriter's confirmations and edits applied. */
+  extraction: OfferExtraction;
 }
 
 /**

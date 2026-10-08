@@ -19,7 +19,7 @@ const saysSomething = (entries: { value: string; quote: string }[]) => entries.s
 export const extractOffer: ExtractOffer = async (text, options = {}) => {
   const { text: documentText, removed } = redact(text);
 
-  const byRules = (fallbackReason: string, sentToModel: boolean, call: Partial<Pick<ExtractionRun, "prompt" | "model" | "usage" | "ms">> = {}): ExtractionRun => ({
+  const byRules = (fallbackReason: string, sentToModel: boolean, call: Partial<Pick<ExtractionRun, "prompt" | "model" | "usage" | "ms" | "replyJson">> = {}): ExtractionRun => ({
     extraction: verifyExtraction(extractByRules(documentText, options.knownPlaces), documentText),
     documentText,
     removed,
@@ -30,6 +30,7 @@ export const extractOffer: ExtractOffer = async (text, options = {}) => {
     model: null,
     usage: null,
     ms: null,
+    replyJson: null,
     ...call,
   });
 
@@ -55,7 +56,8 @@ export const extractOffer: ExtractOffer = async (text, options = {}) => {
     return byRules(`The call to the model failed: ${body.error}. The fixed rules read the text instead.`, true, call);
   }
 
-  const call = { prompt: body.prompt, model: body.model, usage: body.usage, ms: body.ms };
+  // The reply is kept as text for the audit trail, whether or not it turns out to be usable.
+  const call = { prompt: body.prompt, model: body.model, usage: body.usage, ms: body.ms, replyJson: body.reply === undefined ? null : JSON.stringify(body.reply, null, 1) };
   // The route has checked the shape already. Checking again here costs nothing and means a
   // changed route can never hand the screen something it cannot draw.
   const reply = offerReplySchema.safeParse(body.reply);

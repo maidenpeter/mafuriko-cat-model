@@ -1,74 +1,46 @@
 "use client";
 
 import { useEffect, useEffectEvent, useId, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
-import { summarise, type Check } from "@/lib/checks";
 import { fmtInt, fmtNum, fmtPct } from "@/lib/format";
-import type { DrainageState } from "@/lib/geo/drainageView";
-import { loadGeo, type GeoLayers } from "@/lib/geo/layers";
-import { annualChance, kes1, rpLabel, rpWithChance, type SourceKind } from "@/lib/labels";
-import { lossAtReturnPeriod } from "@/lib/model/financial";
-import type { InsuranceTerms } from "@/lib/model/terms";
-import { HOUSING_CLASSES, HOUSING_LABELS, type Dataset } from "@/lib/model/types";
-import { offerChecks } from "@/lib/offer/checks";
+import { loadGeo } from "@/lib/geo/layers";
+import { kes1, rpWithChance, type SourceKind } from "@/lib/labels";
 import { extractOffer } from "@/lib/offer/client";
-import { describeReading } from "@/lib/offer/coords";
 import { offerCsv } from "@/lib/offer/csv";
-import { readOfferFile } from "@/lib/offer/docx";
-import { NOTE_LABELS } from "@/lib/offer/extraction";
-import { priceOffer, pricingRows } from "@/lib/offer/price";
-import { describeRemoved } from "@/lib/offer/redact";
-import { fmtDistance, fmtPoint, plural } from "@/lib/offer/shared";
-import { describeTerms, policyTerms } from "@/lib/offer/terms";
-import {
-  OUTSIDE_MAPS_MESSAGE,
-  type ExtractionRun,
-  type OfferDocument,
-  type OfferExtraction,
-  type OfferFile,
-  type OfferLocation,
-  type OfferPricing,
-  type OfferRowValues,
-  type OfferTerms,
-  type PolicyTerms,
-  type PortfolioEffect,
-  type Quoted,
-  type RowPricing,
-  type ValueRef,
-  type ValueStatus,
-  type WaitingValue,
-} from "@/lib/offer/types";
-import { confirmValue, editValue, statusCounts, usableValue, waitingValues } from "@/lib/offer/verify";
+import { docxToText } from "@/lib/offer/docx";
+import { ROW_FIELDS, TERM_FIELDS, type FieldDef, type FieldKind } from "@/lib/offer/fields";
+import type { FieldOrigin, FocusBuilding, FocusDocument, FocusField, OfferFocus, PricedFocus } from "@/lib/offer/focus";
+import { fmtDistance, plural } from "@/lib/offer/shared";
+import { OUTSIDE_MAPS_MESSAGE, type OfferDocument, type OfferExtraction, type OfferFile, type OfferState, type ValueRef } from "@/lib/offer/types";
+import { confirmValue, editValue, statusCounts } from "@/lib/offer/verify";
+import { ACCEPT, offerFileKind, offerFileProblem } from "@/lib/offerFiles/kind";
+import { pdfToText } from "@/lib/offerFiles/pdf";
 import { download, type Active, type Session } from "@/lib/session";
-import { STEP_NAMES, stepKicker } from "@/lib/steps";
-import { SourceBadge, SourceLine, type ChartSource } from "../charts/ChartFrame";
-import { Figure } from "../charts/Figure";
+import { STEP_NAMES, stepIndex, stepKicker, type StepId } from "@/lib/steps";
+import { SourceLine, type ChartSource } from "../charts/ChartFrame";
 import type { OfferSummary } from "../dashboard/Dashboard";
-import { Button, Card, CheckList, ChecksSummary, Note, StatusIcon, StepHeader, Tag } from "../ui";
+import { DocumentQuotes, type DocumentQuote } from "../DocumentQuotes";
+import { Button, Card, ChecksSummary, Note, StatusIcon, StepHeader, Tag } from "../ui";
 
-/** One offer as it stands on screen. The walkthrough keeps it, so a visit to another step does not lose it. */
-export interface OfferState {
-  document: OfferDocument;
-  /** How the offer was read: the path, the text that was read and what was taken out of it. */
-  run: ExtractionRun;
-  /** What was read, with the underwriter's confirmations and edits applied. */
-  extraction: OfferExtraction;
-}
+/** The offer as it stands on screen. The type lives in lib/offer/types; it is named here too for the files that took it from this step. */
+export type { OfferState };
 
 interface Props {
   /** The loaded dataset as every step shows it. */
   session: Session;
-  active: Active;
-  /** The drainage state when drainage is switched on, otherwise null. */
-  drainage: DrainageState | null;
+  /** The assumptions in force. Not read here: the price comes ready in offerFocus. */
+  active?: Active;
   /** Whether a key is set for the model. null while that is not known. */
   modelReady: boolean | null;
   offer: OfferState | null;
   onOffer: (next: OfferState | null) => void;
   /**
-   * The policy terms of the Insurance terms panel: a deductible as a share of insured value with
-   * a KES minimum, and a limit as a share of insured value. Used when the document states none.
+   * The walkthrough's one picture of the offer: located, priced and checked there, by code, on the
+   * loaded maps and the assumptions in force. This step shows it; it prices nothing itself.
+   * null when no offer has been read.
    */
-  policyDefaults: InsuranceTerms;
+  offerFocus: OfferFocus | null;
+  /** The priced offer while the header switch is on "Offer". This step shows the offer in either mode, so it reads offerFocus. */
+  focus?: PricedFocus | null;
   /** A line for the run log. Never carries document text. */
   onLog: (message: string) => void;
   /**
@@ -78,6 +50,8 @@ interface Props {
   incoming?: { file?: File; text?: string; seq: number } | null;
   /** Called whenever the priced result changes, and with null when the offer is cleared. */
   onSummary?: (summary: OfferSummary | null) => void;
+  /** Opens another step of the walkthrough. When it is not given, the lead to the next step is a sentence, not a button. */
+  onOpenStep?: (id: StepId) => void;
 }
 
 /**
@@ -87,105 +61,32 @@ interface Props {
 let lastIncomingSeq: number | null = null;
 
 // ---------------------------------------------------------------------------------------------
-// The fields, in the order they are shown
+// Opening a file
 // ---------------------------------------------------------------------------------------------
 
-type FieldKind = "text" | "degrees" | "kes" | "area" | "percent" | "count" | "metres" | "choice";
-
-interface FieldDef<K extends string> {
-  key: K;
-  label: string;
-  kind: FieldKind;
-  hint?: string;
-  choices?: { value: string; label: string }[];
-  /** What the empty choice of a list says. */
-  empty?: string;
+/**
+ * Opens a Word, PDF or text file in this browser. Nothing is sent anywhere until the offer is read.
+ * Rejects with a sentence ready to show: an old .doc file gives "Old Word format, please save as .docx".
+ */
+async function openOfferFile(file: OfferFile & { type?: string }): Promise<OfferDocument> {
+  const kind = offerFileKind(file.name, file.type);
+  const problem = offerFileProblem(kind);
+  if (problem) throw new Error(problem);
+  let text: string;
+  if (kind === "pdf") text = await pdfToText(await file.arrayBuffer());
+  else if (kind === "docx") text = await docxToText(await file.arrayBuffer());
+  // Windows line endings and a leading byte order mark would otherwise end up inside quotes.
+  else text = (await file.text()).replace(/^﻿/, "").replace(/\r\n?/g, "\n");
+  if (!text.trim()) throw new Error(`${file.name} has no text in it.`);
+  // A PDF is held as plain text from here on: OfferDocument has no kind of its own for it, and the file name keeps the ".pdf".
+  return { name: file.name, kind: kind === "docx" ? "docx" : "txt", text };
 }
 
-const ROW_FIELDS: FieldDef<keyof OfferRowValues>[] = [
-  { key: "name", label: "Building name", kind: "text" },
-  { key: "lat", label: "Latitude", kind: "degrees", hint: "Decimal degrees. South is negative." },
-  { key: "lon", label: "Longitude", kind: "degrees", hint: "Decimal degrees. East is positive." },
-  { key: "housingClass", label: "Construction class", kind: "choice", choices: HOUSING_CLASSES.map((c) => ({ value: c, label: HOUSING_LABELS[c] })), empty: "Not stated: pick one" },
-  { key: "floorAreaM2", label: "Floor area (m²)", kind: "area" },
-  { key: "costPerM2Kes", label: "Cost per m² (KES)", kind: "kes" },
-  { key: "tivKes", label: "Insured value (KES)", kind: "kes", hint: "Left empty, it is worked out as floor area × cost per m²." },
-];
-
-const TERM_GROUPS: { title: string; fields: FieldDef<keyof OfferTerms>[] }[] = [
-  {
-    title: "Flood terms",
-    fields: [
-      { key: "floodDeductiblePct", label: "Flood deductible (%)", kind: "percent", hint: "With no percentage and no minimum, the example terms are used." },
-      { key: "floodDeductibleMinKes", label: "Deductible minimum (KES)", kind: "kes", hint: "With no percentage, this is a flat deductible." },
-      {
-        key: "floodDeductibleBasis",
-        label: "The percentage is taken of",
-        kind: "choice",
-        choices: [
-          { value: "percent_of_loss", label: "Each loss" },
-          { value: "percent_of_sum_insured", label: "The insured value" },
-        ],
-        empty: "Not stated: read as each loss",
-      },
-      { key: "floodLimitKes", label: "Flood limit (KES)", kind: "kes", hint: "Left empty, the example limit is used." },
-      {
-        key: "floodCover",
-        label: "Flood cover",
-        kind: "choice",
-        choices: [
-          { value: "covered", label: "Covered" },
-          { value: "excluded", label: "Excluded" },
-        ],
-      },
-      { key: "policyPeriod", label: "Policy period", kind: "text" },
-    ],
-  },
-  {
-    title: "The building and where it is",
-    fields: [
-      { key: "basements", label: "Basement levels", kind: "count", hint: "0 means the document says there are none." },
-      {
-        key: "occupancy",
-        label: "Occupancy",
-        kind: "choice",
-        choices: [
-          { value: "residential", label: "Residential" },
-          { value: "commercial", label: "Commercial" },
-          { value: "industrial", label: "Industrial" },
-          { value: "mixed", label: "Mixed use" },
-          { value: "other", label: "Other" },
-        ],
-      },
-      { key: "placeName", label: "Place name", kind: "text", hint: "Used for a building with no coordinates: a ward or a named flood area." },
-      { key: "riverName", label: "Nearest river named", kind: "text" },
-      { key: "riverDistanceM", label: "Stated distance to it (m)", kind: "metres" },
-    ],
-  },
-];
-
-const TERM_FIELDS = TERM_GROUPS.flatMap((g) => g.fields);
-
-const STATUS_WORDS: Record<ValueStatus, string> = {
-  verified: "Verified",
-  unverified: "Unverified",
-  confirmed: "Confirmed by you",
-  edited: "Edited by you",
-  missing: "Not stated",
-};
+const typedDocument = (text: string): OfferDocument => ({ name: "typed text", kind: "typed", text });
 
 // ---------------------------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------------------------
-
-/** "1-in-100" with its annual chance beside it, as every table in the app writes a return period. */
-function ReturnPeriod({ years }: { years: number }) {
-  return (
-    <>
-      {rpLabel(years)} <span className="text-xs text-muted">{annualChance(years)}</span>
-    </>
-  );
-}
 
 const fmtRate = (perMille: number) => `${fmtNum(perMille, perMille !== 0 && Math.abs(perMille) < 0.1 ? 4 : 2)} per mille`;
 
@@ -205,44 +106,16 @@ function plainer(value: string | number | null, kind: FieldKind): string | null 
   return null;
 }
 
-/** A value in words, for a sentence: a choice by its label, a figure with its separators. */
-function inWords(value: string | number | null, field: FieldDef<string>): string {
-  if (value === null) return "nothing readable";
-  return field.choices?.find((c) => c.value === value)?.label ?? boxText(value, field.kind);
+/** The box a value is typed into: its kind, its choices and its hint. Notes have none. */
+function defOf(ref: ValueRef): FieldDef<string> | null {
+  if (ref.scope === "row") return ROW_FIELDS.find((f) => f.key === ref.key) ?? null;
+  if (ref.scope === "terms") return TERM_FIELDS.find((f) => f.key === ref.key) ?? null;
+  return null;
 }
-
-/** A value pricing is waiting for, with the box it belongs to. The list itself comes from waitingValues. */
-interface HoldUp extends WaitingValue {
-  where: string;
-  field: FieldDef<string>;
-}
-
-function holdUps(extraction: OfferExtraction): HoldUp[] {
-  return waitingValues(extraction).flatMap((w): HoldUp[] => {
-    const { ref } = w;
-    const field: FieldDef<string> | undefined = ref.scope === "row" ? ROW_FIELDS.find((f) => f.key === ref.key) : ref.scope === "terms" ? TERM_FIELDS.find((f) => f.key === ref.key) : undefined;
-    return field ? [{ ...w, field, where: ref.scope === "row" ? `Building ${ref.row + 1}` : "Offer" }] : [];
-  });
-}
-
-/** The ground the loaded hazard maps cover, in words. */
-function coverage(dataset: Dataset): string | null {
-  const boxes = dataset.rasters.map((r) => r.bbox);
-  if (boxes.length === 0) return null;
-  const minLon = Math.max(...boxes.map((b) => b[0]));
-  const minLat = Math.max(...boxes.map((b) => b[1]));
-  const maxLon = Math.min(...boxes.map((b) => b[2]));
-  const maxLat = Math.min(...boxes.map((b) => b[3]));
-  const lat = (v: number) => `${fmtNum(Math.abs(v), 2)}° ${v < 0 ? "S" : "N"}`;
-  const lon = (v: number) => `${fmtNum(Math.abs(v), 2)}° ${v < 0 ? "W" : "E"}`;
-  return `The maps loaded (${dataset.name}) cover ${lat(minLat)} to ${lat(maxLat)} and ${lon(minLon)} to ${lon(maxLon)}.`;
-}
-
-// ---------------------------------------------------------------------------------------------
-// One value: its box, its status, its sentence
-// ---------------------------------------------------------------------------------------------
 
 const BOX = "w-full min-w-0 rounded-lg border border-axis bg-surface px-2.5 py-1.5 text-sm text-ink placeholder:text-muted";
+const PRE = "mt-1 max-h-72 overflow-auto whitespace-pre-wrap wrap-break-word rounded-lg bg-surface-2 p-2.5 font-mono text-xs leading-relaxed text-ink-2";
+const GROUP_TITLE = "mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-muted";
 
 function SmallButton({ children, onClick }: { children: ReactNode; onClick: () => void }) {
   return (
@@ -252,40 +125,62 @@ function SmallButton({ children, onClick }: { children: ReactNode; onClick: () =
   );
 }
 
-/** The status of a value, by shape and by word, so it does not rest on colour. */
-function StatusMark({ status }: { status: ValueStatus }) {
+// ---------------------------------------------------------------------------------------------
+// Where a value came from, by shape and by word
+// ---------------------------------------------------------------------------------------------
+
+const ORIGIN_WORDS: Record<FieldOrigin, string> = {
+  "AI, verified": "AI, verified",
+  "AI, unverified": "AI, unverified",
+  rules: "Rules",
+  confirmed: "Confirmed by you",
+  edited: "Edited by you",
+  "not stated": "Not stated",
+};
+
+/** Each origin has its own shape and its own words, so it never rests on colour. A value the rules read but code could not check says so. */
+function OriginMark({ origin, unverified }: { origin: FieldOrigin; unverified: boolean }) {
+  const drawn = (children: ReactNode) => (
+    <svg viewBox="0 0 20 20" aria-hidden className="h-3.5 w-3.5 shrink-0" fill="none" stroke="var(--ink-2)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {children}
+    </svg>
+  );
   const icon =
-    status === "verified" ? (
+    origin === "AI, verified" ? (
       <StatusIcon status="pass" size={14} />
-    ) : status === "unverified" ? (
+    ) : origin === "AI, unverified" || (origin === "rules" && unverified) ? (
       <StatusIcon status="warn" size={14} />
-    ) : status === "missing" ? (
+    ) : origin === "not stated" ? (
       <StatusIcon status="idle" size={14} />
+    ) : origin === "rules" ? (
+      drawn(<path d="M3 5h14M3 10h14M3 15h9" />)
+    ) : origin === "confirmed" ? (
+      drawn(
+        <>
+          <rect x="2.5" y="2.5" width="15" height="15" rx="3" />
+          <path d="M6 10.3l2.8 2.8 5.4-6" />
+        </>,
+      )
     ) : (
-      <svg viewBox="0 0 20 20" aria-hidden className="h-3.5 w-3.5 shrink-0" fill="none" stroke="var(--ink-2)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        {status === "confirmed" ? (
-          <>
-            <rect x="2.5" y="2.5" width="15" height="15" rx="3" />
-            <path d="M6 10.3l2.8 2.8 5.4-6" />
-          </>
-        ) : (
-          <path d="M3 17l1-4L14 3l3 3L7 16z" />
-        )}
-      </svg>
+      drawn(<path d="M3 17l1-4L14 3l3 3L7 16z" />)
     );
   return (
     <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-ink-2">
       {icon}
-      {STATUS_WORDS[status]}
+      {origin === "rules" && unverified ? "Rules, unverified" : ORIGIN_WORDS[origin]}
     </span>
   );
 }
+
+// ---------------------------------------------------------------------------------------------
+// One value: its name, its origin, its box
+// ---------------------------------------------------------------------------------------------
 
 /**
  * A box the underwriter types into. The value is taken when they leave the box or press Enter,
  * and only when it differs from what was there: looking at a verified value does not make it "edited".
  */
-function TypedBox({ id, initial, kind, onCommit }: { id: string; initial: string; kind: FieldKind; onCommit: (text: string | null) => boolean }) {
+function TypedBox({ id, label, initial, kind, onCommit }: { id: string; label: string; initial: string; kind: FieldKind; onCommit: (text: string | null) => boolean }) {
   const [draft, setDraft] = useState(initial);
   const [refused, setRefused] = useState(false);
   const commit = () => {
@@ -297,6 +192,7 @@ function TypedBox({ id, initial, kind, onCommit }: { id: string; initial: string
     <div className="min-w-0 flex-1">
       <input
         id={id}
+        aria-label={label}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
@@ -318,343 +214,317 @@ function TypedBox({ id, initial, kind, onCommit }: { id: string; initial: string
   );
 }
 
-function ValueField({ field, quoted, onEdit, onConfirm }: { field: FieldDef<string>; quoted: Quoted<string | number>; onEdit: (value: string | null) => boolean; onConfirm: () => void }) {
+interface FieldRowProps {
+  field: FocusField;
+  /** True when this is the value picked out in the document. */
+  active: boolean;
+  /** Picks this value out in the document. */
+  onSelect: () => void;
+  onEdit: (value: string | null) => boolean;
+  onConfirm: () => void;
+}
+
+/**
+ * One value. Its name is a button where the document holds its sentence: pressing it shows the
+ * sentence in the document. The box is not part of that button, so typing in it stays in the box.
+ */
+function FieldRow({ field, active, onSelect, onEdit, onConfirm }: FieldRowProps) {
   const id = useId();
-  const text = boxText(quoted.value, field.kind);
-  const short = plainer(quoted.value, field.kind);
+  const def = defOf(field.ref);
+  const unverified = field.status === "unverified";
+  const quoted = field.mark !== null && field.quote.trim() !== "";
+  const short = def ? plainer(field.raw, def.kind) : null;
+  const isNote = field.group === "note";
   return (
-    <div className="min-w-0 rounded-xl border border-line bg-surface-2 p-3">
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        <label htmlFor={id} className="text-sm font-medium text-ink">{field.label}</label>
-        <StatusMark status={quoted.status} />
-      </div>
-      <div className="mt-1.5 flex items-start gap-2">
-        {field.choices ? (
-          <select id={id} value={typeof quoted.value === "string" ? quoted.value : ""} onChange={(e) => onEdit(e.target.value || null)} className={BOX}>
-            <option value="">{field.empty ?? "Not stated"}</option>
-            {field.choices.map((c) => (
-              <option key={c.value} value={c.value}>{c.label}</option>
-            ))}
-          </select>
-        ) : (
-          // Keyed by what it shows, so the box starts afresh whenever the value changes underneath it.
-          <TypedBox key={`${quoted.status}:${text}`} id={id} initial={text} kind={field.kind} onCommit={onEdit} />
-        )}
-        {quoted.status === "unverified" && quoted.value !== null && <SmallButton onClick={onConfirm}>Confirm</SmallButton>}
-      </div>
-      {(short || field.hint) && <p className="mt-1 text-xs leading-relaxed text-muted">{[short, field.hint].filter(Boolean).join(" · ")}</p>}
-      {quoted.status === "unverified" && (
-        <p className="mt-1.5 text-xs leading-relaxed text-ink-2">
-          {quoted.reason ?? "This value has not been checked."} {quoted.value !== null ? "Not used until you confirm it or type over it." : "Type the value to use it."}
-        </p>
-      )}
-      {quoted.quote.trim() && (
-        <details className="mt-1.5 text-xs text-muted">
-          <summary className="cursor-pointer select-none hover:text-ink-2">{quoted.status === "edited" ? "Sentence first given for it" : "Source sentence"}</summary>
-          <blockquote className="mt-1 border-l-2 border-axis pl-2.5 leading-relaxed whitespace-pre-wrap wrap-anywhere text-ink-2">{quoted.quote}</blockquote>
-        </details>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------------------------
-// Where a building is taken to be
-// ---------------------------------------------------------------------------------------------
-
-function LocationLine({ location }: { location: OfferLocation }) {
-  let body: ReactNode;
-  if (location.kind === "exact") {
-    const r = location.reading;
-    body = (
-      <>
-        <Tag kind="real">Exact coordinates</Tag>
-        <span className="min-w-0 flex-1 basis-64">
-          {fmtPoint(location.lat, location.lon)}. {r ? <>Read from &ldquo;{r.raw}&rdquo; as {describeReading(r)}.</> : "Typed by you, not read from the document."}
-        </span>
-        {r?.writtenBothWays && !r.conflict && (
-          <span className="flex basis-full items-start gap-2">
-            <span className="mt-0.5"><StatusIcon status="warn" size={14} /></span>
-            Written both ways: the document gives a minus sign and a hemisphere letter for the same number. They say the same thing, so the point is used as read.
-          </span>
-        )}
-        {r?.conflict && (
-          <span className="flex basis-full items-start gap-2">
-            <span className="mt-0.5"><StatusIcon status="warn" size={14} /></span>
-            The minus sign and the hemisphere letter disagree. The letter was used, and you confirmed the point.
-          </span>
-        )}
-      </>
-    );
-  } else if (location.kind === "approximate") {
-    const from = location.source === "ward" ? `the centre of ${location.matchedName} ward` : `the point of the named flood area "${location.matchedName}"`;
-    body = (
-      <>
-        <Tag kind="assumption">Approximate location</Tag>
-        <span className="min-w-0 flex-1 basis-64">
-          No usable coordinates, so &ldquo;{location.placeName}&rdquo; stands in: {from}, at {fmtPoint(location.lat, location.lon)}. Every figure for this building depends on that stand-in point.
-        </span>
-      </>
-    );
-  } else {
-    body = (
-      <>
-        <span className="mt-0.5"><StatusIcon status="warn" size={16} /></span>
-        <span className="min-w-0 flex-1 basis-64">
-          <span className="font-semibold text-ink">Not located.</span> {location.reason} Type a latitude and longitude above, or give a ward or a named flood area as the place name under the terms.
-        </span>
-      </>
-    );
-  }
-  return (
-    <div className="mt-3 flex flex-wrap items-start gap-x-3 gap-y-1.5 rounded-xl border border-line p-3 text-sm leading-relaxed text-ink-2">
-      <span className="font-semibold text-ink">Location</span>
-      {body}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------------------------
-// What was sent
-// ---------------------------------------------------------------------------------------------
-
-const PRE = "mt-1 max-h-72 overflow-auto whitespace-pre-wrap wrap-break-word rounded-lg bg-surface-2 p-2.5 font-mono text-xs leading-relaxed text-ink-2";
-
-function SentCard({ offer }: { offer: OfferState }) {
-  const { run, document } = offer;
-  const byModel = run.path === "model";
-  const chars = `${fmtInt(run.documentText.length)} characters`;
-  const tokens = run.usage?.promptTokens ? `, ${fmtInt(run.usage.promptTokens)} tokens read and ${fmtInt(run.usage.outputTokens ?? 0)} written` : "";
-  return (
-    <Card
-      title={run.sentToModel ? "What was sent to the model" : "Nothing was sent to the model"}
-      aside={<Tag kind={byModel ? "ai" : "none"}>{byModel ? "Read by the model" : "Read by the fixed rules"}</Tag>}
+    <div
+      data-field={field.id}
+      aria-current={active ? "true" : undefined}
+      // The value picked out carries a thick rule down its side as well as the wash.
+      className={`min-w-0 rounded-xl border p-2.5 ${active ? "border-accent border-l-4 bg-accent-wash" : "border-line bg-surface-2"}`}
     >
-      <div className="space-y-3 text-sm leading-relaxed text-ink-2">
-        {byModel ? (
-          <p>
-            The text of <span className="font-medium text-ink">{document.name}</span> went to {run.model ?? "the model"}, which listed the buildings and the terms{run.ms ? ` in ${(run.ms / 1000).toFixed(1)} s` : ""}{tokens}. Code then checked every value against the same text.
-          </p>
-        ) : run.sentToModel ? (
-          <Note tone="warn">
-            The text of {document.name} was sent to the model, but its answer could not be used, so the fixed rules read the offer in this browser. {run.fallbackReason}
-          </Note>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        {quoted ? (
+          <button type="button" onClick={onSelect} aria-pressed={active} title="Show its sentence in the document" className="min-w-0 text-left text-sm font-medium text-ink underline decoration-dotted decoration-axis underline-offset-4 hover:decoration-ink-2">
+            {field.label}
+          </button>
+        ) : def ? (
+          <label htmlFor={id} className="min-w-0 text-sm font-medium text-ink">{field.label}</label>
         ) : (
-          <p>
-            <span className="font-medium text-ink">{document.name}</span> did not leave this browser. {run.fallbackReason}
-          </p>
+          <span className="min-w-0 text-sm font-medium text-ink">{field.label}</span>
         )}
-        <p>
-          {describeRemoved(run.removed, run.sentToModel)}
-          {run.removed.emails + run.removed.phones + run.removed.blocks.length > 0 ? " This was done in this browser, and a marker in square brackets shows where each one was." : ""}
-        </p>
-        <details>
-          <summary className="cursor-pointer select-none font-medium text-ink-2 hover:text-ink">
-            {run.sentToModel ? `Show the exact text sent (${chars})` : `Show the text the rules read (${chars})`}
-          </summary>
-          {run.prompt ? (
-            <>
-              <div className="mt-2 text-xs font-semibold text-ink-2">Instructions</div>
-              <pre className={PRE}>{run.prompt.system}</pre>
-              <div className="mt-2 text-xs font-semibold text-ink-2">Message, with the document as sent</div>
-              <pre className={PRE}>{run.prompt.user}</pre>
-            </>
+        <OriginMark origin={field.origin} unverified={unverified} />
+      </div>
+
+      {def ? (
+        <div className="mt-1.5 flex items-start gap-2">
+          {def.choices ? (
+            <select id={id} aria-label={field.label} value={typeof field.raw === "string" ? field.raw : ""} onChange={(e) => onEdit(e.target.value || null)} className={BOX}>
+              <option value="">{def.empty ?? "Not stated"}</option>
+              {def.choices.map((c) => (
+                <option key={c.value} value={c.value}>{c.label}</option>
+              ))}
+            </select>
           ) : (
+            // Keyed by what it shows, so the box starts afresh whenever the value changes underneath it.
+            <TypedBox key={`${field.status}:${boxText(field.raw, def.kind)}`} id={id} label={field.label} initial={boxText(field.raw, def.kind)} kind={def.kind} onCommit={onEdit} />
+          )}
+          {unverified && field.raw !== null && <SmallButton onClick={onConfirm}>Confirm</SmallButton>}
+        </div>
+      ) : (
+        isNote && field.value && field.value !== field.label && <p className="mt-1 text-sm leading-relaxed text-ink-2 wrap-anywhere">{field.value}</p>
+      )}
+
+      {def && (short || def.hint) && <p className="mt-1 text-xs leading-relaxed text-muted">{[short, def.hint].filter(Boolean).join(" · ")}</p>}
+
+      {unverified && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs leading-relaxed text-ink-2">
+          <span className="min-w-0 flex-1 basis-48">
+            {field.reason ?? "This value has not been checked."}{" "}
+            {isNote ? "Not used in the checks until confirmed." : field.raw !== null ? "Not used until you confirm it or type over it." : "Type the value to use it."}
+          </span>
+          {isNote && (
             <>
-              <div className="mt-2 text-xs font-semibold text-ink-2">The document, with contact details removed</div>
-              <pre className={PRE}>{run.documentText}</pre>
-              {run.sentToModel && <p className="mt-1 text-xs text-muted">The instructions sent around it were not reported back by the server.</p>}
+              {field.raw !== null && <SmallButton onClick={onConfirm}>Confirm</SmallButton>}
+              <SmallButton onClick={() => onEdit(null)}>Leave out</SmallButton>
             </>
           )}
-        </details>
-      </div>
-    </Card>
-  );
-}
-
-// ---------------------------------------------------------------------------------------------
-// The result
-// ---------------------------------------------------------------------------------------------
-
-function PricedBuilding({ priced, pricing, isScore }: { priced: Extract<RowPricing, { status: "priced" }>; pricing: OfferPricing; isScore: boolean }) {
-  const drainage = pricing.drainageOn;
-  return (
-    <div>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm text-ink-2">
-        <span className="font-semibold text-ink">{priced.name}</span>
-        <span>{HOUSING_LABELS[priced.housingClass]}</span>
-        <span>
-          Insured value {kes1(priced.tivKes)}
-          {priced.tivFrom === "area_times_cost" ? " (floor area × cost per m², as none is stated)" : ""}
-        </span>
-        <span>{priced.ward ? `Falls in ${priced.ward.name} ward, ${priced.ward.subcounty}` : "Outside the ward map"}</span>
-        {priced.location.kind === "approximate" && <Tag kind="assumption">Approximate location</Tag>}
-      </div>
-      <div className="mt-3 overflow-x-auto">
-        <table className={`w-full text-sm ${drainage ? "min-w-190" : "min-w-160"}`}>
-          <thead className="text-xs text-muted">
-            <tr>
-              <th className="pb-2 text-left font-medium">Return period</th>
-              <th className="pb-2 pl-3 text-right font-medium">Terrain depth (m)</th>
-              {drainage && <th className="pb-2 pl-3 text-right font-medium">Drainage ponding (m)</th>}
-              <th className="pb-2 pl-3 text-right font-medium">Damage ratio (%)</th>
-              <th className="pb-2 pl-3 text-right font-medium">Ground-up loss (KES)</th>
-              <th className="pb-2 pl-3 text-right font-medium">Gross loss (KES)</th>
-              <th className="pb-2 pl-3 text-right font-medium">Nearest water on the terrain map</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-line">
-            {priced.scenarios.map((s) => {
-              const wet = s.hazard > 0;
-              return (
-                <tr key={s.id}>
-                  <td className="tabular py-2 text-ink">
-                    <ReturnPeriod years={s.returnPeriod} />
-                    {isScore && <span className="ml-1.5 text-xs text-muted">{s.label}</span>}
-                  </td>
-                  <td className="tabular py-2 pl-3 text-right text-ink-2">{wet ? (s.terrainM >= 0.005 ? `${fmtNum(s.terrainM, 2)} m` : "under 0.01 m") : "Dry"}</td>
-                  {drainage && <td className="tabular py-2 pl-3 text-right text-ink-2">{s.drainageM > 0 ? `${fmtNum(s.drainageM, 2)} m` : "None"}</td>}
-                  <td className="tabular py-2 pl-3 text-right text-ink-2">{fmtPct(s.damageRatio, 1)}</td>
-                  <td className="tabular whitespace-nowrap py-2 pl-3 text-right text-ink-2">{kes1(s.groundUpKes)}</td>
-                  <td className="tabular whitespace-nowrap py-2 pl-3 text-right font-semibold text-ink">{kes1(s.grossKes)}</td>
-                  <td className="tabular py-2 pl-3 text-right text-ink-2">{wet ? "Wet here" : s.nearestWetM === null ? "No water on this map" : `${fmtDistance(s.nearestWetM)} away`}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-      {priced.dryInEveryTier && (
-        <div className="mt-3">
-          <Note>
-            This point is dry on every terrain map, so the terrain adds no loss here. That is the model&apos;s answer for this exact point, not a finding that the site cannot flood: the last column shows how close the mapped water comes.
-          </Note>
         </div>
       )}
     </div>
   );
 }
 
-/** Which label a term taken from the offer carries: read from the document, or typed over by the underwriter. */
-function termOrigin(used: Quoted<unknown>[]): { label: string; quotes: string[] } {
-  const typed = used.filter((q) => q.status === "edited").length;
-  const quotes = [...new Set(used.filter((q) => q.status !== "edited").map((q) => q.quote.trim()).filter(Boolean))];
-  return { label: typed === 0 ? "From the document" : typed === used.length ? "Typed by you" : "From the document, with a figure typed by you", quotes };
+// ---------------------------------------------------------------------------------------------
+// What was sent and what came back
+// ---------------------------------------------------------------------------------------------
+
+function ReadingRecord({ doc }: { doc: FocusDocument }) {
+  const byModel = doc.path === "model";
+  const chars = `${fmtInt(doc.text.length)} characters`;
+  const took = doc.ms ? ` It took ${(doc.ms / 1000).toFixed(1)} s` : "";
+  const tokens = doc.usage?.promptTokens ? `${took ? "," : " It used"} ${fmtInt(doc.usage.promptTokens)} tokens read and ${fmtInt(doc.usage.outputTokens ?? 0)} written` : "";
+  const removedAny = doc.removed.emails + doc.removed.phones + doc.removed.blocks.length > 0;
+  return (
+    <Card title="How the offer was read" className="mt-4" aside={<Tag kind={byModel ? "ai" : "none"}>{byModel ? "Read by the model" : "Read by the fixed rules"}</Tag>}>
+      <div className="space-y-3 text-sm leading-relaxed text-ink-2">
+        {!byModel && doc.sentToModel ? (
+          <Note tone="warn">The text was sent to the model, but its answer could not be used, so the fixed rules read the offer in this browser. {doc.why}</Note>
+        ) : (
+          <p className="max-w-5xl">
+            {byModel ? "" : "Nothing left this browser. "}
+            {doc.why}
+            {byModel && (took || tokens) ? `${took}${tokens}.` : ""}
+          </p>
+        )}
+        <p className="max-w-5xl">
+          {doc.removedLine}
+          {removedAny ? " This was done in this browser, and a marker in square brackets shows where each one was." : ""}
+        </p>
+        <details>
+          <summary className="cursor-pointer select-none font-medium text-ink-2 hover:text-ink">
+            {doc.sentToModel ? `What was sent to the model (${chars})` : `Nothing was sent to the model: the text the rules read (${chars})`}
+          </summary>
+          {doc.sent ? (
+            <>
+              <div className="mt-2 text-xs font-semibold text-ink-2">Instructions</div>
+              <pre className={PRE}>{doc.sent.system}</pre>
+              <div className="mt-2 text-xs font-semibold text-ink-2">Message, with the document as sent</div>
+              <pre className={PRE}>{doc.sent.user}</pre>
+            </>
+          ) : (
+            <>
+              <div className="mt-2 text-xs font-semibold text-ink-2">The document, with contact details removed</div>
+              <pre className={PRE}>{doc.text}</pre>
+              {doc.sentToModel && <p className="mt-1 text-xs text-muted">The instructions sent around it were not reported back by the server.</p>}
+            </>
+          )}
+        </details>
+        {doc.sentToModel && (
+          <details>
+            <summary className="cursor-pointer select-none font-medium text-ink-2 hover:text-ink">What came back from the model</summary>
+            {doc.replyJson ? (
+              <>
+                <pre className={PRE}>{doc.replyJson}</pre>
+                <p className="mt-1 text-xs text-muted">The reply as received, before code checked any value in it.</p>
+              </>
+            ) : (
+              <p className="mt-2 text-xs text-muted">The server did not hand the reply back.</p>
+            )}
+          </details>
+        )}
+      </div>
+    </Card>
+  );
 }
 
-function TermLine({ name, text, origin }: { name: string; text: string; origin: { label: string; quotes: string[] } | null }) {
+// ---------------------------------------------------------------------------------------------
+// The result, and the lead to the next step
+// ---------------------------------------------------------------------------------------------
+
+function BuildingLine({ building, showOutside }: { building: FocusBuilding; showOutside: boolean }) {
+  const facts = [building.housingLabel, building.ward ? `${building.ward.name} ward${building.ward.subcounty ? `, ${building.ward.subcounty}` : ""}` : null].filter(Boolean).join(" · ");
   return (
-    <div className="min-w-0 rounded-xl border border-line bg-surface-2 p-3">
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
-        <span className="text-sm font-semibold text-ink">{name}</span>
-        {origin ? <Tag kind={origin.label === "Typed by you" ? "none" : "real"}>{origin.label}</Tag> : <Tag kind="assumption">Example terms</Tag>}
+    <li className="min-w-0 text-sm leading-relaxed text-ink-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="font-semibold text-ink wrap-anywhere">{building.name}</span>
+        {facts && <span>{facts}</span>}
+        {building.approximate && <Tag kind="assumption">Approximate location</Tag>}
       </div>
-      <p className="mt-1.5 text-sm leading-relaxed text-ink-2">{text}</p>
-      {origin?.quotes.map((quote) => (
-        <blockquote key={quote} className="mt-1.5 border-l-2 border-axis pl-2.5 text-xs leading-relaxed whitespace-pre-wrap wrap-anywhere text-ink-2">{quote}</blockquote>
+      <p className="mt-0.5 wrap-anywhere">{building.locationHow}</p>
+      {building.approximate && <p className="mt-0.5">Every figure for this building depends on that stand-in point.</p>}
+      {showOutside && building.status === "outside" && <p className="mt-0.5 font-semibold text-ink">{OUTSIDE_MAPS_MESSAGE}.</p>}
+    </li>
+  );
+}
+
+interface ResultProps {
+  f: OfferFocus;
+  onConfirm: (ref: ValueRef) => void;
+  onClear: (ref: ValueRef) => void;
+  onOpenStep?: (id: StepId) => void;
+}
+
+function ResultCard({ f, onConfirm, onClear, onOpenStep }: ResultProps) {
+  if (f.status === "locating") {
+    return <div className="mt-4"><Note>{f.statusLine}</Note></div>;
+  }
+  const where = (
+    <ul className="space-y-3">
+      {f.buildings.map((b) => (
+        <BuildingLine key={b.locId} building={b} showOutside={!f.outside} />
       ))}
-      {!origin && <p className="mt-1.5 text-xs leading-relaxed text-muted">The document states none, so the Insurance terms panel in the {STEP_NAMES.loss} step is used.</p>}
-    </div>
+    </ul>
   );
-}
 
-/** The deductible and the limit the gross loss was worked out with, and where each one came from. */
-function TermsUsed({ terms, stated, several }: { terms: PolicyTerms; stated: OfferTerms; several: boolean }) {
-  const words = describeTerms(terms);
-  const usable = (list: Quoted<unknown>[]) => list.filter((q) => usableValue(q) !== null);
-  const fromDocument = terms.deductible.source === "document" || terms.limit.source === "document";
-  const fromExample = terms.deductible.source === "example" || terms.limit.source === "example";
-  return (
-    <div className="mt-4">
-      <div className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-muted">Deductible and limit used for the gross loss</div>
-      <div className="grid gap-3 @3xl:grid-cols-2">
-        <TermLine
-          name="Deductible"
-          text={words.deductible}
-          origin={terms.deductible.source === "document" ? termOrigin(usable([stated.floodDeductiblePct, stated.floodDeductibleMinKes, stated.floodDeductibleBasis])) : null}
-        />
-        <TermLine name="Limit" text={words.limit} origin={terms.limit.source === "document" ? termOrigin(usable([stated.floodLimitKes])) : null} />
-      </div>
-      <p className="mt-2 text-xs leading-relaxed text-muted">
-        Gross loss is the ground-up loss less the deductible, capped at the limit. It is what the insurer would pay, before any reinsurance.
-        {fromExample ? " Example terms, not from any real policy or treaty: they are applied building by building, as for the portfolio." : ""}
-        {fromDocument && several ? " A term from the document is applied once per flood to the whole offer and shared between its buildings in proportion to their loss." : ""}
-      </p>
-    </div>
-  );
-}
-
-function PortfolioCard({ effect, matchesHeader }: { effect: PortfolioEffect; matchesHeader: boolean }) {
-  const a = effect.without;
-  const b = effect.with;
-  const loss = (f: PortfolioEffect["with"]) => (f.loss100Kes === null ? "not modelled" : `${kes1(f.loss100Kes)}${f.loss100Extrapolated ? " †" : ""}`);
-  // The amount and its share sit on two lines, so the last column stays narrow enough to fit its card.
-  const added = (before: number, after: number): ReactNode => {
-    const diff = after - before;
-    if (Math.abs(diff) < 0.5) return "no change";
-    const sign = diff > 0 ? "+" : "-";
+  // Outside the maps: where the building is, the sentence, and nothing further. A figure of zero would be wrong.
+  if (f.outside) {
     return (
-      <>
-        <span className="block">{sign}{kes1(Math.abs(diff))}</span>
-        {before > 0 && <span className="block text-xs text-muted">{sign}{fmtPct(Math.abs(diff) / before, 3)}</span>}
-      </>
+      <Card title="Where the building is" className="mt-4">
+        {where}
+        <div className="mt-4"><Note tone="warn"><span className="font-semibold text-ink">{f.outsideMessage}.</span></Note></div>
+      </Card>
     );
-  };
-  const cell = "tabular whitespace-nowrap py-2 pl-3 text-right align-top";
-  const head = "pb-2 pl-3 text-right align-bottom font-medium";
+  }
+
+  const price = f.price;
+  const isScore = f.hazardKind === "score";
+  const readByModel = f.document.path === "model";
+  const termsFromDocument = f.terms.deductible.source !== "example terms" || f.terms.limit.source !== "example terms";
+  const termsFromExample = f.terms.deductible.source === "example terms" || f.terms.limit.source === "example terms";
+  const hazardKind: SourceKind = isScore ? "assumption" : "real";
+  const sources: ChartSource[] = [
+    { kind: hazardKind, text: isScore ? "Depth worked out from a 0 to 1 susceptibility score and an assumed depth scale" : "Hazard depth maps, read at the building's point" },
+    ...(readByModel ? [{ kind: "ai" as const, text: `Building values${termsFromDocument ? " and terms" : ""} read from the document by the model, each checked against its sentence by code` }] : []),
+    { kind: "assumption", text: `Return periods and damage curves${termsFromExample ? ", and the example deductible or limit where the document states none" : ""}${f.drainageOn ? ", and drainage ponding" : ""}` },
+  ];
+
+  const total = price?.total ?? null;
+  const added = price?.portfolio.loss100ChangeKes ?? null;
+  const addedShare = price?.portfolio.loss100ChangeShare ?? null;
+  const sign = added !== null && added < 0 ? "-" : "+";
+  const figures: { label: string; value: string; sub?: string }[] = total
+    ? [
+        {
+          label: `Gross loss in a ${rpWithChance(100)} flood`,
+          value: total.loss100GrossKes !== null ? `${kes1(total.loss100GrossKes)}${total.loss100Extrapolated ? " †" : ""}` : "Not modelled",
+          sub: total.loss100GrossKes === null ? "More frequent than any flood modelled" : total.loss100Extrapolated ? "† held flat beyond the rarest flood modelled" : undefined,
+        },
+        { label: "Average annual loss, gross", value: kes1(total.aalGrossKes) },
+        { label: "Pure flood rate, gross", value: fmtRate(total.ratePerMilleGross), sub: "Before expense, profit and uncertainty loadings" },
+        {
+          label: `Added to the portfolio's ${rpWithChance(100)} loss, ground-up`,
+          value: added === null ? "Not modelled" : Math.abs(added) < 0.5 ? "No change" : `${sign}${kes1(Math.abs(added))}`,
+          sub: added !== null && Math.abs(added) >= 0.5 && addedShare !== null ? `${sign}${fmtPct(Math.abs(addedShare), Math.abs(addedShare) < 0.001 ? 3 : 1)} of the portfolio's own` : undefined,
+        },
+      ]
+    : [];
+  const hazardStep = `step ${stepIndex("hazard")}, ${STEP_NAMES.hazard}`;
+
   return (
-    <Card title="Effect on the portfolio" aside={<SourceBadge kind="synthetic" />}>
-      {/* The table is as narrow as its figures allow and scrolls inside the card when even that does not fit. */}
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-88 text-sm">
-          <thead className="text-xs text-muted">
-            <tr>
-              <th className="pb-2 text-left align-bottom font-medium">Ground-up, before any terms</th>
-              <th className={head}>Without the offer</th>
-              <th className={head}>With the offer</th>
-              <th className={head}>Added by the offer</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-line">
-            <tr>
-              <td className="py-2 text-ink">Buildings</td>
-              <td className={`${cell} text-ink-2`}>{fmtInt(a.buildings)}</td>
-              <td className={`${cell} font-semibold text-ink`}>{fmtInt(b.buildings)}</td>
-              <td className={`${cell} text-ink-2`}>+{fmtInt(b.buildings - a.buildings)}</td>
-            </tr>
-            <tr>
-              <td className="py-2 text-ink">Insured value</td>
-              <td className={`${cell} text-ink-2`}>{kes1(a.totalTivKes)}</td>
-              <td className={`${cell} font-semibold text-ink`}>{kes1(b.totalTivKes)}</td>
-              <td className={`${cell} text-ink-2`}>{added(a.totalTivKes, b.totalTivKes)}</td>
-            </tr>
-            <tr>
-              <td className="py-2 text-ink">Loss in a <ReturnPeriod years={100} /> flood</td>
-              <td className={`${cell} text-ink-2`}>{loss(a)}</td>
-              <td className={`${cell} font-semibold text-ink`}>{loss(b)}</td>
-              <td className={`${cell} text-ink-2`}>{a.loss100Kes !== null && b.loss100Kes !== null ? added(a.loss100Kes, b.loss100Kes) : "n/a"}</td>
-            </tr>
-            <tr>
-              <td className="py-2 text-ink">Average annual loss</td>
-              <td className={`${cell} text-ink-2`}>{kes1(a.aalKes)}</td>
-              <td className={`${cell} font-semibold text-ink`}>{kes1(b.aalKes)}</td>
-              <td className={`${cell} text-ink-2`}>{added(a.aalKes, b.aalKes)}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <p className="mt-3 text-xs leading-relaxed text-muted">
-        The offer&apos;s buildings are added to the loaded buildings and the same engine is run on the longer list. These are ground-up figures: before any deductible, limit or reinsurance.
-        {matchesHeader ? " The figures without the offer are the ones in the bar at the top of the page." : ""}
-        {a.loss100Extrapolated || b.loss100Extrapolated ? " † held flat beyond the rarest modelled scenario." : ""}
-      </p>
-      <SourceLine
-        className="mt-3 border-t border-line pt-3"
-        sources={[
-          { kind: "synthetic", text: "The portfolio of insured buildings it is compared with" },
-          { kind: "assumption", text: "Return periods and damage curves" },
-        ]}
-      />
+    <Card
+      title={price ? "Where the building is, and the price code worked out" : "Where the building is"}
+      className="mt-4"
+      aside={<span className="text-xs text-muted">No figure here comes from the model</span>}
+    >
+      {f.buildings.length > 0 && where}
+      {f.severalLine && <p className="mt-3 text-sm leading-relaxed text-ink-2">{f.severalLine}</p>}
+
+      {f.waiting.length > 0 && (
+        <div className="mt-4">
+          <Note tone="warn">
+            <div className="font-semibold text-ink">Pricing is waiting for {plural(f.waiting.length, "value")}</div>
+            <p className="mt-0.5">Code could not check {f.waiting.length === 1 ? "this value" : "these values"} against the document. Confirm each one, clear it, or type the right value in its box above.</p>
+            <ul className="mt-2 space-y-2">
+              {f.waiting.map((w) => (
+                <li key={w.fieldId} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                  <span className="min-w-0 flex-1 basis-64">
+                    <span className="font-medium text-ink">{w.where}, {w.label.toLowerCase()}:</span> {w.value}. {w.reason}
+                  </span>
+                  <span className="inline-flex gap-2">
+                    {f.fields.find((x) => x.id === w.fieldId)?.raw != null && <SmallButton onClick={() => onConfirm(w.ref)}>Confirm</SmallButton>}
+                    <SmallButton onClick={() => onClear(w.ref)}>Clear</SmallButton>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Note>
+        </div>
+      )}
+
+      {f.status === "not_ready" && (
+        <div className="mt-4">
+          <Note tone="warn">
+            <div className="font-semibold text-ink">Not priced yet</div>
+            {f.buildings.some((b) => b.blockers.length > 0) ? (
+              <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                {f.buildings.flatMap((b) => b.blockers.map((text) => <li key={`${b.locId}:${text}`}>{f.several ? `${b.name}: ${text}` : text}</li>))}
+              </ul>
+            ) : (
+              <p className="mt-0.5">The offer lists no building.</p>
+            )}
+          </Note>
+        </div>
+      )}
+
+      {price && total && (
+        <>
+          {/* One row of figures, not cards: in Offer mode the bar at the top of the page carries the same four. */}
+          <dl className="mt-5 grid gap-x-6 gap-y-4 border-t border-line pt-4 grid-cols-[repeat(auto-fit,minmax(min(13rem,100%),1fr))]">
+            {figures.map((x) => (
+              <div key={x.label} className="min-w-0">
+                <dt className="text-xs leading-snug text-muted">{x.label}</dt>
+                <dd className="tabular mt-0.5 text-xl font-semibold tracking-tight text-ink wrap-anywhere">{x.value}</dd>
+                {x.sub && <dd className="text-xs leading-relaxed text-ink-2">{x.sub}</dd>}
+              </div>
+            ))}
+          </dl>
+          <p className="mt-3 text-sm leading-relaxed text-ink-2">
+            Terms used: {f.terms.summary.toLowerCase()}. Assumptions in force: {f.assumptionsInForce === "ai" ? "the set the agents agreed" : "the reference set"}.
+          </p>
+          {f.terms.floodCover === "excluded" && (
+            <div className="mt-3"><Note tone="warn">The document asks for flood to be excluded. The figures here are what flood would cost if it were covered.</Note></div>
+          )}
+
+          <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-ink-2">
+            <ChecksSummary checks={f.checks} />
+            <span className="min-w-0">
+              {f.flags.length > 0 ? `${plural(f.flags.length, "point")} to weigh, set out in ${STEP_NAMES.results}. ` : ""}Every check is listed in {STEP_NAMES.audit}.
+            </span>
+          </div>
+
+          <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2.5 border-t border-line pt-4">
+            {onOpenStep ? (
+              <Button className="whitespace-nowrap" onClick={() => onOpenStep("hazard")}>Next: see the building on the hazard map</Button>
+            ) : (
+              <span className="text-sm font-semibold text-ink">Next: see the building on the hazard map, in {hazardStep}.</span>
+            )}
+            <span className="min-w-0 flex-1 basis-64 text-sm leading-relaxed text-ink-2">
+              The depth at the building is in {STEP_NAMES.hazard}, its damage in {STEP_NAMES.vulnerability}, the arithmetic for each return period in {STEP_NAMES.loss}, and the decision in {STEP_NAMES.results}.
+            </span>
+          </div>
+          <SourceLine sources={sources} className="mt-4 border-t border-line pt-3" />
+        </>
+      )}
     </Card>
   );
 }
@@ -663,13 +533,14 @@ function PortfolioCard({ effect, matchesHeader }: { effect: PortfolioEffect; mat
 // The step
 // ---------------------------------------------------------------------------------------------
 
-const typedDocument = (text: string): OfferDocument => ({ name: "typed text", kind: "typed", text });
+const FIELD_GROUPS: { group: FocusField["group"]; title: string }[] = [
+  { group: "terms", title: "Flood terms" },
+  { group: "site", title: "The building and where it is" },
+];
 
-export function OfferStep({ session, active, drainage, modelReady, offer, onOffer, policyDefaults, onLog, incoming, onSummary }: Props) {
+export function OfferStep({ session, modelReady, offer, onOffer, offerFocus, onLog, incoming, onSummary, onOpenStep }: Props) {
   const { dataset } = session;
-  const isScore = dataset.hazardKind === "score";
 
-  const [geo, setGeo] = useState<GeoLayers | null>(null);
   // One source at a time: a chosen file or a typed description, never both.
   const [file, setFile] = useState<OfferDocument | null>(offer && offer.document.kind !== "typed" ? offer.document : null);
   const [typed, setTyped] = useState(offer?.document.kind === "typed" ? offer.document.text : "");
@@ -682,34 +553,36 @@ export function OfferStep({ session, active, drainage, modelReady, offer, onOffe
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [over, setOver] = useState(false);
+  /** Once an offer is read, the inputs fold away behind a button so the document has the room. */
+  const [inputOpen, setInputOpen] = useState(false);
+  /** The value picked out: its quote in the document and its box in the list of values. */
+  const [activeId, setActiveId] = useState<string | null>(null);
   const picker = useRef<HTMLInputElement>(null);
+  const valuesPane = useRef<HTMLDivElement>(null);
+  /** True when the last pick was made in the document, so the list of values follows it. */
+  const pickedInDocument = useRef(false);
   const textId = useId();
   // Each choice of a source and each read takes a number. Only the latest of each may change the screen,
   // so a slow file or a slow answer can never overwrite what the reader did after it.
   const sourceTurn = useRef(0);
   const readTurn = useRef(0);
 
-  // Ward names and the waterways: for place names, the ward a point falls in and the river check.
-  useEffect(() => {
-    loadGeo().then(setGeo);
-  }, []);
-
   /** Opens a file in this browser and makes it the source. Resolves to the document, or null when it could not be opened or something newer took its place. */
-  const openFile = async (chosen: OfferFile): Promise<OfferDocument | null> => {
+  const openFile = async (chosen: OfferFile & { type?: string }): Promise<OfferDocument | null> => {
     const turn = ++sourceTurn.current;
     const hadTyped = typed.trim().length > 0;
     setProblem(null);
     setSwapped(null);
     setOpening(true);
     try {
-      // Opened here, in the browser. Nothing is sent anywhere until the offer is read.
-      const doc = await readOfferFile(chosen);
+      const doc = await openOfferFile(chosen);
       if (turn !== sourceTurn.current) return null;
       setFile(doc);
       setTyped("");
       if (hadTyped) setSwapped(`The typed description was cleared: ${doc.name} is read in its place.`);
       return doc;
     } catch (e) {
+      // The message is shown as it is: the readers word it for the underwriter.
       if (turn === sourceTurn.current) setProblem((e as Error).message);
       return null;
     } finally {
@@ -743,12 +616,16 @@ export function OfferStep({ session, active, drainage, modelReady, offer, onOffe
     setProblem(null);
     try {
       // An offer can arrive from the Dashboard before the ward map has loaded: the read waits for it here.
-      const layers = geo ?? (await loadGeo());
+      // The layers load once per page, so this is the same answer the walkthrough places the offer with.
+      const layers = await loadGeo();
       // The rules find a place in free text only if they know the names to look for.
       const knownPlaces = [...(layers.wards?.features.flatMap((f) => (f.properties.name ?? "").split("/").map((n) => n.trim())) ?? []), ...dataset.hotspots.map((h) => h.name)].filter(Boolean);
       const run = await extractOffer(doc.text, { rulesOnly, knownPlaces });
       if (turn !== readTurn.current) return;
       onOffer({ document: doc, run, extraction: run.extraction });
+      setActiveId(null);
+      setInputOpen(false);
+      setSwapped(null);
       const counts = statusCounts(run.extraction);
       // Counts and names only: the run log is downloaded with the audit file, and no document text belongs in it.
       onLog(
@@ -785,25 +662,9 @@ export function OfferStep({ session, active, drainage, modelReady, offer, onOffe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [incomingSeq]);
 
-  const extraction = offer?.extraction ?? null;
-  const wards = geo?.wards ?? null;
-  const waterways = geo?.waterways ?? null;
-
-  // Everything below is code only. The rows hold usable values and nothing else: pricingRows leaves an
-  // unverified value out and blocks the row it belongs to, so nothing is priced around it.
-  const rows = useMemo(() => (extraction && geo ? pricingRows(extraction, wards, dataset.hotspots) : []), [extraction, geo, wards, dataset]);
-  const pricing = useMemo(
-    () => (extraction && geo ? priceOffer({ dataset, params: active.params, drainage, rows, terms: policyTerms(extraction.terms, policyDefaults), wards }) : null),
-    [extraction, geo, dataset, active.params, drainage, rows, wards, policyDefaults],
-  );
-  const waiting = useMemo(() => (extraction ? holdUps(extraction) : []), [extraction]);
-  const held = waiting.length > 0;
-  const checks = useMemo<Check[]>(() => {
-    if (!extraction || !pricing) return [];
-    const all = offerChecks({ extraction, rows, pricing, dataset, waterways });
-    // While pricing waits, the checks that rest on a price or a location wait with it.
-    return held ? all.filter((c) => c.id === "offer-values") : all;
-  }, [extraction, pricing, rows, dataset, waterways, held]);
+  // Everything shown of the offer is worked out once, in the walkthrough (lib/offer/focus.ts): the values and
+  // where each came from, the location, the price and the checks. This step edits the values and shows the rest.
+  const f = offer ? offerFocus : null;
 
   const change = (next: OfferExtraction) => {
     if (offer && next !== offer.extraction) onOffer({ ...offer, extraction: next });
@@ -816,56 +677,32 @@ export function OfferStep({ session, active, drainage, modelReady, offer, onOffe
     change(next);
     return true;
   };
-  const confirm = (ref: ValueRef) => offer && change(confirmValue(offer.extraction, ref));
-
-  const counts = extraction ? statusCounts(extraction) : null;
-  const notes = extraction ? extraction.notes.map((note, index) => ({ note, index })).filter((n) => n.note.status !== "missing") : [];
-  const priced = pricing ? pricing.rows.filter((r): r is Extract<RowPricing, { status: "priced" }> => r.status === "priced") : [];
-  const totals = pricing?.totals ?? null;
-  const floodCover = extraction ? usableValue(extraction.terms.floodCover) : null;
-  const covered = coverage(dataset);
-  const matchesHeader = !!pricing?.portfolio && Math.abs(pricing.portfolio.without.aalKes - active.result.aalKes) <= 1e-6 * Math.max(1, active.result.aalKes);
-  const summary = summarise(checks);
-
-  // The offer's gross loss in a 1-in-100 flood, read off its own curve the way the portfolio's is.
-  const gross100 = useMemo(
-    () => (totals ? lossAtReturnPeriod(totals.scenarios.map((s) => ({ returnPeriod: s.returnPeriod, lossKes: s.grossKes })), 100) : null),
-    [totals],
-  );
+  const confirm = (ref: ValueRef) => {
+    if (offer) change(confirmValue(offer.extraction, ref));
+  };
 
   // What the Dashboard shows of this offer. undefined while the ward map is still loading: nothing is reported yet.
-  const dashboardSummary = useMemo<OfferSummary | null | undefined>(() => {
-    if (!offer) return null;
-    if (!pricing) return undefined;
-    const c = statusCounts(offer.extraction);
-    const pricedNow = !held && pricing.totals !== null;
-    return {
-      name: offer.document.name,
-      fieldsRead: c.verified + c.unverified + c.confirmed + c.edited,
-      fieldsVerified: c.verified,
-      loss100Kes: pricedNow ? (gross100?.lossKes ?? null) : null,
-      aalKes: pricedNow && pricing.totals ? pricing.totals.aalGrossKes : null,
-      // Outside means no building could be priced because the offer lies beyond the maps.
-      outside: pricing.rows.some((r) => r.status === "outside") && !pricing.rows.some((r) => r.status === "priced"),
-    };
-  }, [offer, pricing, held, gross100]);
+  const dashboardSummary: OfferSummary | null | undefined = !offer ? null : !offerFocus || offerFocus.status === "locating" ? undefined : offerFocus.summary;
   useEffect(() => {
     if (dashboardSummary !== undefined) onSummary?.(dashboardSummary);
   }, [dashboardSummary, onSummary]);
 
-  // Where the figures of the price come from, by the four badges used across the app.
-  const readByModel = !!extraction && extraction.rows.some((r) => r.path === "model");
-  const termsFromDocument = !!pricing && (pricing.terms.deductible.source === "document" || pricing.terms.limit.source === "document");
-  const termsFromExample = !!pricing && (pricing.terms.deductible.source === "example" || pricing.terms.limit.source === "example");
-  const hazardSource: SourceKind = isScore ? "assumption" : "real";
-  const hazardText = isScore ? "Susceptibility score with an assumed depth scale" : "Hazard maps read at the building";
-  const grossSource: SourceKind = termsFromDocument ? (readByModel ? "ai" : "real") : "assumption";
-  const grossText = termsFromDocument ? (readByModel ? "Terms read from the document by the model, checked by code" : "Terms as the document states them") : "Example policy terms";
-  const priceSources: ChartSource[] = [
-    { kind: hazardSource, text: isScore ? "Depth worked out from a 0 to 1 susceptibility score and an assumed depth scale" : "Hazard depth maps, read at the building's point" },
-    ...(readByModel ? [{ kind: "ai" as const, text: "Building values and terms read from the document by the model, each checked against its sentence by code" }] : []),
-    { kind: "assumption", text: `Return periods and damage curves${termsFromExample ? ", and the example deductible or limit where the document states none" : ""}${pricing?.drainageOn ? ", and drainage ponding" : ""}` },
-  ];
+  // The sentences to mark in the document: one for each value that has one.
+  const fields = f?.fields;
+  const quotes = useMemo<DocumentQuote[]>(
+    () => (fields ?? []).flatMap((x) => (x.mark && x.quote.trim() ? [{ id: x.id, quote: x.quote, label: x.row !== null && (fields ?? []).some((y) => y.row !== null && y.row !== x.row) ? `Building ${x.row + 1}, ${x.label}` : x.label, status: x.mark }] : [])),
+    [fields],
+  );
+
+  // A sentence picked in the document brings its value into view in the list beside it.
+  useEffect(() => {
+    if (!activeId || !pickedInDocument.current) return;
+    pickedInDocument.current = false;
+    const row = valuesPane.current?.querySelector<HTMLElement>(`[data-field="${activeId}"]`);
+    if (!row) return;
+    const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    row.scrollIntoView({ block: "nearest", behavior: still ? "auto" : "smooth" });
+  }, [activeId]);
 
   const takeDrop = (e: DragEvent) => {
     e.preventDefault();
@@ -874,90 +711,98 @@ export function OfferStep({ session, active, drainage, modelReady, offer, onOffe
     if (dropped) void openFile(dropped);
   };
 
+  const showInput = !offer || inputOpen || busy || opening || problem !== null || swapped !== null;
+  const fieldRow = (x: FocusField) => (
+    <FieldRow key={x.id} field={x} active={x.id === activeId} onSelect={() => setActiveId(x.id)} onEdit={(v) => edit(x.ref, v)} onConfirm={() => confirm(x.ref)} />
+  );
+  const VALUE_GRID = "grid gap-2.5 @lg:grid-cols-2 @4xl:grid-cols-3";
+  const notes = f ? f.fields.filter((x) => x.group === "note" && x.status !== "missing") : [];
+
+  const inputCard = (
+    <Card title={offer ? "Read another offer" : "The offer"} aside={<span className="text-xs text-muted">Word (.docx), PDF (.pdf), text (.txt) or typed</span>}>
+      {/* A file dropped anywhere on the two inputs is taken, so one that lands on the text box is not opened by the browser as a page. */}
+      <div
+        onDragOver={(e) => {
+          e.preventDefault();
+          setOver(true);
+        }}
+        onDragLeave={() => setOver(false)}
+        onDrop={takeDrop}
+      >
+        <div className={`flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border-2 border-dashed px-4 py-3 transition ${over ? "border-accent bg-accent-wash" : "border-axis bg-surface"}`}>
+          <Button variant="secondary" className="whitespace-nowrap" onClick={() => picker.current?.click()}>Choose a file</Button>
+          <div className="min-w-0 flex-1 basis-48 text-sm leading-relaxed text-ink-2">
+            {opening ? (
+              "Opening the file in this browser."
+            ) : file ? (
+              <>
+                <span className="font-medium text-ink wrap-anywhere">{file.name}</span>
+                <span className="text-muted"> · {fmtInt(file.text.length)} characters, opened in this browser</span>
+              </>
+            ) : (
+              "A broker's memo as a Word, PDF or text file. Drop it here or choose it. It is opened in this browser."
+            )}
+          </div>
+          {file && !opening && <SmallButton onClick={removeFile}>Remove</SmallButton>}
+          <input
+            ref={picker}
+            type="file"
+            accept={ACCEPT}
+            className="hidden"
+            onChange={(e) => {
+              const chosen = e.target.files?.[0];
+              if (chosen) void openFile(chosen);
+              e.target.value = "";
+            }}
+          />
+        </div>
+
+        <label htmlFor={textId} className="mt-4 block text-sm font-medium text-ink">Or describe the offer in plain English</label>
+        <textarea
+          id={textId}
+          rows={offer ? 2 : 4}
+          value={typed}
+          // The box always shows what this step holds, never text a browser kept from an earlier visit.
+          autoComplete="off"
+          onChange={(e) => typeText(e.target.value)}
+          placeholder="For example: two-storey masonry shop in Kibera worth KES 8 million"
+          className={`${BOX} mt-1.5 leading-relaxed`}
+        />
+      </div>
+      {swapped && <p role="status" className="mt-2 text-xs leading-relaxed text-ink-2 wrap-anywhere">{swapped}</p>}
+
+      <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2.5">
+        {/* Enabled whenever there is a file or typed text and nothing is being read. */}
+        <Button className="whitespace-nowrap" onClick={() => source && void read(source)} disabled={!source || busy || opening}>
+          {busy && <StatusIcon status="running" size={16} />}
+          {busy ? "Reading the offer" : offer ? "Read the offer again" : "Read the offer"}
+        </Button>
+        <label className="flex min-w-0 items-start gap-2 text-sm leading-snug text-ink-2">
+          <input type="checkbox" checked={rulesOnly} onChange={(e) => setRulesOnly(e.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--brand)]" />
+          <span>Fixed rules only: nothing leaves this browser</span>
+        </label>
+      </div>
+      <p className="mt-2 text-xs leading-relaxed text-muted">
+        {opening ? "Opening the file. " : source ? `${busy ? "Reading" : "Will read"} ${source.kind === "typed" ? `the typed text (${fmtInt(source.text.length)} characters)` : source.name}. ` : "Choose a file or type a description first. "}
+        {rulesOnly
+          ? "The fixed rules read it here, with no model."
+          : modelReady === false
+            ? "No key is set for the model, so the fixed rules will read it here and nothing will be sent."
+            : "Email addresses, phone numbers, and contact and signature blocks are taken out first; the rest goes to the model."}
+      </p>
+      {problem && <div className="mt-3" role="alert"><Note tone="warn">{problem}</Note></div>}
+    </Card>
+  );
+
   return (
     <div>
       <StepHeader kicker={stepKicker("offer")} title={STEP_NAMES.offer}>
-        Give a broker&apos;s memo, or describe an offer in a sentence. The model reads it into rows in the exposure file&apos;s shape, code checks every value against the document, and code alone prices it on the hazard maps already loaded. The steps that follow show the model behind that price.
+        Give a broker&apos;s memo, or describe an offer in a sentence. The model reads it into rows in the exposure file&apos;s shape, code checks every value against the document, and code alone prices it on the hazard maps already loaded.
       </StepHeader>
 
-      <div className="grid gap-4 @5xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
-        <Card title="The offer" aside={<span className="text-xs text-muted">Word (.docx), text (.txt) or typed</span>}>
-          {/* A file dropped anywhere on the two inputs is taken, so one that lands on the text box is not opened by the browser as a page. */}
-          <div
-            onDragOver={(e) => {
-              e.preventDefault();
-              setOver(true);
-            }}
-            onDragLeave={() => setOver(false)}
-            onDrop={takeDrop}
-          >
-            <div className={`flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border-2 border-dashed px-4 py-3 transition ${over ? "border-accent bg-accent-wash" : "border-axis bg-surface"}`}>
-              <Button variant="secondary" className="whitespace-nowrap" onClick={() => picker.current?.click()}>Choose a file</Button>
-              <div className="min-w-0 flex-1 basis-48 text-sm leading-relaxed text-ink-2">
-                {opening ? (
-                  "Opening the file in this browser."
-                ) : file ? (
-                  <>
-                    <span className="font-medium text-ink wrap-anywhere">{file.name}</span>
-                    <span className="text-muted"> · {fmtInt(file.text.length)} characters, opened in this browser</span>
-                  </>
-                ) : (
-                  "A broker's memo as a Word or text file. Drop it here or choose it. It is opened in this browser."
-                )}
-              </div>
-              {file && !opening && <SmallButton onClick={removeFile}>Remove</SmallButton>}
-              <input
-                ref={picker}
-                type="file"
-                accept=".docx,.txt"
-                className="hidden"
-                onChange={(e) => {
-                  const chosen = e.target.files?.[0];
-                  if (chosen) void openFile(chosen);
-                  e.target.value = "";
-                }}
-              />
-            </div>
-
-            <label htmlFor={textId} className="mt-4 block text-sm font-medium text-ink">Or describe the offer in plain English</label>
-            <textarea
-              id={textId}
-              rows={4}
-              value={typed}
-              // The box always shows what this step holds, never text a browser kept from an earlier visit.
-              autoComplete="off"
-              onChange={(e) => typeText(e.target.value)}
-              placeholder="For example: two-storey masonry shop in Kibera worth KES 8 million"
-              className={`${BOX} mt-1.5 leading-relaxed`}
-            />
-          </div>
-          {swapped && <p role="status" className="mt-2 text-xs leading-relaxed text-ink-2 wrap-anywhere">{swapped}</p>}
-
-          <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2.5">
-            {/* Enabled whenever there is a file or typed text and nothing is being read. */}
-            <Button className="whitespace-nowrap" onClick={() => source && void read(source)} disabled={!source || busy || opening}>
-              {busy && <StatusIcon status="running" size={16} />}
-              {busy ? "Reading the offer" : offer ? "Read the offer again" : "Read the offer"}
-            </Button>
-            <label className="flex min-w-0 items-start gap-2 text-sm leading-snug text-ink-2">
-              <input type="checkbox" checked={rulesOnly} onChange={(e) => setRulesOnly(e.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--brand)]" />
-              <span>Fixed rules only: nothing leaves this browser</span>
-            </label>
-          </div>
-          <p className="mt-2 text-xs leading-relaxed text-muted">
-            {opening ? "Opening the file. " : source ? `${busy ? "Reading" : "Will read"} ${source.kind === "typed" ? `the typed text (${fmtInt(source.text.length)} characters)` : source.name}. ` : "Choose a file or type a description first. "}
-            {rulesOnly
-              ? "The fixed rules read it here, with no model."
-              : modelReady === false
-                ? "No key is set for the model, so the fixed rules will read it here and nothing will be sent."
-                : "Email addresses, phone numbers, and contact and signature blocks are taken out first; the rest goes to the model."}
-          </p>
-          {problem && <div className="mt-3"><Note tone="warn">{problem}</Note></div>}
-        </Card>
-
-        {offer ? (
-          <SentCard offer={offer} />
-        ) : (
+      {!offer && (
+        <div className="grid gap-4 @5xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+          {inputCard}
           <Card title="How an offer is read and priced">
             <ol className="space-y-2.5 text-sm leading-relaxed text-ink-2">
               {[
@@ -965,7 +810,7 @@ export function OfferStep({ session, active, drainage, modelReady, offer, onOffe
                 "The model lists each insured building and the flood terms, each with the sentence it came from. With no key, or if the call fails, a set of fixed rules does the reading.",
                 "Code checks every value: the sentence must be in the document and the number must be in the sentence. A value that fails waits for you.",
                 "Code alone reads the hazard maps at the building and works out depth, damage and loss. The model supplies no figure.",
-                "The deductible and the limit stated in the document turn the ground-up loss into the gross loss. Where the document states none, the example terms of the Insurance terms panel are used, and the screen says which.",
+                "The deductible and the limit stated in the document turn the ground-up loss into the gross loss. Where the document states none, example terms are used, and the screen says which.",
               ].map((line, i) => (
                 <li key={line} className="flex gap-3">
                   <span className="tabular flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-surface-2 text-xs text-ink-2">{i + 1}</span>
@@ -974,268 +819,119 @@ export function OfferStep({ session, active, drainage, modelReady, offer, onOffe
               ))}
             </ol>
           </Card>
-        )}
-      </div>
-
-      {offer && extraction && counts && (
-        <Card
-          title="What was read"
-          className="mt-4"
-          aside={
-            <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ink-2">
-              <span className="inline-flex items-center gap-1"><StatusIcon status="pass" size={14} /> {counts.verified} verified</span>
-              <span className="inline-flex items-center gap-1"><StatusIcon status="warn" size={14} /> {counts.unverified} unverified</span>
-              {counts.confirmed + counts.edited > 0 && <span>{counts.confirmed + counts.edited} set by you</span>}
-            </span>
-          }
-        >
-          <p className="mb-4 max-w-4xl text-sm leading-relaxed text-ink-2">
-            Verified means code found the sentence in the document and the number in the sentence. It shows the value was written, not that it was understood, so the sentence sits under every value. An unverified value is not used until you confirm it or type over it. Every box can be changed.
-          </p>
-
-          <div className="space-y-4">
-            {extraction.rows.map((row, i) => {
-              const name = usableValue(row.name);
-              return (
-                <section key={i} className="rounded-2xl border border-line p-4">
-                  <header className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                    <h4 className="min-w-0 text-sm font-semibold text-ink wrap-anywhere">
-                      Building {i + 1}
-                      {name ? `: ${name}` : ""}
-                    </h4>
-                    <Tag kind={row.path === "model" ? "ai" : "none"}>{row.path === "model" ? "Read by the model" : "Read by the fixed rules"}</Tag>
-                  </header>
-                  <div className="grid gap-3 @xl:grid-cols-2 @4xl:grid-cols-3 @7xl:grid-cols-4">
-                    {ROW_FIELDS.map((f) => {
-                      const ref: ValueRef = { scope: "row", row: i, key: f.key };
-                      return <ValueField key={f.key} field={f} quoted={row[f.key]} onEdit={(v) => edit(ref, v)} onConfirm={() => confirm(ref)} />;
-                    })}
-                  </div>
-                  {rows[i] && <LocationLine location={rows[i].location} />}
-                </section>
-              );
-            })}
-          </div>
-
-          {TERM_GROUPS.map((group) => (
-            <div key={group.title} className="mt-5">
-              <div className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-muted">{group.title}</div>
-              <div className="grid gap-3 @xl:grid-cols-2 @4xl:grid-cols-3 @7xl:grid-cols-4">
-                {group.fields.map((f) => {
-                  const ref: ValueRef = { scope: "terms", key: f.key };
-                  return <ValueField key={f.key} field={f} quoted={extraction.terms[f.key]} onEdit={(v) => edit(ref, v)} onConfirm={() => confirm(ref)} />;
-                })}
-              </div>
-            </div>
-          ))}
-
-          <div className="mt-5">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-muted">Flood notes from the document</div>
-            {notes.length === 0 ? (
-              <p className="text-sm leading-relaxed text-ink-2">No note was read on plant in basements, past flood or water damage, the state of the drains, or the broker&apos;s own view of the flood risk.</p>
-            ) : (
-              <ul className="grid gap-3 @4xl:grid-cols-2">
-                {notes.map(({ note, index }) => (
-                  <li key={index} className="min-w-0 rounded-xl border border-line bg-surface-2 p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-                      <span className="text-sm font-medium text-ink">{NOTE_LABELS[note.kind]}</span>
-                      <StatusMark status={note.status} />
-                    </div>
-                    {note.value && note.value !== NOTE_LABELS[note.kind] && <p className="mt-1 text-sm leading-relaxed text-ink-2 wrap-anywhere">{note.value}</p>}
-                    {note.quote.trim() && <blockquote className="mt-1.5 border-l-2 border-axis pl-2.5 text-xs leading-relaxed whitespace-pre-wrap wrap-anywhere text-ink-2">{note.quote}</blockquote>}
-                    {note.status === "unverified" && (
-                      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs leading-relaxed text-ink-2">
-                        <span className="min-w-0 flex-1 basis-48">{note.reason ?? "This note has not been checked."} Not used in the checks until confirmed.</span>
-                        {note.value !== null && <SmallButton onClick={() => confirm({ scope: "note", index })}>Confirm</SmallButton>}
-                        <SmallButton onClick={() => edit({ scope: "note", index }, null)}>Leave out</SmallButton>
-                      </div>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </Card>
+        </div>
       )}
 
-      {offer && extraction && !pricing && (
-        <div className="mt-4"><Note>Loading the ward map before the offer is placed.</Note></div>
-      )}
-
-      {offer && extraction && pricing && (
+      {offer && (
         <>
-          <div className="mt-4 grid gap-4 @6xl:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
+          <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border border-line bg-surface px-4 py-3 text-sm text-ink-2">
+            <span className="min-w-0 flex-1 basis-64">
+              <span className="font-semibold text-ink wrap-anywhere">{offer.document.name}</span>
+              <span className="text-muted"> · {plural(offer.extraction.rows.length, "building")} read by {offer.run.path === "model" ? "the model" : "the fixed rules"}</span>
+            </span>
+            {busy && <span className="inline-flex items-center gap-1.5"><StatusIcon status="running" size={14} /> Reading the offer</span>}
+            <SmallButton
+              onClick={() => {
+                setInputOpen(!showInput);
+                if (showInput) {
+                  setProblem(null);
+                  setSwapped(null);
+                }
+              }}
+            >
+              {showInput ? "Hide the inputs" : "Read another offer"}
+            </SmallButton>
+          </div>
+          {showInput && <div className="mb-4">{inputCard}</div>}
+        </>
+      )}
+
+      {offer && f && (
+        <>
+          {/* The document beside the values read from it. On a narrow screen the document sits above them. */}
+          <div className="grid gap-4 @5xl:grid-cols-2">
+            <Card title="The document" aside={<span className="text-xs text-muted">Contact details removed</span>}>
+              <DocumentQuotes
+                text={f.document.text}
+                quotes={quotes}
+                activeId={activeId}
+                onSelect={(id) => {
+                  pickedInDocument.current = true;
+                  setActiveId(id);
+                }}
+              />
+              <p className="mt-2 text-xs leading-relaxed text-muted">Press a marked sentence to find its value, or the name of a value to find its sentence.</p>
+            </Card>
+
             <Card
-              title="Flood price, worked out by code"
+              title="What was read"
               aside={
-                <span className="inline-flex flex-wrap gap-2">
-                  {isScore ? <Tag kind="proxy">Proxy hazard, not measured</Tag> : <SourceBadge kind="real" />}
-                  {readByModel && <SourceBadge kind="ai" />}
-                  <SourceBadge kind="assumption" />
+                <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ink-2">
+                  <span className="inline-flex items-center gap-1"><StatusIcon status="pass" size={14} /> {f.counts.verified} verified</span>
+                  <span className="inline-flex items-center gap-1"><StatusIcon status="warn" size={14} /> {f.counts.unverified} unverified</span>
+                  {f.counts.confirmed + f.counts.edited > 0 && <span>{f.counts.confirmed + f.counts.edited} set by you</span>}
                 </span>
               }
             >
-              {held && (
-                <Note tone="warn">
-                  <div className="font-semibold text-ink">Pricing is waiting for {plural(waiting.length, "value")}</div>
-                  <p className="mt-0.5">Code could not verify {waiting.length === 1 ? "this value" : "these values"} against the document, so {waiting.length === 1 ? "it is" : "they are"} not used. Confirm each one, clear it, or type the right value in its box above.</p>
-                  <ul className="mt-2 space-y-2">
-                    {waiting.map((h) => (
-                      <li key={`${h.where}:${h.field.key}`} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                        <span className="min-w-0 flex-1 basis-64">
-                          <span className="font-medium text-ink">{h.where}, {h.field.label.toLowerCase()}:</span> {inWords(h.quoted.value, h.field)}. {h.quoted.reason ?? "Not checked."}
-                        </span>
-                        <span className="inline-flex gap-2">
-                          {h.quoted.value !== null && <SmallButton onClick={() => confirm(h.ref)}>Confirm</SmallButton>}
-                          <SmallButton onClick={() => edit(h.ref, null)}>Clear</SmallButton>
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </Note>
-              )}
+              <p className="mb-3 text-sm leading-relaxed text-ink-2">
+                {f.document.path === "model"
+                  ? "\"AI, verified\" means the model read the value and code found its sentence in the document and the number in the sentence: it was written, not necessarily understood. \"AI, unverified\" failed that check and is not used until you confirm it or type over it."
+                  : "\"Rules\" means the fixed rules read the value in this browser, with no model. A value code could not check is not used until you confirm it or type over it."}
+                {" "}Every box can be changed.
+              </p>
 
-              <div className={`space-y-5 ${held ? "mt-4" : ""}`}>
-                {pricing.rows.map((r) => {
-                  // An answer of "outside" needs nothing but the location. A location that still waits on
-                  // the underwriter is never "outside": pricingRows gives it no point at all.
-                  if (r.status === "outside") {
-                    return (
-                      <Note key={r.locId} tone="warn">
-                        <div className="font-semibold text-ink">{r.name}: {OUTSIDE_MAPS_MESSAGE}.</div>
-                        <p className="mt-0.5">
-                          {r.location.kind !== "none" ? `The building is at ${fmtPoint(r.location.lat, r.location.lon)}${r.location.kind === "approximate" ? " (approximate)" : ""}. ` : ""}
-                          {covered ?? "No hazard maps are loaded."} No depth, damage or loss is shown for it: a figure of zero would be wrong. Load the hazard maps for that area to price it.
-                        </p>
-                      </Note>
-                    );
-                  }
-                  if (held) return null;
-                  if (r.status === "not_ready") {
-                    return (
-                      <Note key={r.locId} tone="warn">
-                        <div className="font-semibold text-ink">{r.name}: not priced yet</div>
-                        <ul className="mt-1 list-disc space-y-0.5 pl-5">
-                          {r.blockers.map((b) => (
-                            <li key={b}>{b}</li>
-                          ))}
-                        </ul>
-                      </Note>
-                    );
-                  }
-                  return <PricedBuilding key={r.locId} priced={r} pricing={pricing} isScore={isScore} />;
+              {/* Its own scroll beside the document on a wide screen, so a value and its sentence are on screen together. */}
+              <div ref={valuesPane} className="@container space-y-5 @5xl:max-h-160 @5xl:overflow-y-auto @5xl:pr-1">
+                {f.extraction.rows.map((_, i) => {
+                  const own = f.fields.filter((x) => x.row === i);
+                  const name = own.find((x) => x.id === `row:${i}:name`)?.value;
+                  return (
+                    <section key={i}>
+                      <h4 className={`${GROUP_TITLE} wrap-anywhere`}>
+                        Building {i + 1}
+                        {name ? `: ${name}` : ""}, in the exposure file&apos;s columns
+                      </h4>
+                      <div className={VALUE_GRID}>{own.map(fieldRow)}</div>
+                    </section>
+                  );
                 })}
+                {f.extraction.rows.length === 0 && <p className="text-sm leading-relaxed text-ink-2">No insured building was read from the document.</p>}
+
+                {FIELD_GROUPS.map(({ group, title }) => (
+                  <section key={group}>
+                    <h4 className={GROUP_TITLE}>{title}</h4>
+                    <div className={VALUE_GRID}>{f.fields.filter((x) => x.group === group).map(fieldRow)}</div>
+                  </section>
+                ))}
+
+                <section>
+                  <h4 className={GROUP_TITLE}>Flood notes from the document</h4>
+                  {notes.length === 0 ? (
+                    <p className="text-sm leading-relaxed text-ink-2">No note was read on plant in basements, past flood or water damage, the state of the drains, or the broker&apos;s own view of the flood risk.</p>
+                  ) : (
+                    <div className={VALUE_GRID}>{notes.map(fieldRow)}</div>
+                  )}
+                </section>
               </div>
 
-              {!held && totals && (
-                <>
-                  {priced.length > 1 && (
-                    <div className="mt-5 overflow-x-auto">
-                      <table className="w-full min-w-120 text-sm">
-                        <thead className="text-xs text-muted">
-                          <tr>
-                            <th className="pb-2 text-left font-medium">All {fmtInt(priced.length)} priced buildings</th>
-                            <th className="pb-2 pl-3 text-right font-medium">Ground-up loss (KES)</th>
-                            <th className="pb-2 pl-3 text-right font-medium">Gross loss (KES)</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-line">
-                          {totals.scenarios.map((s) => (
-                            <tr key={s.id}>
-                              <td className="tabular py-2 text-ink"><ReturnPeriod years={s.returnPeriod} /></td>
-                              <td className="tabular whitespace-nowrap py-2 pl-3 text-right text-ink-2">{kes1(s.groundUpKes)}</td>
-                              <td className="tabular whitespace-nowrap py-2 pl-3 text-right font-semibold text-ink">{kes1(s.grossKes)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-
-                  <TermsUsed terms={pricing.terms} stated={extraction.terms} several={priced.length > 1} />
-                  {floodCover !== "excluded" && (
-                    <p className="mt-3 text-sm leading-relaxed text-ink-2">{floodCover === "covered" ? "The document asks for flood to be covered." : "The document does not say whether flood is to be covered."}</p>
-                  )}
-                  {floodCover === "excluded" && (
-                    <div className="mt-3">
-                      <Note tone="warn">The document asks for flood to be excluded. The figures here are what flood would cost if it were covered.</Note>
-                    </div>
-                  )}
-
-                  {/* Columns that fit as many as the card has room for; the minimum is in rem, so it follows the text size. */}
-                  <div className="mt-4 grid gap-4 grid-cols-[repeat(auto-fit,minmax(min(14rem,100%),1fr))]">
-                    <Figure
-                      strong
-                      label={`Gross loss in a ${rpWithChance(100)} flood`}
-                      value={gross100 && gross100.lossKes !== null ? `${kes1(gross100.lossKes)}${gross100.extrapolated ? " †" : ""}` : "Not modelled"}
-                      sub={
-                        gross100 && gross100.lossKes !== null
-                          ? `After the deductible and the limit, read off this offer's own loss curve.${gross100.extrapolated ? " † held flat beyond the rarest modelled scenario." : ""}`
-                          : "A 1-in-100 flood is more frequent than the most frequent scenario modelled."
-                      }
-                      source={grossSource}
-                      sourceText={grossText}
-                    />
-                    <Figure
-                      label="Average annual loss, ground-up"
-                      value={kes1(totals.aalGroundUpKes)}
-                      sub={`Before any terms. ${fmtRate(totals.ratePerMilleGroundUp)} of the insured value of ${kes1(totals.tivKes)}`}
-                      source={hazardSource}
-                      sourceText={hazardText}
-                    />
-                    <Figure
-                      label="Average annual loss, gross"
-                      value={kes1(totals.aalGrossKes)}
-                      sub={`After the deductible and the limit. ${fmtRate(totals.ratePerMilleGross)} of insured value`}
-                      source={grossSource}
-                      sourceText={grossText}
-                    />
-                    <Figure
-                      label="Pure flood rate, gross"
-                      value={fmtRate(totals.ratePerMilleGross)}
-                      sub={<>Gross average annual loss ÷ insured value × 1000. Ground-up: {fmtRate(totals.ratePerMilleGroundUp)}. Before expense, profit and uncertainty loadings, and before any reinsurance.</>}
-                      source={grossSource}
-                      sourceText={grossText}
-                    />
-                  </div>
-
-                  <p className="mt-3 text-xs leading-relaxed text-muted">
-                    Every figure in this card comes from the loss engine: the hazard maps read at the building, the damage curve for its class, and its insured value. None comes from the model.
-                    {" "}The assumptions in force are the {active.source === "ai" ? "ones the agents agreed" : "reference ones"}.
-                    {isScore ? " Depth is worked out from a 0 to 1 susceptibility score and the assumed depth scale, and the return periods are assumed: it is not a measured depth." : ""}
-                    {pricing.drainageOn ? " Drainage ponding is an assumed depth near open drains and informal settlements; the damage is read at the deeper of the two." : ""}
-                  </p>
-                  <SourceLine sources={priceSources} className="mt-3 border-t border-line pt-3" />
-                </>
-              )}
+              <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line pt-3">
+                <Button
+                  variant="secondary"
+                  className="whitespace-nowrap"
+                  disabled={f.rows.length === 0}
+                  onClick={() => download(`offer-rows-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.csv`, offerCsv(f.rows, offer.document.name), "text/csv")}
+                >
+                  Download the rows as CSV
+                </Button>
+                <span className="min-w-0 flex-1 basis-56 text-xs leading-relaxed text-muted">
+                  {plural(f.rows.length, "row")} in the exposure file&apos;s columns, marked synthetic=false. A value that is not known, or not yet confirmed, is left blank.
+                </span>
+              </div>
             </Card>
-
-            {/* min-w-0 and one shrinkable column, so a wide table scrolls inside its card and is never cut off. */}
-            <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-4">
-              {!held && pricing.portfolio && <PortfolioCard effect={pricing.portfolio} matchesHeader={matchesHeader} />}
-              <Card title="The rows as an exposure file">
-                <p className="text-sm leading-relaxed text-ink-2">
-                  {plural(rows.length, "row")} in the exposure file&apos;s columns, marked synthetic=false and source=offer:{offer.document.name}. A value that is not known, or not yet confirmed, is left blank.
-                </p>
-                <div className="mt-3">
-                  <Button variant="secondary" onClick={() => download(`offer-rows-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.csv`, offerCsv(rows, offer.document.name), "text/csv")}>
-                    Download the rows as CSV
-                  </Button>
-                </div>
-              </Card>
-            </div>
           </div>
 
-          <Card title="Checks on this offer" className="mt-4" aside={<ChecksSummary checks={checks} />}>
-            <CheckList checks={checks} stagger={90} />
-            <p className="mt-3 text-xs leading-relaxed text-muted">
-              {held
-                ? "The checks on location, river distance, value per m², basements, flood history and the damage curve run once the values above are settled."
-                : summary.warn + summary.fail > 0
-                  ? "A warning is something to weigh before quoting. A limit of the model is shown as a warning, never as a failure of the offer."
-                  : "Every check passed."}
-            </p>
-          </Card>
+          <ReadingRecord doc={f.document} />
+          <ResultCard f={f} onConfirm={confirm} onClear={(ref) => void edit(ref, null)} onOpenStep={onOpenStep} />
         </>
       )}
     </div>

@@ -1,6 +1,6 @@
 import { fmtKes, fmtNum } from "../format";
 import { policyLoss } from "../model/terms";
-import type { DescribeTerms, GrossLoss, GrossLosses, PolicyTermsOf } from "./types";
+import type { DescribeTerms, GrossLoss, GrossLosses, PolicyTerms, PolicyTermsOf } from "./types";
 import { usableValue } from "./verify";
 
 /**
@@ -32,17 +32,32 @@ export const policyTerms: PolicyTermsOf = (terms, defaults) => {
   };
 };
 
-export const grossLosses: GrossLosses = (groundUpKes, tivKes, terms) => {
+/** One building in one flood, taken through the terms: what each party keeps. The three add up to the ground-up loss. */
+export interface TermsSplit {
+  /** The part of the loss the policyholder keeps under the deductible. */
+  deductibleKes: number;
+  /** The part of the loss above the limit. */
+  overLimitKes: number;
+  /** What the insurer pays: ground-up less the deductible, capped at the limit. */
+  grossKes: number;
+}
+
+/**
+ * One flood, every building of the offer, by the formulas on PolicyTerms: the deductible taken,
+ * the amount over the limit and the gross loss of each building, in the order given.
+ * grossLosses is this function's gross column, so the two can never disagree.
+ */
+export const termsSplit = (groundUpKes: readonly number[], tivKes: readonly number[], terms: PolicyTerms): TermsSplit[] => {
   const loss = groundUpKes.map((v) => (v > 0 ? v : 0));
   const tiv = loss.map((_, i) => (tivKes[i] > 0 ? tivKes[i] : 0));
   const total = sum(loss);
   // No loss, no deductible: a KES minimum is only ever taken out of a loss that happened.
-  if (!(total > 0)) return loss.map(() => 0);
+  if (!(total > 0)) return loss.map(() => ({ deductibleKes: 0, overLimitKes: 0, grossKes: 0 }));
 
   const { deductible, limit } = terms;
   // The panel's terms for both: exactly what the portfolio does, building by building.
   if (deductible.source === "example" && limit.source === "example") {
-    return loss.map((v, i) => policyLoss(v, tiv[i], { deductibleShare: deductible.share, deductibleMinKes: deductible.minKes, limitShare: limit.share }).grossKes);
+    return loss.map((v, i) => policyLoss(v, tiv[i], { deductibleShare: deductible.share, deductibleMinKes: deductible.minKes, limitShare: limit.share }));
   }
 
   let after: number[];
@@ -57,12 +72,17 @@ export const grossLosses: GrossLosses = (groundUpKes, tivKes, terms) => {
   }
   after = after.map((v) => Math.max(0, v));
 
+  let gross: number[];
   if (limit.source === "document") {
     const left = sum(after);
-    return left > limit.kes ? after.map((v) => limit.kes * (v / left)) : after;
+    gross = left > limit.kes ? after.map((v) => limit.kes * (v / left)) : after;
+  } else {
+    gross = after.map((v, i) => Math.min(v, limit.share * tiv[i]));
   }
-  return after.map((v, i) => Math.min(v, limit.share * tiv[i]));
+  return loss.map((v, i) => ({ deductibleKes: v - after[i], overLimitKes: after[i] - gross[i], grossKes: gross[i] }));
 };
+
+export const grossLosses: GrossLosses = (groundUpKes, tivKes, terms) => termsSplit(groundUpKes, tivKes, terms).map((x) => x.grossKes);
 
 export const grossLoss: GrossLoss = (groundUpKes, terms, tivKes) => grossLosses([groundUpKes], [tivKes], terms)[0];
 

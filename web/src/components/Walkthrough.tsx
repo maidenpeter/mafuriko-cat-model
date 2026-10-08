@@ -227,12 +227,14 @@ export function Walkthrough() {
   }, [session, active, drainageOn, deliberation]);
 
   const checks = useMemo(() => {
-    if (!view || !active) return { ai: [], vulnerability: [], financial: [], all: [] };
-    const ai = viewDeliberation && !agentsBusy ? aiChecks(view.dataset, viewDeliberation) : [];
+    if (!session || !view || !active) return { ai: [], vulnerability: [], financial: [], all: [] };
+    // The agents are checked on the data they decided on. Their saved fingerprint belongs to that
+    // run, so re-running the engine on the drainage view would never match it.
+    const ai = deliberation && !agentsBusy ? aiChecks(session.dataset, deliberation) : [];
     const vulnerability = vulnerabilityChecks(active.params);
     const financial = financialChecks(view.dataset, active.result);
     return { ai, vulnerability, financial, all: [...view.dataChecks, ...view.hazardChecks, ...ai, ...vulnerability, ...financial] };
-  }, [view, active, viewDeliberation, agentsBusy]);
+  }, [session, view, active, deliberation, agentsBusy]);
 
   const reset = () => {
     setStep(0);

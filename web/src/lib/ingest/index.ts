@@ -11,6 +11,8 @@ import {
   type Raster,
   type ScenarioDef,
 } from "../model/types";
+import { inKenya, parseCoordinates } from "../offer/coords";
+import { docxToText } from "../offer/docx";
 import { readRaster, sampleRaster } from "./raster";
 
 /** A file from the upload, however it was obtained (zip entry in the browser, disk in tests). */
@@ -21,7 +23,7 @@ export interface FileSource {
   arrayBuffer(): Promise<ArrayBuffer>;
 }
 
-export type FileKind = "exposure" | "hazard-raster" | "hotspots" | "other";
+export type FileKind = "exposure" | "hazard-raster" | "hotspots" | "offer" | "other";
 export type Provenance = "real" | "proxy" | "synthetic" | "none";
 
 export interface FileInfo {
@@ -86,6 +88,35 @@ function scenarioFromFileName(name: string): { kind: HazardKind; scenario: Scena
   return null;
 }
 
+// A file that describes the data or the task, whatever numbers it quotes: told by its name, its heading, or the column names it lists.
+const DOCUMENTATION_NAME = /problem[\s_-]*statement|dictionary|metadata|read[\s_-]?me|guide|licen[cs]e/i;
+const DOCUMENTATION_HEADING = /\b(?:problem\s+statement|data\s+dictionary|dataset\s+metadata)\b/i;
+const COLUMN_NAMES = /\b(?:loc_id|tiv_kes|housing_class|floor_area_m2|cost_per_m2_kes)\b/;
+// "Sum insured: KES 8,000,000", "TIV of KSh 4.2 billion", "total insured value (KES 950m)".
+const SUM_INSURED = /\b(?:TIV|total\s+insured\s+value|(?:total\s+)?sums?\s+insured|insured\s+value)\b[^\n]{0,40}?\bK(?:ES|SHS?)\b\.?\s*\d/i;
+
+/**
+ * True when a document reads like an offer to price: it gives a position in Kenya, or a sum
+ * insured in KES. A problem statement or a data dictionary is never an offer, even though it
+ * may quote both.
+ */
+export function looksLikeOffer(name: string, text: string): boolean {
+  if (DOCUMENTATION_NAME.test(name)) return false;
+  if (DOCUMENTATION_HEADING.test(text.slice(0, 600)) || COLUMN_NAMES.test(text)) return false;
+  if (SUM_INSURED.test(text)) return true;
+  const point = parseCoordinates(text);
+  return point !== null && inKenya(point.lat, point.lon);
+}
+
+/** The words of a .docx or .txt, or null when the file cannot be read as one. */
+async function documentText(file: FileSource, lowerName: string): Promise<string | null> {
+  try {
+    return lowerName.endsWith(".docx") ? await docxToText(await file.arrayBuffer()) : await file.text();
+  } catch {
+    return null;
+  }
+}
+
 async function csvHeader(file: FileSource): Promise<string[]> {
   const text = await file.text();
   const firstLine = text.slice(0, text.indexOf("\n") === -1 ? text.length : text.indexOf("\n"));
@@ -95,10 +126,13 @@ async function csvHeader(file: FileSource): Promise<string[]> {
 /**
  * Sort the uploaded files into datasets. A dataset is a folder holding an
  * exposure CSV, with whatever hazard rasters and hotspots sit beside it.
+ * Offers found among the files (a .docx or .txt that reads like one) come back in `offers`,
+ * in the order of the upload: they are not model inputs, they go to the offer step.
  */
-export async function detectDatasets(files: FileSource[], uploadName = "upload"): Promise<{ candidates: DatasetCandidate[]; files: FileInfo[] }> {
+export async function detectDatasets(files: FileSource[], uploadName = "upload"): Promise<{ candidates: DatasetCandidate[]; files: FileInfo[]; offers: FileSource[] }> {
   const usable = files.filter((f) => !isJunk(f.path));
   const infos: FileInfo[] = [];
+  const offers: FileSource[] = [];
   const byDir = new Map<string, { exposures: { file: FileSource; hasHazard: boolean }[]; rasters: { file: FileSource; kind: HazardKind; scenario: ScenarioDef }[]; hotspots: FileSource | null }>();
   const group = (dir: string) => {
     if (!byDir.has(dir)) byDir.set(dir, { exposures: [], rasters: [], hotspots: null });
@@ -137,7 +171,16 @@ export async function detectDatasets(files: FileSource[], uploadName = "upload")
       } else {
         info.note = "CSV with unrecognised columns";
       }
-    } else if (/\.(md|docx|pdf|txt)$/.test(lower)) {
+    } else if (/\.(docx|txt)$/.test(lower)) {
+      const text = await documentText(file, lower);
+      if (text !== null && looksLikeOffer(name, text)) {
+        offers.push(file);
+        info.kind = "offer";
+        info.note = "An offer to price, opened in the offer step";
+      } else {
+        info.note = "Documentation";
+      }
+    } else if (/\.(md|pdf)$/.test(lower)) {
       info.note = "Documentation";
     }
     infos.push(info);
@@ -162,7 +205,7 @@ export async function detectDatasets(files: FileSource[], uploadName = "upload")
       hotspots: g.hotspots,
     });
   }
-  return { candidates, files: infos };
+  return { candidates, files: infos, offers };
 }
 
 const num = (v: unknown): number => {

@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
-import { buildPrompt, type AgentRequest } from "@/lib/agents/prompts";
-import { generateJson, keyFor, keySettings, modelName } from "@/lib/agents/provider";
-import { RESPONSE_SCHEMAS } from "@/lib/agents/responseSchema";
-import { nestReply, ROLES, SCHEMAS, type Role } from "@/lib/agents/schema";
+// Relative paths, not the "@/" alias: the tests call this handler directly, and they run without the alias.
+import { readOfferBrief } from "../../../../lib/agents/offerBrief";
+import { buildPrompt, type AgentRequest } from "../../../../lib/agents/prompts";
+import { generateJson, keyFor, keySettings, modelName } from "../../../../lib/agents/provider";
+import { responseSchemaFor } from "../../../../lib/agents/responseSchema";
+import { issueName, nestReply, ROLES, schemaFor, type Role } from "../../../../lib/agents/schema";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -21,8 +23,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ role: s
   const apiKey = keyFor(role);
   if (!apiKey) return NextResponse.json({ ok: false, error: `No API key configured for the ${role} agent. Set ${keySettings(role)} in web/.env.local.` }, { status: 503 });
 
-  const request = (await req.json()) as AgentRequest;
-  const prompt = buildPrompt(role, request);
+  const body = (await req.json()) as AgentRequest;
+  // With an offer loaded the agents also argue its five judgement figures. Only the plain facts
+  // of the brief go into the prompt; anything else sent with it is dropped here.
+  const offer = readOfferBrief(body.offer);
+  const hasOffer = offer !== null;
+  const prompt = buildPrompt(role, { profile: body.profile, chair: body.chair, offer });
+  const enforced = responseSchemaFor(role, hasOffer);
+  const expected = schemaFor(role, hasOffer);
   const started = Date.now();
   const attempts: { raw: string; problem: string | null }[] = [];
 
@@ -30,15 +38,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ role: s
     let user = prompt.user;
     // One retry with the validation error fed back, then give up and let the walkthrough fall back.
     for (let attempt = 0; attempt < 2; attempt++) {
-      const { text: raw, usage } = await generateJson(apiKey, prompt.system, user, RESPONSE_SCHEMAS[role], role);
+      const { text: raw, usage } = await generateJson(apiKey, prompt.system, user, enforced, role);
       let problem: string | null = null;
       try {
-        const parsed = SCHEMAS[role].safeParse(nestReply(role, parseJson(raw)));
+        const parsed = expected.safeParse(nestReply(role, parseJson(raw), hasOffer));
         if (parsed.success) {
           attempts.push({ raw, problem: null });
           return NextResponse.json({ ok: true, role, model: modelName(), ms: Date.now() - started, prompt, raw, usage, attempts: attempts.length, output: parsed.data });
         }
-        problem = parsed.error.issues.slice(0, 6).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
+        problem = parsed.error.issues.slice(0, 6).map((i) => `${issueName(i.path)}: ${i.message}`).join("; ");
       } catch (e) {
         // "MAX_TOKENS" is Gemini's name for running out of room, "length" is OpenAI's.
         problem = usage.finishReason === "MAX_TOKENS" || usage.finishReason === "length" ? "the reply hit the output limit before it was complete" : `not valid JSON (${(e as Error).message})`;

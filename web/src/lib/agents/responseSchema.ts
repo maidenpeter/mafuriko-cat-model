@@ -1,4 +1,4 @@
-import { BASES, PARAMETER_NAMES, type Role } from "./schema";
+import { basesFor, parameterNames, type Role } from "./schema";
 
 /**
  * The reply shapes in the form the Gemini API enforces while it generates, so
@@ -9,6 +9,9 @@ import { BASES, PARAMETER_NAMES, type Role } from "./schema";
  * A nested shape (an object per parameter, grouped by class and tier) was
  * accepted by the API but never started producing text. The route turns the
  * flat list back into the nested form that the Zod schemas validate.
+ *
+ * With an offer loaded the same flat list is longer: the offer's five judgement
+ * figures follow the model's parameters, and nothing is nested any deeper.
  */
 type Schema = Record<string, unknown>;
 
@@ -22,26 +25,39 @@ const object = (properties: Record<string, Schema>): Schema => ({
 const list = (items: Schema, limits: Schema = {}): Schema => ({ type: "ARRAY", items, ...limits });
 const oneOf = (values: readonly string[]): Schema => ({ type: "STRING", enum: [...values] });
 
-const every = { minItems: PARAMETER_NAMES.length, maxItems: PARAMETER_NAMES.length };
-// The reason is written before the value, so the number follows from the argument.
-const proposed = object({ name: oneOf(PARAMETER_NAMES), reason: text, basis: oneOf(BASES), value: { type: "NUMBER" } });
-const decided = object({ name: oneOf(PARAMETER_NAMES), reason: text, basis: oneOf(BASES), leans: oneOf(["optimist", "cautious", "between", "outside"]), value: { type: "NUMBER" } });
+/** How many challenges the Critic raises. An offer gives it more to challenge. */
+export const challengeLimits = (hasOffer: boolean) => (hasOffer ? { minItems: 4, maxItems: 8 } : { minItems: 3, maxItems: 6 });
 
-const proposal = object({ stance: text, parameters: list(proposed, every) });
+function build(hasOffer: boolean): Record<Role, Schema> {
+  const names = parameterNames(hasOffer);
+  const bases = basesFor(hasOffer);
+  const every = { minItems: names.length, maxItems: names.length };
+  // The reason is written before the value, so the number follows from the argument.
+  const proposed = object({ name: oneOf(names), reason: text, basis: oneOf(bases), value: { type: "NUMBER" } });
+  const decided = object({ name: oneOf(names), reason: text, basis: oneOf(bases), leans: oneOf(["optimist", "cautious", "between", "outside"]), value: { type: "NUMBER" } });
+  const proposal = object({ stance: text, parameters: list(proposed, every) });
+  return {
+    optimist: proposal,
+    cautious: proposal,
+    critic: object({
+      summary: text,
+      challenges: list(
+        object({ id: text, title: text, detail: text, severity: oneOf(["high", "medium", "low"]), affects: list(text), recommendation: text }),
+        challengeLimits(hasOffer),
+      ),
+    }),
+    chair: object({
+      summary: text,
+      parameters: list(decided, every),
+      responses: list(object({ challengeId: text, verdict: oneOf(["accepted", "partly", "rejected"]), response: text })),
+    }),
+  };
+}
 
-export const RESPONSE_SCHEMAS: Record<Role, Schema> = {
-  optimist: proposal,
-  cautious: proposal,
-  critic: object({
-    summary: text,
-    challenges: list(
-      object({ id: text, title: text, detail: text, severity: oneOf(["high", "medium", "low"]), affects: list(text), recommendation: text }),
-      { minItems: 3, maxItems: 6 },
-    ),
-  }),
-  chair: object({
-    summary: text,
-    parameters: list(decided, every),
-    responses: list(object({ challengeId: text, verdict: oneOf(["accepted", "partly", "rejected"]), response: text })),
-  }),
-};
+/** The shapes with no offer loaded: the model's own parameters and nothing else. */
+export const RESPONSE_SCHEMAS: Record<Role, Schema> = build(false);
+
+const OFFER_RESPONSE_SCHEMAS: Record<Role, Schema> = build(true);
+
+/** The shape enforced for this request: the longer list when an offer is loaded. */
+export const responseSchemaFor = (role: Role, hasOffer: boolean): Schema => (hasOffer ? OFFER_RESPONSE_SCHEMAS : RESPONSE_SCHEMAS)[role];

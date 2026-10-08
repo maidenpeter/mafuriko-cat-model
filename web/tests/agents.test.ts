@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildPrompt } from "../src/lib/agents/prompts";
-import { RESPONSE_SCHEMAS } from "../src/lib/agents/responseSchema";
-import { decisionSchema, nestReply, PARAMETER_NAMES, proposalSchema, toParams } from "../src/lib/agents/schema";
+import { RESPONSE_SCHEMAS, responseSchemaFor } from "../src/lib/agents/responseSchema";
+import { BASES, decisionSchema, nestReply, PARAMETER_NAMES, parameterNames, proposalSchema, ROLES, schemaFor, SCHEMAS, toParams } from "../src/lib/agents/schema";
 import { flattenParams, REFERENCE_PARAMS } from "../src/lib/model/params";
 
 // A reply in the flat form the model is asked for, built from the reference values.
@@ -50,5 +50,33 @@ describe("agent replies", () => {
       for (const name of PARAMETER_NAMES) expect(system).toContain(`- ${name}`);
       expect(system).toContain('"parameters": [ exactly 14 entries');
     }
+  });
+
+  it("keeps the list, the shapes and the checks as they were when no offer is loaded", () => {
+    expect(parameterNames(false)).toBe(PARAMETER_NAMES);
+    expect(BASES).toEqual(["jrc_reference", "data_profile", "brief", "judgement"]);
+    for (const role of ROLES) {
+      expect(responseSchemaFor(role, false)).toBe(RESPONSE_SCHEMAS[role]);
+      expect(schemaFor(role, false)).toBe(SCHEMAS[role]);
+      expect(JSON.stringify(RESPONSE_SCHEMAS[role])).not.toContain("offer");
+      const { system, user } = buildPrompt(role, { profile: {} as never });
+      expect(system).toContain("The 14 parameters, by name:");
+      expect(system).not.toContain("offer");
+      expect(user).not.toContain("offer");
+    }
+    for (const role of ["optimist", "cautious", "chair"] as const) {
+      const schema = RESPONSE_SCHEMAS[role] as { properties: { parameters: { maxItems: number; items: { properties: { basis: { enum: string[] } } } } } };
+      expect(schema.properties.parameters.maxItems).toBe(14);
+      expect(schema.properties.parameters.items.properties.basis.enum).toEqual([...BASES]);
+    }
+    const critic = RESPONSE_SCHEMAS.critic as { properties: { challenges: { minItems: number; maxItems: number } } };
+    expect(critic.properties.challenges).toMatchObject({ minItems: 3, maxItems: 6 });
+  });
+
+  it("nests a reply the same way whether or not the offer argument is given", () => {
+    const reply = { stance: "s", parameters: flat() };
+    expect(nestReply("optimist", reply, false)).toEqual(nestReply("optimist", reply));
+    expect(nestReply("optimist", reply)).not.toHaveProperty("offerJudgement");
+    expect(Object.keys(nestReply("chair", { summary: "s", parameters: flat({ leans: "between" }), responses: [] }) as object)).toEqual(["summary", "responses", "decision"]);
   });
 });

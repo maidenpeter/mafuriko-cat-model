@@ -112,7 +112,7 @@ export function MapStrip({
       </button>
 
       {/* The padding leaves room for the focus ring, which a scrolling box would otherwise cut off. */}
-      <div role="group" aria-label="Layers shown on the map" className="-m-1 flex min-w-0 flex-[1_1_40rem] items-center gap-1.5 overflow-x-auto p-1 scrollbar-thin @3xl:flex-wrap @3xl:overflow-visible">
+      <div role="group" aria-label="Layers shown on the map" className="-m-1 flex min-w-0 flex-[1_1_40rem] items-center gap-1.5 overflow-x-auto p-1 scrollbar-thin @md:flex-wrap @md:overflow-visible">
         {chips.map((chip) => {
           const on = layers[chip.key];
           return (

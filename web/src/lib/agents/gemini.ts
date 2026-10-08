@@ -112,6 +112,7 @@ export async function generateJson(apiKey: string, system: string, user: string,
       const scan = completionScanner();
       let buffer = "";
       let completeAt: number | null = null;
+      let streamError: { code?: number; message?: string } | null = null;
 
       while (true) {
         // Once the reply is complete, give the stream a moment to end, then stop listening.
@@ -133,6 +134,7 @@ export async function generateJson(apiKey: string, system: string, user: string,
           } catch {
             continue;
           }
+          if (chunk.error) streamError = chunk.error;
           const meta = chunk.usageMetadata;
           if (meta) Object.assign(usage, { promptTokens: meta.promptTokenCount, outputTokens: meta.candidatesTokenCount, thinkingTokens: meta.thoughtsTokenCount });
           const candidate = chunk.candidates?.[0];
@@ -150,6 +152,19 @@ export async function generateJson(apiKey: string, system: string, user: string,
       }
       clearTimeout(timer);
       controller.abort();
+      // The stream ended before the JSON closed, and the model never said it had finished: the
+      // service dropped the reply part-way. That is a failed call, not a badly shaped reply, so
+      // it gets the one retry an overloaded service gets, unless the service says the quota ran out.
+      if (completeAt === null && !usage.finishReason) {
+        const quota = streamError?.code === 429;
+        const detail = streamError?.message;
+        lastError = quota
+          ? `quota or rate limit reached for this key (429). ${detail ?? ""}`.trim()
+          : `the service stopped part-way through the reply, after ${text.length.toLocaleString("en-KE")} characters${detail ? `: ${detail}` : ""}`;
+        console.log(`[${label}] cut off after ${seconds()} s: ${lastError.slice(0, 200)}`);
+        if (quota) break;
+        continue;
+      }
       console.log(
         `[${label}] ${modelName()} · first text ${usage.firstTextS ?? "?"} s · done ${seconds()} s · ${usage.outputTokens ?? "?"} tokens written, ${usage.thinkingTokens ?? 0} thinking · finish ${usage.finishReason ?? "cut off"}${usage.padded ? " · kept sending after the reply was complete" : ""}`,
       );

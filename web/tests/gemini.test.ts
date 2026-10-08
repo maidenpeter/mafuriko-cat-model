@@ -84,6 +84,46 @@ describe("model call", () => {
     expect(requests).toBe(2);
   }, 10_000);
 
+  it("treats a reply the service dropped part-way as a failed call, and tries once more", async () => {
+    handler = (res, n) => {
+      sse(res);
+      if (n === 1) return res.end(event('{"stance": "The Cautious'));
+      res.end(event('{"ok": 1}', { finishReason: "STOP" }));
+    };
+    expect(JSON.parse((await generateJson("k", "s", "u", {})).text)).toEqual({ ok: 1 });
+    expect(requests).toBe(2);
+  }, 10_000);
+
+  it("says the service stopped, not that the reply was badly shaped, when it is dropped twice", async () => {
+    handler = (res) => {
+      sse(res);
+      res.write(event('{"stance": "The Cautious'));
+      res.end(`data: ${JSON.stringify({ error: { code: 503, message: "The model is overloaded." } })}\n\n`);
+    };
+    await expect(generateJson("k", "s", "u", {})).rejects.toThrow("the service stopped part-way through the reply, after 24 characters: The model is overloaded.");
+    expect(requests).toBe(2);
+  }, 10_000);
+
+  it("does not retry when the reply is dropped because the quota ran out", async () => {
+    handler = (res) => {
+      sse(res);
+      res.end(`data: ${JSON.stringify({ error: { code: 429, message: "Quota exceeded" } })}\n\n`);
+    };
+    await expect(generateJson("k", "s", "u", {})).rejects.toThrow(/quota or rate limit.*Quota exceeded/);
+    expect(requests).toBe(1);
+  });
+
+  it("still hands back a reply that ran out of room, so the route can ask again", async () => {
+    handler = (res) => {
+      sse(res);
+      res.end(event('{"stance": "half', { finishReason: "MAX_TOKENS" }));
+    };
+    const out = await generateJson("k", "s", "u", {});
+    expect(out.text).toBe('{"stance": "half');
+    expect(out.usage.finishReason).toBe("MAX_TOKENS");
+    expect(requests).toBe(1);
+  });
+
   it("says where the time went when nothing comes back", async () => {
     process.env.GEMINI_TIMEOUT_S = "1";
     handler = (res) => sse(res); // accepts the request, then stays silent

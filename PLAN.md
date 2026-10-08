@@ -38,7 +38,7 @@ side-by-side of the loss curve **without AI** (reference assumptions) and
 | Hazard layer | Used as given, plus an optional drainage layer from open map data (on by default, one switch turns it off). |
 | Insured values | Used as they are in the file. The file's values are 10× floor area × cost per m² (portfolio total KES 63.6bn; the data dictionary says 6.36bn). The app detects this and shows it on screen. |
 | Agents | Optimist, Cautious, Critic, running in parallel, plus a Chair that combines them. |
-| AI provider | Gemini, free keys, one key per agent. The model call sits behind one function so the provider can be swapped. |
+| AI provider | OpenAI (one key for all four agents) or Gemini (free keys, one per agent), chosen by one setting. The model call sits behind one function, so nothing else in the app knows which is in use. |
 | Front end | Next.js, modern and simple, animated walkthrough, tests running on screen. |
 | Input | A zip shaped like `data/data/`. The app must not depend on exact file names. |
 | Second AI feature | Decided later (free-text portfolio entry, text-to-speech or speech-to-speech are candidates). |
@@ -146,15 +146,18 @@ Safeguards:
 
 - Structured JSON output checked against a schema; ranges enforced by code.
 - Every run saved (inputs, prompts, raw replies, final parameters, results)
-  so it can be replayed exactly. Gemini 3 models do not accept a temperature
-  setting, so two live runs can differ; the saved run is what makes a result
-  repeatable.
+  so it can be replayed exactly. The current OpenAI and Gemini models reason
+  before they answer and are not run at a fixed temperature, so two live runs
+  can differ; the saved run is what makes a result repeatable.
 - A saved run ships with the app, so the demo still works with no network.
 - If a call fails, the walkthrough continues on reference values and says so.
 
 Environment variables (in `web/.env.local`, never committed):
 
 ```
+AGENT_PROVIDER=          # openai or gemini; blank means OpenAI when it has a key
+OPENAI_API_KEY=          # one key for all four agents
+OPENAI_MODEL=            # optional; defaults to gpt-6-luna
 GEMINI_API_KEY_OPTIMIST=
 GEMINI_API_KEY_CAUTIOUS=
 GEMINI_API_KEY_CRITIC=
@@ -309,11 +312,14 @@ Each phase ends with something that works, so there is always a demo.
 - The return periods attached to the tiers are assumed.
 - The portfolio is synthetic and randomly placed.
 - The five scenarios are nested cuts of one map, not independent events.
-- The agents run on free Gemini keys. Google's terms let it use free-tier
-  inputs to improve its products, and human reviewers may read them. The
-  agents only see summary figures built from synthetic data. A deployment with
-  real cedant data would use a paid tier or a locally hosted model; the
-  provider sits behind one function.
+- The agents run on a hosted model: OpenAI's API, or free Gemini keys. OpenAI
+  says API data is not used to train its models unless the account opts in,
+  and that it keeps request logs for up to 30 days to monitor abuse. Google's
+  terms let it use free-tier inputs to improve its products, and human
+  reviewers may read them. Either way the agents only see summary figures
+  built from synthetic data. A deployment with real cedant data would need a
+  data agreement with the provider, or a locally hosted model; the provider
+  sits behind one function.
 
 ## 11. Open items
 
@@ -323,6 +329,9 @@ Each phase ends with something that works, so there is always a demo.
 - [x] Confirm the Gemini model name: `gemini-3.8-flash` is listed as stable
       on Google's model page (checked 7 October 2026).
 - [ ] Confirm the free-tier request limits.
+- [x] Confirm the OpenAI model name: `gpt-6-luna` is on OpenAI's model page
+      and listed for our key (checked 8 October 2026).
+- [ ] Complete one live agent run and save it, so a run can ship with the app.
 - [ ] Get the marking rubric and check this plan against it.
 - [ ] Choose the second AI feature.
 
@@ -335,6 +344,7 @@ Each phase ends with something that works, so there is always a demo.
 - Nairobi County flood-hotspot mapping, March 2026 (hotspot names).
 - Hackathon starter kit: problem statement, build guide and data dictionary in `data/`.
 - Gemini API Additional Terms of Service (free and paid tiers): https://ai.google.dev/terms
+- OpenAI API data controls (training use and retention): https://developers.openai.com/api/docs/guides/your-data
 - Map layers in `web/public/geo/` (wards: Omare and Omare 2017, CC BY 4.0;
   rivers, drains, settlements and facilities: OpenStreetMap contributors, ODbL).
   Details in `web/public/geo/SOURCES.md`.

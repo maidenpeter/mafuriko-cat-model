@@ -4,6 +4,7 @@ import { enforceBounds, REFERENCE_PARAMS } from "../src/lib/model/params";
 import { runModel } from "../src/lib/model/pipeline";
 import { HOUSING_CLASSES, type Dataset } from "../src/lib/model/types";
 import { baseCurve, damageRatio } from "../src/lib/model/vulnerability";
+import { REFERENCE_JUDGEMENT } from "../src/lib/offer/judgement";
 
 describe("JRC base curve", () => {
   it("returns the published points exactly", () => {
@@ -128,5 +129,19 @@ describe("pipeline on a hand-checked portfolio", () => {
     expect(result.scenarios[1].lossKes).toBeCloseTo(50530);
     expect(result.scenarios[1].byClass.informal_iron_sheet.lossKes).toBeCloseTo(530);
     expect(result.totalTivKes).toBe(101000);
+  });
+  it("is the depth-only model unless all loss drivers are asked for", () => {
+    expect(result.mode).toBe("depth_only");
+    expect(runModel(dataset, REFERENCE_PARAMS, { mode: "depth_only" })).toEqual(result);
+    // This portfolio has no maps, so there is no buffer to read and all loss drivers add drain overload only.
+    // Drains designed for 1-in-5: the 1-in-10 puts 0.1 m at A. 0.1 m × 1.5 = 0.15 m → 0.066 × 1,000 = 66.
+    const all = runModel(dataset, REFERENCE_PARAMS, { mode: "all_drivers", judgement: { ...REFERENCE_JUDGEMENT, drainDesignRp: 5 } });
+    expect(all.mode).toBe("all_drivers");
+    expect(all.scenarios[0].lossKes).toBeCloseTo(28466);
+    expect(all.scenarios[0].byDriver?.overloadKes).toBeCloseTo(66);
+    expect(all.scenarios[0].affected).toBe(2);
+    // Where the water at the point is already deeper than 0.1 m, drain overload adds nothing.
+    expect(all.scenarios[1].lossKes).toBeCloseTo(50530);
+    expect(all.scenarios[1].byDriver?.overloadKes).toBe(0);
   });
 });

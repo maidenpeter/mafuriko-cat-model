@@ -9,7 +9,7 @@ import { detectDatasets, loadDataset, type FileSource, type IngestReport } from 
 import { tierSlopes } from "../src/lib/model/hazard";
 import { hotspotHits } from "../src/lib/model/hotspots";
 import { REFERENCE_PARAMS } from "../src/lib/model/params";
-import { runModel } from "../src/lib/model/pipeline";
+import { resultFingerprint, runModel } from "../src/lib/model/pipeline";
 import type { Dataset, ModelResult } from "../src/lib/model/types";
 
 // The hackathon starter kit, read straight from disk the way the browser reads it from a zip.
@@ -75,6 +75,12 @@ describe.skipIf(!existsSync(KIT))("starter kit", () => {
       expect(result.scenarios.map((s) => s.affected)).toEqual([32, 51, 110, 174, 259]);
     });
 
+    it("is the depth-only model, with the same fingerprint as before the loss drivers were added", () => {
+      const { result } = loaded.team_a_nairobi;
+      expect(result.mode).toBe("depth_only");
+      expect(resultFingerprint(result)).toBe("bdc87191");
+    });
+
     it("puts every tier back on one scale, so depth grows with rarity", () => {
       const { dataset, result } = loaded.team_a_nairobi;
       // Fitted from the five maps. The narrowest tier peaks at about 63% of the widest tier's depth.
@@ -108,6 +114,7 @@ describe.skipIf(!existsSync(KIT))("starter kit", () => {
       const drained = withDrainage(dataset, { distances, sensitivity });
       expect(hotspotHits(drained).filter((h) => h.hit)).toHaveLength(16);
       const result = runModel(drained, REFERENCE_PARAMS);
+      expect(resultFingerprint(result)).toBe("b6cc5322");
       const losses = result.scenarios.map((x) => x.lossKes);
       expect([...losses].sort((a, b) => a - b)).toEqual(losses);
       const terrain = runModel(dataset, REFERENCE_PARAMS);
@@ -149,6 +156,7 @@ describe.skipIf(!existsSync(KIT))("starter kit", () => {
       expect(dataset.hazardKind).toBe("depth_m");
       expect(report.rowsParsed).toBe(500);
       expect(result.scenarios.map((s) => s.returnPeriod)).toEqual([10, 20, 50, 100, 200, 500]);
+      expect(resultFingerprint(result)).toBe("09e0a862");
       for (const s of result.scenarios) {
         expect(s.affected).toBeGreaterThanOrEqual(46);
         expect(s.affected).toBeLessThanOrEqual(48);

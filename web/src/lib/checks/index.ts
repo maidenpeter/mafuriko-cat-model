@@ -1,10 +1,15 @@
 import { fmtInt, fmtKes, fmtNum } from "../format";
 import type { IngestReport } from "../ingest";
+import { buildingDepths } from "../model/drivers";
 import { hotspotHits } from "../model/hotspots";
 import { tierSlopes } from "../model/hazard";
 import { depthAt, scenarioReturnPeriods } from "../model/pipeline";
 import { HOUSING_CLASSES, HOUSING_LABELS, type Dataset, type ModelParams, type ModelResult } from "../model/types";
 import { baseCurve, damageRatio } from "../model/vulnerability";
+import { REFERENCE_JUDGEMENT } from "../offer/judgement";
+import { driverChecks } from "./drivers";
+
+export { driverChecks };
 
 export type CheckStatus = "pass" | "warn" | "fail";
 export type CheckGroup = "data" | "hazard" | "vulnerability" | "financial" | "ai";
@@ -178,14 +183,19 @@ export function financialChecks(dataset: Dataset, result: ModelResult): Check[] 
   const out: Check[] = [];
   const close = (a: number, b: number) => Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(a), Math.abs(b));
 
-  // Recompute every scenario loss from the inputs, independently of the engine's own bookkeeping.
+  // Recompute every scenario loss from the inputs, independently of the engine's own bookkeeping,
+  // at the depth the result's mode uses: the point and the ponding, or the deepest of all loss drivers.
   const rps = scenarioReturnPeriods(dataset, result.params);
   const slopes = tierSlopes(dataset);
+  const allDrivers = result.mode === "all_drivers";
+  const judgement = result.judgement ?? REFERENCE_JUDGEMENT;
+  const depthUsed = (i: number, k: number) =>
+    allDrivers ? buildingDepths(dataset, i, k, result.params, judgement, slopes[k], rps[k]).surfaceM : depthAt(dataset, i, k, result.params, slopes[k]).depthM;
   const recomputed = new Map<string, number>();
   dataset.scenarios.forEach((s, k) => {
     let total = 0;
     dataset.buildings.forEach((b, i) => {
-      total += damageRatio(depthAt(dataset, i, k, result.params, slopes[k]).depthM, b.housingClass, result.params) * b.tivKes;
+      total += damageRatio(depthUsed(i, k), b.housingClass, result.params) * b.tivKes;
     });
     recomputed.set(`${s.id}@${rps[k]}`, total);
   });
@@ -217,7 +227,8 @@ export function financialChecks(dataset: Dataset, result: ModelResult): Check[] 
     check(g, "aal", "Average annual loss is below the largest scenario loss", passIf(result.aalKes <= maxLoss + 1e-6),
       `Average annual loss ${fmtKes(result.aalKes)}; largest scenario ${fmtKes(maxLoss)}.`),
   );
-  return out;
+  // With all loss drivers, the checks on the drivers themselves follow. None in depth-only mode.
+  return [...out, ...driverChecks(dataset, result)];
 }
 
 export function summarise(checks: Check[]): Record<CheckStatus, number> {

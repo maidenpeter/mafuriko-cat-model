@@ -1,7 +1,10 @@
+import { REFERENCE_JUDGEMENT, type OfferJudgement } from "../offer/judgement";
+import { buildingDepths, structureLoss, type LossMode } from "./drivers";
 import { averageAnnualLoss, lossAtReturnPeriod, STANDARD_RETURN_PERIODS, type CurvePoint } from "./financial";
 import {
   HOUSING_CLASSES,
   type BuildingResult,
+  type BuildingScenarioResult,
   type ClassBreakdown,
   type Dataset,
   type HousingClass,
@@ -40,7 +43,23 @@ export function scenarioReturnPeriods(dataset: Dataset, params: ModelParams): nu
 
 const emptyBreakdown = (): ClassBreakdown => ({ count: 0, tivKes: 0, affected: 0, tivExposedKes: 0, lossKes: 0 });
 
-export function runModel(dataset: Dataset, params: ModelParams): ModelResult {
+export interface RunOptions {
+  /** "depth_only" when left out: depth at each building's point and drainage ponding, nothing else. */
+  mode?: LossMode;
+  /** The beyond-depth assumptions, used with all loss drivers. The reference set when left out. */
+  judgement?: OfferJudgement;
+}
+
+/**
+ * Runs the model on every building. With no options, or "depth_only", a building's loss comes from
+ * the depth at its point and the drainage ponding. With "all_drivers" the depth is the deepest of
+ * the point, the buffer around it, the ponding and drain overload (see drivers.ts), and every loss
+ * also carries its split by driver.
+ */
+export function runModel(dataset: Dataset, params: ModelParams, options: RunOptions = {}): ModelResult {
+  const mode: LossMode = options.mode ?? "depth_only";
+  const allDrivers = mode === "all_drivers";
+  const judgement = options.judgement ?? REFERENCE_JUDGEMENT;
   const rps = scenarioReturnPeriods(dataset, params);
   const slopes = tierSlopes(dataset);
   // Scenario order in the result: most frequent first.
@@ -55,14 +74,16 @@ export function runModel(dataset: Dataset, params: ModelParams): ModelResult {
     affected: 0,
     tivExposedKes: 0,
     byClass: Object.fromEntries(HOUSING_CLASSES.map((c) => [c, emptyBreakdown()])) as Record<HousingClass, ClassBreakdown>,
+    ...(allDrivers ? { byDriver: { pointKes: 0, surroundingKes: 0, pondingKes: 0, overloadKes: 0 } } : {}),
   }));
 
   let totalTivKes = 0;
   const buildings: BuildingResult[] = dataset.buildings.map((b, bi) => {
     totalTivKes += b.tivKes;
-    const perScenario = order.map((srcIndex, k) => {
+    const perScenario = order.map((srcIndex, k): BuildingScenarioResult => {
       const hazard = b.hazard[srcIndex] ?? 0;
-      const { depthM, drainageM } = depthAt(dataset, bi, srcIndex, params, slopes[srcIndex]);
+      const site = allDrivers ? buildingDepths(dataset, bi, srcIndex, params, judgement, slopes[srcIndex], rps[srcIndex]) : null;
+      const { depthM, drainageM } = site ? { depthM: site.surfaceM, drainageM: site.pondingM } : depthAt(dataset, bi, srcIndex, params, slopes[srcIndex]);
       const d = damageDetail(depthM, b.housingClass, params);
       const lossKes = d.damageRatio * b.tivKes;
 
@@ -79,7 +100,15 @@ export function runModel(dataset: Dataset, params: ModelParams): ModelResult {
       s.lossKes += lossKes;
       cls.lossKes += lossKes;
 
-      return { hazard, depthM, drainageM, ...d, lossKes };
+      if (!site || !s.byDriver) return { hazard, depthM, drainageM, ...d, lossKes };
+      // The same loss, split by the driver that put the water there.
+      const { pointKes, surroundingKes, pondingKes, overloadKes } = structureLoss(site, b.housingClass, b.tivKes, params);
+      s.byDriver.pointKes += pointKes;
+      s.byDriver.surroundingKes += surroundingKes;
+      s.byDriver.pondingKes += pondingKes;
+      s.byDriver.overloadKes += overloadKes;
+      const { pointM, bufferM, pondingM, overloaded, overloadM, surfaceM } = site;
+      return { hazard, depthM, drainageM, ...d, lossKes, drivers: { pointM, bufferM, pondingM, overloaded, overloadM, surfaceM, pointKes, surroundingKes, pondingKes, overloadKes } };
     });
     return { locId: b.locId, perScenario };
   });
@@ -95,6 +124,8 @@ export function runModel(dataset: Dataset, params: ModelParams): ModelResult {
     buildings,
     standardLosses: STANDARD_RETURN_PERIODS.map((rp) => ({ returnPeriod: rp, ...lossAtReturnPeriod(points, rp) })),
     aalKes: averageAnnualLoss(points),
+    mode,
+    ...(allDrivers ? { judgement } : {}),
   };
 }
 

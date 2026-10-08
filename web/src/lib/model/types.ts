@@ -1,3 +1,6 @@
+import type { OfferJudgement } from "../offer/judgement";
+import type { LossMode } from "./drivers";
+
 export const HOUSING_CLASSES = [
   "informal_iron_sheet",
   "semi_permanent",
@@ -98,9 +101,38 @@ export interface ModelParams {
   returnPeriods: Record<ScoreTier, number>;
 }
 
+/**
+ * A loss split by the driver that put the water there (see drivers.ts). The surroundings, ponding
+ * and drain overload are each credited only with what they add beyond the ones before them, so the
+ * four parts add up to the loss. "Surrounding flooding" on screen is pointKes plus surroundingKes.
+ */
+export interface DriverLosses {
+  /** From the depth at the point. */
+  pointKes: number;
+  /** Added by the buffer depth above the point depth. */
+  surroundingKes: number;
+  /** Added by drainage ponding. */
+  pondingKes: number;
+  /** Added by drain overload. */
+  overloadKes: number;
+}
+
+/** The water at one building in one scenario with all loss drivers, in metres, and the loss each driver adds. */
+export interface BuildingDrivers extends DriverLosses {
+  pointM: number;
+  /** Highest terrain depth within the buffer. Never below pointM. */
+  bufferM: number;
+  pondingM: number;
+  /** True when the event is rarer than the drains' design, so the site has at least overloadM of water. */
+  overloaded: boolean;
+  overloadM: number;
+  /** The deepest of the four: the depth the damage curve is read at. */
+  surfaceM: number;
+}
+
 export interface BuildingScenarioResult {
   hazard: number;
-  /** Depth used: the terrain depth, or drainage ponding where that is deeper. */
+  /** Depth used. Depth only: the terrain depth, or drainage ponding where that is deeper. All loss drivers: the deepest water at the site. */
   depthM: number;
   /** Drainage ponding at the building; 0 when drainage is off or the building is outside the zone. */
   drainageM: number;
@@ -109,6 +141,8 @@ export interface BuildingScenarioResult {
   damageRatio: number;
   capped: boolean;
   lossKes: number;
+  /** Present with all loss drivers only. */
+  drivers?: BuildingDrivers;
 }
 
 export interface BuildingResult {
@@ -135,6 +169,8 @@ export interface ScenarioResult {
   affected: number;
   tivExposedKes: number;
   byClass: Record<HousingClass, ClassBreakdown>;
+  /** lossKes split by driver. Present with all loss drivers only. */
+  byDriver?: DriverLosses;
 }
 
 export interface StandardLoss {
@@ -155,4 +191,8 @@ export interface ModelResult {
   buildings: BuildingResult[];
   standardLosses: StandardLoss[];
   aalKes: number;
+  /** "depth_only": depth at each building's point and drainage ponding. "all_drivers": drivers 1 to 3 as well. */
+  mode: LossMode;
+  /** The beyond-depth assumptions the drivers used. Present with all loss drivers only. */
+  judgement?: OfferJudgement;
 }

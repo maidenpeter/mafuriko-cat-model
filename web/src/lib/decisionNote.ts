@@ -16,7 +16,7 @@
 import { DECISION_LABELS, EVIDENCE_LABELS, SEVERITY_LABELS, sortFlags } from "./decision";
 import type { DecisionRecord, Flag } from "./decision";
 import { fmtKes, fmtNum } from "./format";
-import { perMille, rpLabel, SETTER_WORDS } from "./labels";
+import { perMille, PLACEHOLDER_BADGE, PLACEHOLDER_RATE_LINE, rpLabel, SETTER_WORDS } from "./labels";
 
 export type DecisionNoteInput = {
   /** The offer in one line. */
@@ -57,7 +57,8 @@ export type DecisionNoteInput = {
   };
   /** The premium build-up, top to bottom. Amounts in shillings a year. */
   premium?: {
-    lines: { label: string; kes: number; ratePerMille: number; note?: string; total?: boolean }[];
+    /** `placeholder` marks the capital load and the minimum: worked from figures only Kenya Re underwriting can set. */
+    lines: { label: string; kes: number; ratePerMille: number; note?: string; total?: boolean; placeholder?: boolean }[];
     floodPremiumKes: number;
     floodRatePerMille: number;
     /** "modelled" or "minimum rate": which of the two set the flood premium. */
@@ -67,8 +68,8 @@ export type DecisionNoteInput = {
     /** The document's own flood loss history as one sentence: a sense check, not part of the price. */
     history?: string;
   };
-  /** Every assumption in force behind the drivers and the premium: its short name, its value in words, and who set it. */
-  assumptions?: { label: string; value: string; setBy: "offer" | "agents" | "typed" | "reference" }[];
+  /** Every assumption in force behind the drivers and the premium: its short name, its value in words, and who set it. `placeholder` marks the cost of capital and the minimum rate. */
+  assumptions?: { label: string; value: string; setBy: "offer" | "agents" | "typed" | "reference"; placeholder?: boolean }[];
   /** The questions for the broker, in the order to ask them. */
   questions?: string[];
   flags: Flag[];
@@ -154,6 +155,9 @@ function fmtSignedPct(fraction: number | null | undefined): string {
 }
 
 const fmtRate = perMille;
+
+/** The placeholder badge as the note prints it, after the figure it marks. */
+const badge = (placeholder: boolean | undefined) => (placeholder ? ` <span class="tag">${escapeHtml(PLACEHOLDER_BADGE)}</span>` : "");
 
 /** decision-note-acme-mills-ltd-2026-10-08.html. The date is the day in Nairobi. */
 export function decisionNoteFileName(insured: string, date: Date | string = new Date()): string {
@@ -287,7 +291,7 @@ ${drivers.off.length > 0 ? `<p class="more">Not in this price: ${e(drivers.off.j
   const premium = input.premium;
   const premiumRows = premium
     ? premium.lines
-        .map((line) => `<tr${line.total ? ' class="total"' : ""}><td>${e(line.label)}${line.note ? ` <span class="small">(${e(line.note)})</span>` : ""}</td><td>${e(fmtKes(line.kes))}</td><td>${e(fmtRate(line.ratePerMille))}</td></tr>`)
+        .map((line) => `<tr${line.total ? ' class="total"' : ""}><td>${e(line.label)}${line.note ? ` <span class="small">(${e(line.note)})</span>` : ""}${badge(line.placeholder)}</td><td>${e(fmtKes(line.kes))}</td><td>${e(fmtRate(line.ratePerMille))}</td></tr>`)
         .join("\n")
     : "";
   const statedShare = premium?.stated && premium.stated.ratePerMille > 0 ? `${fmtNum((premium.floodRatePerMille / premium.stated.ratePerMille) * 100, 1)}%` : null;
@@ -309,7 +313,7 @@ ${drivers.off.length > 0 ? `<p class="more">Not in this price: ${e(drivers.off.j
     assumed.length > 0
       ? `<div id="assumptions">
 <h2>Assumptions in force (${assumed.length}), and who set each</h2>
-${assumptionGroups.map((g) => `<p class="small"><strong>${e(SET_BY_LABELS[g.who])} (${g.items.length}):</strong> ${g.items.map((a) => `${e(a.label)} ${e(a.value)}`).join("; ")}.</p>`).join("\n")}
+${assumptionGroups.map((g) => `<p class="small"><strong>${e(SET_BY_LABELS[g.who])} (${g.items.length}):</strong> ${g.items.map((a) => `${e(a.label)} ${e(a.value)}${badge(a.placeholder)}`).join("; ")}.</p>`).join("\n")}
 </div>`
       : "";
 
@@ -376,6 +380,7 @@ ${
 }
 ${figure("Change to the portfolio's 1-in-100, gross", fmtSignedKes(figures.portfolioChange100Kes), changePct)}
 </div>
+${figures.floodRatePerMille !== null && figures.floodRatePerMille !== undefined ? `<p class="small" id="placeholders">${e(PLACEHOLDER_RATE_LINE)}</p>` : ""}
 
 ${driverTable}
 

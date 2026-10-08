@@ -2,7 +2,7 @@
 
 An explainable flood model for an underwriter, for the Kenya Re hackathon (Team A, Nairobi).
 Once an offer has been read and priced, every step is about that building; the loaded portfolio
-is its context. A three-minute demo path is in [`../README.md`](../README.md), and the plan and
+is its context. A five-minute demo path is in [`../README.md`](../README.md), and the plan and
 the modelling decisions are in [`../PLAN.md`](../PLAN.md).
 
 ## Run it
@@ -28,8 +28,11 @@ npm run build
 npm start                    # http://localhost:3000
 ```
 
-Without keys the walkthrough still runs: the offer is read by fixed rules, the model uses
-reference assumptions, and the screen says so.
+Without keys the walkthrough still runs: the offer is read by fixed rules, and the screen says
+so. The agents' run saved with the app (`public/agents/`, see its README) is replayed on load
+whenever this browser holds no run of its own, tagged "Saved run from <date>, model <name>",
+so the Agents step and the Assumptions switch work with no key and no network. With no saved
+run shipped, the model uses its reference assumptions.
 
 An estimated cost in US dollars appears beside the token counts only when both
 `OPENAI_PRICE_IN_PER_M` and `OPENAI_PRICE_OUT_PER_M` (or the `GEMINI_` pair) are set in
@@ -86,7 +89,7 @@ switch **Losses from** chooses between two ways of working out a loss:
 
 - **Depth only**: the depth at the building's point and drainage ponding, nothing else. This is
   the model as it was before the loss drivers, and tests hold it to the same figures to the last
-  decimal. The checks and the Oasis comparison refer to it.
+  decimal.
 - **All loss drivers** (the default): the loss at each return period is the sum of six drivers,
   then the deductible and the limit.
 
@@ -110,7 +113,11 @@ The method is stated in full at the top of `src/lib/offer/judgement.ts`.
   value below ground 8% of the insured value when the offer does not state it; outage 2, 5, 10,
   20 and 40 days; uncertainty loading 10%; drain design 1-in-25 when the offer does not state
   it; 0.1 m of water when the drains are overloaded; a year's rent 8% of the insured value when
-  the offer does not state it; cost of capital 8%; minimum rate 0.1 per mille.
+  the offer does not state it; cost of capital 8%; minimum rate 0.1 per mille. The cost of
+  capital and the minimum rate are placeholders for figures only Kenya Re underwriting can set:
+  editable, badged "Assumption, to be set by Kenya Re underwriting" wherever they appear
+  (`PLACEHOLDER_BADGE` in `src/lib/labels.ts`, drawn by `PlaceholderBadge`), and never market
+  figures. A headline flood rate says once that it rests on them (`PLACEHOLDER_RATE_LINE`).
 - **Who sets them.** The offer where it states the figure (with its sentence), then anything the
   underwriter types, then the agents' agreed set while "Agreed by agents" is on, otherwise the
   reference value. The agents argue 14 of the 19: the buffer, the ingress threshold, the
@@ -167,12 +174,24 @@ shaped.
 | Hazard map | The building pinpointed with its buffer ring; per return period the depth at the point, within the buffer, ponding and whether the drains are overloaded | Portfolio layers, hotspot test and drainage sensitivity under "Model validation" |
 | Vulnerability | The building as components: structure, basement machinery and contents, interruption | Curves and damage ratios by class |
 | Loss engine | The stack of loss drivers for one return period, line by line, the same figures for every return period, then the deductible and the limit | The portfolio engine with drivers 1 to 3, and the insurance terms |
-| Results | "Loss by driver", the premium build-up, broker questions, points for the underwriter, suggested conditions, the decision and the decision note | Loss curve, the portfolio's loss by driver, breakdowns, with and without AI, the Oasis check |
-| Audit | Every check, the extraction record (what was sent to the model and what came back), the assumptions beyond flood depth, the count of broker questions, usage, the exports | The same, without the offer |
+| Results | The price and the flood rate, the premium build-up, "Loss by driver", what the offer does to the portfolio, the Oasis check on the portfolio, points for the underwriter, suggested conditions, the decision and the decision note | Loss curve, the portfolio's loss by driver, breakdowns, with and without AI, the Oasis check |
+| Audit | Every check, the extraction record (what was sent to the model and what came back), the assumptions beyond flood depth, the count of broker questions, usage, the exports, the building-level export | The same, without the offer |
 
 Each fact has one home, and another step that needs it gives one line and a link. The row of
 four figures in the header stays in view on every step: the offer's in Offer mode, the
 portfolio's otherwise.
+
+The exposure file's insured values are a fixed multiple of the formula documented with them.
+Every total of them (the figures row, the Dashboard, Read the data, Results, Audit, the written
+note and the audit file) carries the flag from `insuredValueFlag` in `src/lib/labels.ts`. An
+offer's own sum insured comes from the broker's document and does not.
+
+**The Oasis check** (Results, on the portfolio view and on the offer's page) follows the header
+settings. On reference assumptions it shows the Oasis run made for Terrain only or Terrain +
+drainage with Depth only (fed depths), or Terrain + drainage with All loss drivers (fed final
+damage ratios, so it checks the financial engine and the loss arithmetic). Any other
+combination reads "Not checked by Oasis for these settings". The runs and how to make them are
+in [`../oasis/README.md`](../oasis/README.md).
 
 ## Rehearsal shortcuts
 
@@ -208,7 +227,9 @@ npm run build
 | `src/app/api/offer/extract/` | The server route that sends the offer's text, contact details removed, to the model. |
 | `src/lib/decision.ts`, `src/lib/decisionNote.ts` | Flags, suggested conditions, the decision record and the printable decision note. |
 | `src/lib/export.ts` | The written note and the full audit file. |
-| `src/lib/labels.ts` | The shared wording: return periods, amounts, rates per mille, the source badges and the two names of the "Losses from" switch. |
+| `src/lib/oasisExport.ts` | The building-level export (depth and final damage ratio per building and return period) and which Oasis run matches the settings in force. |
+| `src/lib/agents/shipped.ts`, `public/agents/` | The agents' run saved with the app, and how it is replayed on load. |
+| `src/lib/labels.ts` | The shared wording: return periods, amounts, rates per mille, the source badges, the two names of the "Losses from" switch, the placeholder badge and the insured value flag. |
 | `src/components/` | The dashboard, the walkthrough steps, the hazard map and the charts. |
 | `tests/` | Vitest tests. |
 

@@ -355,6 +355,33 @@ describe("decision note", () => {
     ...over,
   });
 
+  it("badges the two placeholders and says once that the flood rate rests on them", () => {
+    const badge = "Assumption, to be set by Kenya Re underwriting";
+    const html = buildDecisionNoteHtml(
+      input({
+        figures: { ...input().figures, floodRatePerMille: 2.1 },
+        premium: {
+          lines: [
+            { label: "Capital load", kes: 100e3, ratePerMille: 0.12, placeholder: true },
+            { label: "Minimum rate", kes: 85e3, ratePerMille: 0.1, note: "the floor", placeholder: true },
+            { label: "Flood premium", kes: 1.8e6, ratePerMille: 2.1, total: true },
+          ],
+          floodPremiumKes: 1.8e6,
+          floodRatePerMille: 2.1,
+          setBy: "modelled",
+        },
+        assumptions: [
+          { label: "Cost of capital", value: "8% a year", setBy: "reference", placeholder: true },
+          { label: "Buffer around the building", value: "250 m", setBy: "reference" },
+        ],
+      }),
+    );
+    expect(html.split(badge).length - 1).toBe(3);
+    expect(html).toContain('id="placeholders"');
+    expect(html).not.toMatch(/market/i);
+    // Without a flood rate, as with Depth only, there is no line about it.
+    expect(buildDecisionNoteHtml(input())).not.toContain('id="placeholders"');
+  });
   it("escapes every piece of text", () => {
     const html = buildDecisionNoteHtml(input());
     expect(html).toContain("Mills &lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; Sons");

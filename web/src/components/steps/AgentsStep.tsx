@@ -8,7 +8,7 @@ import { costOf, fmtUsd, usageRows, usageTotals, type Prices } from "@/lib/agent
 import type { Check } from "@/lib/checks";
 import { judgementRange, judgementText, PARAM_LABELS, SETTER_LABELS, unusedForDepth } from "@/lib/export";
 import { fmtNum, fmtPct } from "@/lib/format";
-import { kes1, LOSS_MODE_LABELS, perMille, rpLabel, rpWithChance, selectMode, type SourceKind } from "@/lib/labels";
+import { isPlaceholder, kes1, LOSS_MODE_LABELS, perMille, PLACEHOLDER_RATE_LINE, rpLabel, rpWithChance, selectMode, type SourceKind } from "@/lib/labels";
 import type { LossMode } from "@/lib/model/drivers";
 import { flattenParams, REFERENCE_PARAMS } from "@/lib/model/params";
 import { HOUSING_LABELS, SCORE_TIERS } from "@/lib/model/types";
@@ -18,7 +18,7 @@ import { AGENT_JUDGEMENT_KEYS, BASEMENT_LADDER, JUDGEMENT_BOUNDS, JUDGEMENT_KEYS
 import type { Session } from "@/lib/session";
 import { STEP_NAMES, stepKicker, type StepId } from "@/lib/steps";
 import { LegendMark, SourceBadge, SourceLine } from "../charts/ChartFrame";
-import { Button, Card, ChecksLine, Fold, Note, OfferNotice, selectView, StatusIcon, StepHeader, StepLink, Tag } from "../ui";
+import { Button, Card, ChecksLine, Fold, Note, OfferNotice, PlaceholderBadge, selectView, StatusIcon, StepHeader, StepLink, Tag } from "../ui";
 
 const ROLE_BLURB: Record<Role, string> = {
   optimist: "Argues for the least severe assumptions that can still be defended.",
@@ -124,9 +124,13 @@ const TRANSCRIPT = "mt-1 max-h-56 overflow-auto whitespace-pre-wrap wrap-break-w
 
 /** Each agent's prompt exactly as sent and its reply exactly as received, one disclosure per agent. */
 function RunTranscripts({ d }: { d: Deliberation }) {
+  const runs = ROLES.map((role) => d.runs[role]).filter(finished);
+  // A run saved with the app may have been packed without the prompts (scripts/pack-run.mjs, --drop-prompts).
+  const repliesOnly = runs.some((run) => run.raw) && runs.every((run) => !run.prompt);
   return (
     <div className="space-y-2">
-      {ROLES.map((role) => d.runs[role]).filter(finished).map((run) => (
+      {repliesOnly && <p className="text-sm leading-relaxed text-ink-2">This run was saved without the prompts that were sent. Each reply is shown as it was received.</p>}
+      {runs.map((run) => (
         <details key={run.role} className="text-xs text-muted">
           <summary className={INNER_SUMMARY}>
             {ROLE_LABELS[run.role]}{run.usage?.firstTextS !== undefined ? ` · first text after ${run.usage.firstTextS} s` : ""}{run.usage?.padded ? " · cut off after the reply was complete" : ""}{(run.attempts ?? 1) > 1 ? " · needed a retry" : ""}
@@ -500,6 +504,11 @@ function FigureTable({ v, keys }: { v: JudgementView; keys: JudgementKey[] }) {
                 <td className="py-2.5 pr-3">
                   <div className="text-ink">{stated ? stated.what : JUDGEMENT_LABELS[k]}</div>
                   <div className="text-xs text-muted">Feeds: {FEEDS[k]}</div>
+                  {isPlaceholder(k) && (
+                    <div className="mt-1">
+                      <PlaceholderBadge />
+                    </div>
+                  )}
                   <Why v={v} k={k} />
                 </td>
                 <td className="py-2.5 pl-4"><InForce v={v} k={k} /></td>
@@ -762,6 +771,12 @@ function OfferAnswer({ focus, d, busy, warning, onOpenStep }: { focus: PricedFoc
         {warning && <div className="mb-4"><Note tone="warn">{warning}</Note></div>}
         <p className="max-w-4xl text-lg leading-relaxed text-ink">{headline}</p>
         <p className="mt-1 max-w-4xl text-sm leading-relaxed text-ink-2">The flood rate is the flood premium for a year, per mille of the insured value: KES 1 for every KES 1,000 insured.{agreed?.premiumSetBy === "minimum rate" ? " The agreed rate is the minimum flood rate: the modelled premium is lower." : ""}</p>
+        {focus.mode === "all_drivers" && (
+          <p className="mt-2 flex max-w-4xl flex-wrap items-center gap-x-2 gap-y-1 text-sm leading-relaxed text-ink-2">
+            <PlaceholderBadge />
+            <span className="min-w-0">{PLACEHOLDER_RATE_LINE}</span>
+          </p>
+        )}
         {range && <p className="mt-3 max-w-4xl text-sm leading-relaxed text-ink-2">{range}</p>}
         {!busy && reference && optimist && cautious && <RangeBar reference={reference} agreed={agreed} optimist={optimist} cautious={cautious} />}
         <Fold summary="The same figures as a table, with the average annual loss" className="mt-4">
@@ -1004,6 +1019,14 @@ interface Props {
   status: { model: string; configured: Record<Role, boolean> } | null;
   hasSaved: boolean;
   replayed: boolean;
+  /** "Saved run from 8 October 2026, model x" while the run shown is the one that ships with the app. null for the reader's own run, and when there is none. */
+  shippedLabel?: string | null;
+  /** True when the app ships a run made on other model data, or before the model changed, so it is not replayed here. */
+  shippedOtherData?: boolean;
+  /** True when the server could not be asked which agents have a key. With a shipped run to show, that counts as having no key. */
+  statusFailed?: boolean;
+  /** Goes back to the run that ships with the app. Given only while the reader's own run has taken its place. */
+  onShipped?: () => void;
   onRun: () => void;
   onReplay: () => void;
   onImport: (file: File) => void;
@@ -1022,13 +1045,23 @@ interface Props {
   onOpenStep?: (id: StepId) => void;
 }
 
-export function AgentsStep({ session, deliberation: d, busy, checks, status, hasSaved, replayed, onRun, onReplay, onImport, prices = null, focus = null, offerFocus = null, mode = "all_drivers", judgement = null, onJudgement, onOpenStep }: Props) {
+export function AgentsStep({ session, deliberation: d, busy, checks, status, hasSaved, replayed, shippedLabel = null, shippedOtherData = false, statusFailed = false, onShipped, onRun, onReplay, onImport, prices = null, focus = null, offerFocus = null, mode = "all_drivers", judgement = null, onJudgement, onOpenStep }: Props) {
   // Once a figure is typed here its fold stays open, also after the figure is handed back.
   const [typedHere, setTypedHere] = useState(false);
   // The agents are handed the offer's facts only once it is priced, whatever the "View" switch in the bar says.
   const offerArgued = focus !== null || (!!offerFocus && isPriced(offerFocus));
   const isScore = session.dataset.hazardKind === "score";
   const missingKeys = status ? (Object.keys(status.configured) as Role[]).filter((r) => !status.configured[r]) : [];
+  // With a shipped run at hand, a server that did not answer about the keys is treated as having none: a live run would only fail.
+  const noAnswer = statusFailed && (shippedLabel !== null || !!onShipped);
+  const liveOff = missingKeys.length === 4 || noAnswer;
+  const liveLine = noAnswer
+    ? "A live run needs an API key, and the server did not say whether one is set."
+    : missingKeys.length === 4
+      ? "A live run needs an API key, and none is set."
+      : missingKeys.length > 0
+        ? `A live run needs an API key for: ${missingKeys.map((r) => ROLE_LABELS[r]).join(", ")}.`
+        : "A live run takes its place.";
   const ledger = d ? buildLedger(REFERENCE_PARAMS, d).filter((row) => isScore || !unusedForDepth(row.path)) : [];
   const referenceRows = flattenParams(REFERENCE_PARAMS).filter((p) => isScore || !unusedForDepth(p.path));
   const critic = d?.runs.critic;
@@ -1066,18 +1099,26 @@ export function AgentsStep({ session, deliberation: d, busy, checks, status, has
 
       <Card className="mb-5">
         <div className="flex flex-wrap items-center gap-3">
-          <Button onClick={onRun} disabled={busy || missingKeys.length === 4}>{busy ? "Agents working…" : offerArgued ? "Run the agents on this offer" : "Run the agents"}</Button>
+          <Button onClick={onRun} disabled={busy || liveOff}>{busy ? "Agents working…" : offerArgued ? "Run the agents on this offer" : "Run the agents"}</Button>
           {hasSaved && <Button variant="secondary" onClick={onReplay} disabled={busy}>Replay the saved run</Button>}
+          {onShipped && <Button variant="secondary" onClick={onShipped} disabled={busy}>Replay the run saved with the app</Button>}
           <label className="inline-flex cursor-pointer items-center rounded-full px-4 py-2 text-sm font-medium text-ink-2 hover:bg-surface-2">
             Load a run file
             <input type="file" accept=".json" className="hidden" onChange={(e) => { if (e.target.files?.[0]) onImport(e.target.files[0]); e.target.value = ""; }} />
           </label>
           {status && <span className="text-xs text-muted">Model: {status.model}</span>}
           {replayed && <Tag kind="ai">Replayed from a saved run; engine re-run now</Tag>}
+          {shippedLabel && <Tag kind="ai">{shippedLabel}</Tag>}
         </div>
         <p className="mt-3 max-w-4xl text-sm leading-relaxed text-ink-2">
           Three agents argue the assumptions the data cannot settle: an optimist, a cautious one and a critic. A chair then settles them, and code checks every figure and does every calculation. The agents read a summary of the data, never the rows, and never produce a loss figure.
         </p>
+        {shippedLabel && (
+          <p className="mt-2 max-w-4xl text-sm leading-relaxed text-ink-2">
+            <strong className="font-semibold text-ink">This run was saved with the app.</strong> Its replies are shown as they were given, and code has worked out every figure again just now. {liveLine}
+          </p>
+        )}
+        {shippedOtherData && <p className="mt-2 max-w-4xl text-sm leading-relaxed text-ink-2">The run saved with the app was made on different model data, so it is not replayed here.</p>}
         {d && <AgentStatuses d={d} />}
         {missingKeys.length > 0 && !d && (
           <div className="mt-3 max-w-3xl">

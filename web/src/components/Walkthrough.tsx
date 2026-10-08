@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, 
 import { aiChecks, deliberate, replay, type Deliberation, type ModelBasis } from "@/lib/agents/orchestrate";
 import { buildProfile } from "@/lib/agents/profile";
 import { ROLE_LABELS, ROLES, type Role } from "@/lib/agents/schema";
+import { loadShipped, offerKey, pickShipped, replayShipped, shippedLabel, type Shipped } from "@/lib/agents/shipped";
 import type { Prices } from "@/lib/agents/usage";
 import { dataChecks, financialChecks, hazardChecks, summarise, vulnerabilityChecks } from "@/lib/checks";
 import { termsChecks } from "@/lib/checks/terms";
@@ -24,7 +25,7 @@ import { loadModelFiles, pickNairobi } from "@/lib/modelData/client";
 import { assumedJudgement, buildOfferFocus, isPriced, offerBrief, PORTFOLIO_KEYS, portfolioJudgement, type FocusJudgement, type OfferFocus, type OfferFocusProps, type PricedFocus } from "@/lib/offer/focus";
 import { JUDGEMENT_KEYS, type OfferJudgement } from "@/lib/offer/judgement";
 import type { ExtractionRun, OfferState } from "@/lib/offer/types";
-import { loadRun, saveRun, type Active, type LogEntry, type Session } from "@/lib/session";
+import { loadRun, runInputs, saveRun, type Active, type LogEntry, type SavedRun, type Session } from "@/lib/session";
 import { STEP_IDS, STEP_NAMES, STEPS_WITH_VIEW, stepIndex, type StepId } from "@/lib/steps";
 import { Dashboard, type DashboardStep } from "./dashboard/Dashboard";
 import { ControlBar, type ViewMode } from "./shell/ControlBar";
@@ -116,6 +117,12 @@ interface DecisionExtras {
   dataSource: string;
 }
 
+/** What the Results and Audit steps are handed to name the run of the agents that sets the assumptions. */
+interface RunExtras {
+  /** "Saved run from 8 October 2026, model x" while the run that ships with the app sets the assumptions in force. null for the reader's own run and for the reference assumptions. */
+  savedRunLabel: string | null;
+}
+
 /**
  * A step with more props than its own Props type names yet. The offer props, and a few values kept
  * here, are handed to every step that can use them; a step takes one up by adding the same name
@@ -132,8 +139,8 @@ const HazardView = handed<StepExtras & { active: Active }>()(HazardStep);
 const AgentsView = handed<StepExtras & { prices: Prices | null }>()(AgentsStep);
 const VulnerabilityView = handed<StepExtras>()(VulnerabilityStep);
 const LossView = handed<StepExtras>()(LossStep);
-const ResultsView = handed<StepExtras & DecisionExtras & { onDecision: (next: DecisionRecord) => void }>()(ResultsStep);
-const AuditView = handed<StepExtras & DecisionExtras & { prices: Prices | null }>()(AuditStep);
+const ResultsView = handed<StepExtras & DecisionExtras & RunExtras & { onDecision: (next: DecisionRecord) => void }>()(ResultsStep);
+const AuditView = handed<StepExtras & DecisionExtras & RunExtras & { prices: Prices | null }>()(AuditStep);
 
 const fileNameOf = (path: string) => path.split("/").pop() || path;
 
@@ -163,7 +170,12 @@ export function Walkthrough() {
   // The "Replace model data" panel, shown in place of the step while it is open.
   const [replaceOpen, setReplaceOpen] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
-  const [deliberation, setDeliberation] = useState<Deliberation | null>(null);
+  // The reader's own run: made live here, replayed from this browser, or loaded from a file. While there is one, it is the run in force.
+  const [ownDeliberation, setDeliberation] = useState<Deliberation | null>(null);
+  // The runs that ship with the app and were made on this data set, read once it has loaded when this browser holds no run of its own.
+  const [shipped, setShipped] = useState<{ dataset: Dataset; found: Shipped } | null>(null);
+  // The key of the priced offer on screen, when a shipped run was made on that very offer. null leaves the shipped portfolio run to apply.
+  const [shippedOfferKey, setShippedOfferKey] = useState<string | null>(null);
   const [agentsBusy, setAgentsBusy] = useState(false);
   const [replayed, setReplayed] = useState(false);
   const [useAi, setUseAi] = useState(true);
@@ -171,6 +183,8 @@ export function Walkthrough() {
   const [drainage, setDrainage] = useState<{ dataset: Dataset; state: DrainageState } | null>(null);
   const [useDrainage, setUseDrainage] = useState(true);
   const [status, setStatus] = useState<AgentStatus | null>(null);
+  // True when the server could not be asked which agents have a key. A live run cannot start then either.
+  const [statusFailed, setStatusFailed] = useState(false);
   const [hasSaved, setHasSaved] = useState(false);
   const [log, setLog] = useState<LogEntry[]>([]);
   // The offer being priced in the offer step. Kept here so it is still there after a look at another step.
@@ -194,7 +208,10 @@ export function Walkthrough() {
   const note = useCallback((stepName: string, message: string) => setLog((l) => [...l, { at: new Date().toISOString(), step: stepName, message }]), []);
 
   useEffect(() => {
-    fetch("/api/agents/status").then((r) => r.json()).then(setStatus).catch(() => setStatus(null));
+    fetch("/api/agents/status").then((r) => r.json()).then(setStatus).catch(() => {
+      setStatus(null);
+      setStatusFailed(true);
+    });
   }, []);
 
   useEffect(() => {
@@ -345,7 +362,23 @@ export function Walkthrough() {
         setReplayed(false);
         changeOffer(null);
         setIncoming(null);
-        setHasSaved(loadRun(next) !== null);
+        const stored = loadRun(next) !== null;
+        setHasSaved(stored);
+        // With no run of its own in this browser, the app replays the one that ships with it. Nothing waits for
+        // this: with no network, or nothing shipped, the answer is null and the model stays as it is.
+        setShipped(null);
+        if (!stored) {
+          void loadShipped(runInputs(next)).then((found) => {
+            if (!found) return;
+            setShipped({ dataset, found });
+            if (found.runs.length > 0) setUseAi(true);
+            const first = pickShipped(found.runs, null);
+            if (first) note(STEP_NAMES.agents, `${shippedLabel(first.entry)}: replayed from the run saved with the app; engine re-run now`);
+            const onOffers = found.runs.filter((r) => r.entry.kind === "offer").length;
+            if (onOffers > 0) note(STEP_NAMES.agents, `${onOffers} saved ${onOffers === 1 ? "run" : "runs"} made on an offer ${onOffers === 1 ? "ships" : "ship"} with the app, replayed while that offer is the one priced`);
+            if (found.otherData) note(STEP_NAMES.agents, "The run saved with the app was made on different model data, so it is not replayed");
+          });
+        }
         setBusy(null);
         setReplaceOpen(false);
         setStep(stepIndex("dashboard"));
@@ -488,6 +521,16 @@ export function Walkthrough() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // The run that ships with the app, for the data on screen: the one made on the priced offer when there is one,
+  // otherwise the portfolio run. Its replies are re-scored by code here, on the basis it was made with; the
+  // views below re-run it on whatever basis is shown, as they do for any run.
+  const shippedHere = session && shipped && shipped.dataset === session.dataset ? shipped.found : null;
+  const shippedRun = useMemo(() => (shippedHere ? pickShipped(shippedHere.runs, shippedOfferKey) : null), [shippedHere, shippedOfferKey]);
+  const shippedDeliberation = useMemo(() => (session && shippedRun ? replayShipped(session.dataset, shippedRun.run) : null), [session, shippedRun]);
+  // The run in force: the reader's own once there is one, otherwise the shipped run.
+  const deliberation = ownDeliberation ?? shippedDeliberation;
+  const shippedInForce = !ownDeliberation && shippedDeliberation ? shippedRun : null;
+
   // The assumptions behind the loss drivers that the portfolio's buildings are run with: the reference values, the
   // agents' agreed figures while "Agreed by agents" is on and an offer is on screen, and anything typed over them.
   // Held as text, so a new copy of the same figures does not run the model again.
@@ -505,7 +548,18 @@ export function Walkthrough() {
     setAgentsBusy(true);
     setReplayed(false);
     note(STEP_NAMES.agents, `Round 1 started: Optimist, Cautious and Critic in parallel${brief ? ", with the facts of the offer" : ""}`);
-    const d = await deliberate(session.dataset, session.profile, setDeliberation, brief, basisOf(mode, assumedKey));
+    // The run carries what it was made on, so a file saved from it says so (scripts/pack-run.mjs reads it).
+    const inputs = runInputs(session);
+    const d = await deliberate(
+      session.dataset,
+      session.profile,
+      (update) => {
+        const made: SavedRun = { ...update, inputs };
+        setDeliberation(made);
+      },
+      brief,
+      basisOf(mode, assumedKey),
+    );
     for (const role of ROLES) {
       const run = d.runs[role];
       note(STEP_NAMES.agents, `${ROLE_LABELS[role]}: ${run.status === "done" ? `valid reply in ${((run.ms ?? 0) / 1000).toFixed(1)} s` : `no valid reply (${run.error ?? run.status})`}`);
@@ -529,6 +583,13 @@ export function Walkthrough() {
     setReplayed(true);
     setUseAi(true);
     note(STEP_NAMES.agents, `${source}: agent replies from ${saved.startedAt}; engine re-run now`);
+  };
+
+  /** Back to the run that ships with the app, after the reader's own run took over. */
+  const backToShipped = () => {
+    setDeliberation(null);
+    setReplayed(false);
+    setUseAi(true);
   };
 
   // What every step shows: the loaded dataset, with drainage-driven flooding added when it is switched on.
@@ -612,6 +673,18 @@ export function Walkthrough() {
   const follow: OfferFocusProps = { focus, offerFocus, mode, judgement, onJudgement: changeJudgement };
   const prices = status?.prices ?? null;
 
+  // A shipped run made on an offer is used for that offer alone. The offer's key comes from its facts, which no
+  // run of the agents moves, so this settles in one pass: when the key on screen changes, the render starts again
+  // with the right shipped run before anything is shown. With no shipped offer run nothing is worked out here.
+  const shippedOffers = useMemo(() => (shippedHere?.runs ?? []).flatMap((r) => (r.entry.offerKey ? [r.entry.offerKey] : [])), [shippedHere]);
+  const offerKeyOnScreen = useMemo(() => (shippedOffers.length > 0 && pricedFocus ? offerKey(offerBrief(pricedFocus)) : null), [shippedOffers, pricedFocus]);
+  const wantedOfferKey = offerKeyOnScreen !== null && shippedOffers.includes(offerKeyOnScreen) ? offerKeyOnScreen : null;
+  if (wantedOfferKey !== shippedOfferKey) setShippedOfferKey(wantedOfferKey);
+
+  // How the shipped run is named while it is the run in force, and the same for the steps that say who set the assumptions.
+  const shippedName = shippedInForce ? shippedLabel(shippedInForce.entry) : null;
+  const savedRunLabel = active?.source === "ai" ? shippedName : null;
+
   const checks = useMemo(() => {
     if (!session || !view || !active || !termsResult) return { ai: [], vulnerability: [], financial: [], all: [] };
     // The agents are checked on the data they decided on. Their saved fingerprint belongs to that
@@ -691,7 +764,7 @@ export function Walkthrough() {
           hazardKind={session?.dataset.hazardKind ?? null}
           onReplaceData={openReplace}
         />
-        {view && active && <FiguresRow focus={figuresFocus} offerFocus={offerFocus} active={active} buildings={view.dataset.buildings.length} />}
+        {view && active && <FiguresRow focus={figuresFocus} offerFocus={offerFocus} active={active} buildings={view.dataset.buildings.length} tivRatio={view.report.tivRatio?.median} />}
       </header>
 
       <div className={`${GUTTER} flex flex-1 flex-col gap-6 py-6 lg:flex-row lg:gap-8 2xl:gap-10`}>
@@ -807,6 +880,10 @@ export function Walkthrough() {
                       status={status}
                       hasSaved={hasSaved}
                       replayed={replayed}
+                      shippedLabel={shippedName}
+                      shippedOtherData={shippedHere?.otherData ?? false}
+                      statusFailed={statusFailed}
+                      onShipped={ownDeliberation && shippedDeliberation ? backToShipped : undefined}
                       onRun={runAgents}
                       onReplay={() => { const saved = loadRun(session); if (saved) applySaved(saved, "Replayed the saved run"); }}
                       onImport={async (file) => {
@@ -834,6 +911,7 @@ export function Walkthrough() {
                       decision={decision}
                       onDecision={setDecision}
                       dataSource={modelDataLine}
+                      savedRunLabel={savedRunLabel}
                       {...follow}
                       onOpenStep={openStep}
                     />
@@ -850,6 +928,7 @@ export function Walkthrough() {
                       prices={prices}
                       decision={decision}
                       dataSource={modelDataLine}
+                      savedRunLabel={savedRunLabel}
                       {...follow}
                       onOpenStep={openStep}
                     />

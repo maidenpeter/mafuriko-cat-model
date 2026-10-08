@@ -1,0 +1,1185 @@
+{
+ "startedAt": "2026-10-08T20:47:23.832Z",
+ "datasetName": "team_a_nairobi",
+ "profile": {
+  "dataset": "team_a_nairobi",
+  "hazard": {
+   "kind": "score",
+   "meaning": "0 to 1 relative flood susceptibility built from terrain and river proximity. Not a measured depth. The five tiers are nested cuts of one score: 'common' keeps the top 40% of cells, 'extreme' the top 5%, each rescaled to 0 to 1. The widest footprint ('common') stands for the rarest event.",
+   "scenarios": [
+    {
+     "id": "extreme",
+     "fixedReturnPeriodYears": null,
+     "tierSlope": 0.626,
+     "buildingsAffected": 32,
+     "shareOfInsuredValueAffected": 0.026,
+     "medianValueWhereAffected": 0.199,
+     "p90ValueWhereAffected": 0.49,
+     "highestValue": 0.497
+    },
+    {
+     "id": "severe",
+     "fixedReturnPeriodYears": null,
+     "tierSlope": 0.72,
+     "buildingsAffected": 51,
+     "shareOfInsuredValueAffected": 0.083,
+     "medianValueWhereAffected": 0.165,
+     "p90ValueWhereAffected": 0.488,
+     "highestValue": 0.563
+    },
+    {
+     "id": "moderate",
+     "fixedReturnPeriodYears": null,
+     "tierSlope": 0.827,
+     "buildingsAffected": 110,
+     "shareOfInsuredValueAffected": 0.188,
+     "medianValueWhereAffected": 0.117,
+     "p90ValueWhereAffected": 0.46,
+     "highestValue": 0.62
+    },
+    {
+     "id": "occasional",
+     "fixedReturnPeriodYears": null,
+     "tierSlope": 0.914,
+     "buildingsAffected": 174,
+     "shareOfInsuredValueAffected": 0.31,
+     "medianValueWhereAffected": 0.137,
+     "p90ValueWhereAffected": 0.434,
+     "highestValue": 0.656
+    },
+    {
+     "id": "common",
+     "fixedReturnPeriodYears": null,
+     "tierSlope": 1,
+     "buildingsAffected": 259,
+     "shareOfInsuredValueAffected": 0.493,
+     "medianValueWhereAffected": 0.144,
+     "p90ValueWhereAffected": 0.399,
+     "highestValue": 0.685
+    }
+   ],
+   "hotspotValidation": {
+    "namedFloodAreas": 24,
+    "flagged": 12,
+    "missed": [
+     "Donholm",
+     "Fedha",
+     "Madaraka",
+     "Lang'ata",
+     "Kawangware",
+     "Kangemi",
+     "Lavington",
+     "Westlands",
+     "Parklands",
+     "Kitisuru",
+     "Kileleshwa",
+     "Kibera"
+    ]
+   }
+  },
+  "portfolio": {
+   "synthetic": true,
+   "buildings": 600,
+   "totalInsuredValueKes": 63635075000,
+   "insuredValueOverDocumentedFormula": 10,
+   "byClass": [
+    {
+     "class": "informal_iron_sheet",
+     "buildings": 179,
+     "shareOfBuildings": 0.298,
+     "shareOfInsuredValue": 0.003,
+     "affectedInWidestScenario": 74
+    },
+    {
+     "class": "semi_permanent",
+     "buildings": 181,
+     "shareOfBuildings": 0.302,
+     "shareOfInsuredValue": 0.013,
+     "affectedInWidestScenario": 74
+    },
+    {
+     "class": "permanent_masonry",
+     "buildings": 156,
+     "shareOfBuildings": 0.26,
+     "shareOfInsuredValue": 0.133,
+     "affectedInWidestScenario": 66
+    },
+    {
+     "class": "concrete_rcc",
+     "buildings": 84,
+     "shareOfBuildings": 0.14,
+     "shareOfInsuredValue": 0.851,
+     "affectedInWidestScenario": 45
+    }
+   ]
+  },
+  "dataWarnings": [
+   {
+    "check": "Insured value equals floor area × cost per m²",
+    "status": "warn",
+    "detail": "Insured values are 10× floor area × cost per m² (range 9.97 to 10.05). The portfolio totals KES 63.6bn; the documented formula would give KES 6.4bn. Values are used as they are in the file."
+   },
+   {
+    "check": "Known flood areas flagged by the hazard layer",
+    "status": "warn",
+    "detail": "12 of 24 named flood areas are flagged. Missed: Donholm, Fedha, Madaraka, Lang'ata, Kawangware, Kangemi, Lavington, Westlands, Parklands, Kitisuru, Kileleshwa, Kibera."
+   }
+  ],
+  "model": {
+   "formulas": [
+    "depth_m = score × tier_slope × depthScaleM (score datasets only; tier_slope puts each tier's 0 to 1 score back on the widest tier's scale and is 1 for the widest)",
+    "damage_ratio = min( jrc_curve( depth_m × fragility[class] ), cap[class] )",
+    "building_loss = damage_ratio × insured_value",
+    "portfolio loss per scenario = sum of building losses; each scenario is placed at its return period to form the loss curve"
+   ],
+   "jrcCurve": {
+    "source": "Huizinga et al. (2017), JRC105688, Africa, residential buildings",
+    "depthsM": [
+     0,
+     0.5,
+     1,
+     1.5,
+     2,
+     3,
+     4,
+     5,
+     6
+    ],
+    "damage": [
+     0,
+     0.22,
+     0.38,
+     0.53,
+     0.64,
+     0.82,
+     0.9,
+     0.96,
+     1
+    ]
+   },
+   "allowedRanges": {
+    "depthScaleM": {
+     "min": 1,
+     "max": 6
+    },
+    "fragility": {
+     "min": 0.4,
+     "max": 2.5
+    },
+    "cap": {
+     "min": 0.6,
+     "max": 1
+    },
+    "returnPeriod": {
+     "min": 2,
+     "max": 1000
+    }
+   },
+   "referenceParameters": {
+    "depthScaleM": 4,
+    "fragility": {
+     "informal_iron_sheet": 1.5,
+     "semi_permanent": 1.2,
+     "permanent_masonry": 1,
+     "concrete_rcc": 0.7
+    },
+    "cap": {
+     "informal_iron_sheet": 0.95,
+     "semi_permanent": 0.9,
+     "permanent_masonry": 0.85,
+     "concrete_rcc": 0.8
+    },
+    "returnPeriods": {
+     "extreme": 10,
+     "severe": 25,
+     "moderate": 50,
+     "occasional": 100,
+     "common": 250
+    }
+   },
+   "referenceOutcome": {
+    "lossByScenario": [
+     {
+      "id": "extreme",
+      "returnPeriodYears": 10,
+      "lossShareOfInsuredValue": 0.006
+     },
+     {
+      "id": "severe",
+      "returnPeriodYears": 25,
+      "lossShareOfInsuredValue": 0.0116
+     },
+     {
+      "id": "moderate",
+      "returnPeriodYears": 50,
+      "lossShareOfInsuredValue": 0.0307
+     },
+     {
+      "id": "occasional",
+      "returnPeriodYears": 100,
+      "lossShareOfInsuredValue": 0.0563
+     },
+     {
+      "id": "common",
+      "returnPeriodYears": 250,
+      "lossShareOfInsuredValue": 0.0934
+     }
+    ],
+    "averageAnnualLossShareOfInsuredValue": 0.00221
+   }
+  }
+ },
+ "runs": {
+  "optimist": {
+   "role": "optimist",
+   "status": "done",
+   "model": "gpt-6-luna",
+   "ms": 16646,
+   "attempts": 1,
+   "usage": {
+    "promptTokens": 6594,
+    "outputTokens": 1484,
+    "thinkingTokens": 401,
+    "finishReason": "stop"
+   },
+   "raw": "{\"stance\":\"I take a cautious-but-lenient portfolio view: the score is only a susceptibility proxy, so I use low-end depth while retaining reference fragility, caps and event frequencies where the evidence cannot support further leniency. For the offer, dry point and buffer readings in most tiers and water mapped 148 m away temper the view, but the common-tier buffer depth, overloaded drains, basements with critical plant and undocumented protections prevent assuming it is protected.\",\"parameters\":[{\"name\":\"depthScaleM\",\"reason\":\"The hazard is a 0–1 susceptibility score, not measured depth; the JRC curve starts at 0.22 damage by 0.5 m, so I use the allowed low end rather than infer deep water.\",\"basis\":\"data_profile\",\"value\":1},{\"name\":\"fragility.informal_iron_sheet\",\"reason\":\"The JRC reference is for African residential buildings and does not distinguish this portfolio's construction classes; I retain the class-specific reference rather than assume less vulnerability.\",\"basis\":\"jrc_reference\",\"value\":1.5},{\"name\":\"fragility.semi_permanent\",\"reason\":\"The JRC curve is residential but not class-specific, and the profile gives no condition details for semi-permanent buildings; the reference is the defensible anchor.\",\"basis\":\"jrc_reference\",\"value\":1.2},{\"name\":\"fragility.permanent_masonry\",\"reason\":\"The JRC Africa residential curve is the stated damage basis, but no masonry-specific evidence supports reducing its reference multiplier.\",\"basis\":\"jrc_reference\",\"value\":1},{\"name\":\"fragility.concrete_rcc\",\"reason\":\"The reference already assigns concrete RCC a lower multiplier than masonry; the profile supplies no further building-condition evidence to lower it.\",\"basis\":\"jrc_reference\",\"value\":0.7},{\"name\":\"cap.informal_iron_sheet\",\"reason\":\"No class-specific loss cap evidence is given; I retain the stated reference cap rather than assume a larger recoverable share.\",\"basis\":\"jrc_reference\",\"value\":0.95},{\"name\":\"cap.semi_permanent\",\"reason\":\"The profile identifies 181 semi-permanent buildings but gives no repair or loss-limit evidence, so the JRC-associated reference cap remains appropriate.\",\"basis\":\"data_profile\",\"value\":0.9},{\"name\":\"cap.permanent_masonry\",\"reason\":\"No masonry-specific maximum damage evidence is supplied, so I keep the reference cap instead of imposing a more restrictive limit.\",\"basis\":\"jrc_reference\",\"value\":0.85},{\"name\":\"cap.concrete_rcc\",\"reason\":\"Concrete RCC makes up 85.1% of insured value, but that concentration says nothing about its maximum flood damage; I retain its reference cap.\",\"basis\":\"data_profile\",\"value\":0.8},{\"name\":\"returnPeriods.extreme\",\"reason\":\"No scenario has a calibrated return period; the 10-year reference preserves the stated ordering without claiming the score is a measured event frequency.\",\"basis\":\"data_profile\",\"value\":10},{\"name\":\"returnPeriods.severe\",\"reason\":\"The score tiers have no fixed return periods, so I use the 25-year reference, strictly above the extreme tier.\",\"basis\":\"data_profile\",\"value\":25},{\"name\":\"returnPeriods.moderate\",\"reason\":\"The moderate tier affects 110 buildings, but affected counts do not establish event frequency; retain the 50-year reference between adjacent tiers.\",\"basis\":\"data_profile\",\"value\":50},{\"name\":\"returnPeriods.occasional\",\"reason\":\"Its 174 affected buildings describe the tier footprint, not an observed recurrence interval, so I keep the 100-year reference.\",\"basis\":\"data_profile\",\"value\":100},{\"name\":\"returnPeriods.common\",\"reason\":\"The widest tier covers 259 buildings and is defined as the rarest event; with no calibrated frequency, retain its 250-year reference.\",\"basis\":\"data_profile\",\"value\":250},{\"name\":\"offer.bufferRadiusM\",\"reason\":\"The stated code radius is 250 m, and although nearest mapped water is 148 m away, the common-tier buffer depth is 0.310 m; reducing the radius would disregard nearby mapped water.\",\"basis\":\"offer\",\"value\":250},{\"name\":\"offer.ingressThresholdM\",\"reason\":\"There are two basements and critical plant in B1, while barriers and non-return valves are not stated; I retain the 0.1 m reference rather than make ingress less likely.\",\"basis\":\"offer\",\"value\":0.1},{\"name\":\"offer.basementDamageExtreme\",\"reason\":\"Critical plant is in B1 and pump backup is not stated, so there is no evidence to reduce the first rung below its reference.\",\"basis\":\"offer\",\"value\":0.15},{\"name\":\"offer.basementDamageSevere\",\"reason\":\"The B1 plant and six items of below-ground equipment support retaining the reference increase from the prior rung.\",\"basis\":\"offer\",\"value\":0.25},{\"name\":\"offer.basementDamageModerate\",\"reason\":\"The 4.5 m-deep basement fuel tank and critical plant give no basis to flatten the ladder, so this rung stays at reference.\",\"basis\":\"offer\",\"value\":0.4},{\"name\":\"offer.basementDamageOccasional\",\"reason\":\"Flood barriers and non-return valves are not stated, so I cannot justify a smaller increase for this rarer-event rung.\",\"basis\":\"offer\",\"value\":0.55},{\"name\":\"offer.basementDamageCommon\",\"reason\":\"The common tier has 0.310 m within the buffer and drains are overloaded; the basement ladder therefore remains at its reference top rung.\",\"basis\":\"offer\",\"value\":0.7},{\"name\":\"offer.belowGroundShare\",\"reason\":\"The document leaves value below ground null, despite listing six equipment items and a 2,500-litre underground tank; the reference share is a cautious fallback, not a measured share.\",\"basis\":\"judgement\",\"value\":0.08},{\"name\":\"offer.outageDaysExtreme\",\"reason\":\"Business-interruption cover is not stated, so this ladder has no effect unless cover is confirmed; retain the reference value rather than assume quick reopening.\",\"basis\":\"offer\",\"value\":2},{\"name\":\"offer.outageDaysSevere\",\"reason\":\"Cover is not stated and critical plant is in B1, so this rung has no current effect and stays at its reference value.\",\"basis\":\"offer\",\"value\":5},{\"name\":\"offer.outageDaysModerate\",\"reason\":\"The commercial occupancy's BI cover is unknown, while basement plant could impede reopening; retain the reference rung, with no effect absent cover.\",\"basis\":\"offer\",\"value\":10},{\"name\":\"offer.outageDaysOccasional\",\"reason\":\"The basement plant and unknown pump backup do not support a faster reopening assumption; BI cover is unstated, so the reference rung has no current effect.\",\"basis\":\"offer\",\"value\":20},{\"name\":\"offer.outageDaysCommon\",\"reason\":\"No statement confirms BI cover, and critical plant below ground gives no evidence for shortening the top rung; retain reference, with no current effect absent cover.\",\"basis\":\"offer\",\"value\":40},{\"name\":\"offer.uncertaintyLoading\",\"reason\":\"The file records one flood loss over an 11-year history, but pump backup, barriers and valve status remain unknown; retain the reference loading for unmodelled causes.\",\"basis\":\"offer\",\"value\":0.1}]}",
+   "output": {
+    "depthScaleM": {
+     "value": 1,
+     "reason": "The hazard is a 0–1 susceptibility score, not measured depth; the JRC curve starts at 0.22 damage by 0.5 m, so I use the allowed low end rather than infer deep water.",
+     "basis": "data_profile"
+    },
+    "fragility": {
+     "informal_iron_sheet": {
+      "value": 1.5,
+      "reason": "The JRC reference is for African residential buildings and does not distinguish this portfolio's construction classes; I retain the class-specific reference rather than assume less vulnerability.",
+      "basis": "jrc_reference"
+     },
+     "semi_permanent": {
+      "value": 1.2,
+      "reason": "The JRC curve is residential but not class-specific, and the profile gives no condition details for semi-permanent buildings; the reference is the defensible anchor.",
+      "basis": "jrc_reference"
+     },
+     "permanent_masonry": {
+      "value": 1,
+      "reason": "The JRC Africa residential curve is the stated damage basis, but no masonry-specific evidence supports reducing its reference multiplier.",
+      "basis": "jrc_reference"
+     },
+     "concrete_rcc": {
+      "value": 0.7,
+      "reason": "The reference already assigns concrete RCC a lower multiplier than masonry; the profile supplies no further building-condition evidence to lower it.",
+      "basis": "jrc_reference"
+     }
+    },
+    "cap": {
+     "informal_iron_sheet": {
+      "value": 0.95,
+      "reason": "No class-specific loss cap evidence is given; I retain the stated reference cap rather than assume a larger recoverable share.",
+      "basis": "jrc_reference"
+     },
+     "semi_permanent": {
+      "value": 0.9,
+      "reason": "The profile identifies 181 semi-permanent buildings but gives no repair or loss-limit evidence, so the JRC-associated reference cap remains appropriate.",
+      "basis": "data_profile"
+     },
+     "permanent_masonry": {
+      "value": 0.85,
+      "reason": "No masonry-specific maximum damage evidence is supplied, so I keep the reference cap instead of imposing a more restrictive limit.",
+      "basis": "jrc_reference"
+     },
+     "concrete_rcc": {
+      "value": 0.8,
+      "reason": "Concrete RCC makes up 85.1% of insured value, but that concentration says nothing about its maximum flood damage; I retain its reference cap.",
+      "basis": "data_profile"
+     }
+    },
+    "returnPeriods": {
+     "extreme": {
+      "value": 10,
+      "reason": "No scenario has a calibrated return period; the 10-year reference preserves the stated ordering without claiming the score is a measured event frequency.",
+      "basis": "data_profile"
+     },
+     "severe": {
+      "value": 25,
+      "reason": "The score tiers have no fixed return periods, so I use the 25-year reference, strictly above the extreme tier.",
+      "basis": "data_profile"
+     },
+     "moderate": {
+      "value": 50,
+      "reason": "The moderate tier affects 110 buildings, but affected counts do not establish event frequency; retain the 50-year reference between adjacent tiers.",
+      "basis": "data_profile"
+     },
+     "occasional": {
+      "value": 100,
+      "reason": "Its 174 affected buildings describe the tier footprint, not an observed recurrence interval, so I keep the 100-year reference.",
+      "basis": "data_profile"
+     },
+     "common": {
+      "value": 250,
+      "reason": "The widest tier covers 259 buildings and is defined as the rarest event; with no calibrated frequency, retain its 250-year reference.",
+      "basis": "data_profile"
+     }
+    },
+    "stance": "I take a cautious-but-lenient portfolio view: the score is only a susceptibility proxy, so I use low-end depth while retaining reference fragility, caps and event frequencies where the evidence cannot support further leniency. For the offer, dry point and buffer readings in most tiers and water mapped 148 m away temper the view, but the common-tier buffer depth, overloaded drains, basements with critical plant and undocumented protections prevent assuming it is protected.",
+    "offerJudgement": {
+     "bufferRadiusM": {
+      "value": 250,
+      "reason": "The stated code radius is 250 m, and although nearest mapped water is 148 m away, the common-tier buffer depth is 0.310 m; reducing the radius would disregard nearby mapped water.",
+      "basis": "offer"
+     },
+     "ingressThresholdM": {
+      "value": 0.1,
+      "reason": "There are two basements and critical plant in B1, while barriers and non-return valves are not stated; I retain the 0.1 m reference rather than make ingress less likely.",
+      "basis": "offer"
+     },
+     "basementDamageExtreme": {
+      "value": 0.15,
+      "reason": "Critical plant is in B1 and pump backup is not stated, so there is no evidence to reduce the first rung below its reference.",
+      "basis": "offer"
+     },
+     "basementDamageSevere": {
+      "value": 0.25,
+      "reason": "The B1 plant and six items of below-ground equipment support retaining the reference increase from the prior rung.",
+      "basis": "offer"
+     },
+     "basementDamageModerate": {
+      "value": 0.4,
+      "reason": "The 4.5 m-deep basement fuel tank and critical plant give no basis to flatten the ladder, so this rung stays at reference.",
+      "basis": "offer"
+     },
+     "basementDamageOccasional": {
+      "value": 0.55,
+      "reason": "Flood barriers and non-return valves are not stated, so I cannot justify a smaller increase for this rarer-event rung.",
+      "basis": "offer"
+     },
+     "basementDamageCommon": {
+      "value": 0.7,
+      "reason": "The common tier has 0.310 m within the buffer and drains are overloaded; the basement ladder therefore remains at its reference top rung.",
+      "basis": "offer"
+     },
+     "belowGroundShare": {
+      "value": 0.08,
+      "reason": "The document leaves value below ground null, despite listing six equipment items and a 2,500-litre underground tank; the reference share is a cautious fallback, not a measured share.",
+      "basis": "judgement"
+     },
+     "outageDaysExtreme": {
+      "value": 2,
+      "reason": "Business-interruption cover is not stated, so this ladder has no effect unless cover is confirmed; retain the reference value rather than assume quick reopening.",
+      "basis": "offer"
+     },
+     "outageDaysSevere": {
+      "value": 5,
+      "reason": "Cover is not stated and critical plant is in B1, so this rung has no current effect and stays at its reference value.",
+      "basis": "offer"
+     },
+     "outageDaysModerate": {
+      "value": 10,
+      "reason": "The commercial occupancy's BI cover is unknown, while basement plant could impede reopening; retain the reference rung, with no effect absent cover.",
+      "basis": "offer"
+     },
+     "outageDaysOccasional": {
+      "value": 20,
+      "reason": "The basement plant and unknown pump backup do not support a faster reopening assumption; BI cover is unstated, so the reference rung has no current effect.",
+      "basis": "offer"
+     },
+     "outageDaysCommon": {
+      "value": 40,
+      "reason": "No statement confirms BI cover, and critical plant below ground gives no evidence for shortening the top rung; retain reference, with no current effect absent cover.",
+      "basis": "offer"
+     },
+     "uncertaintyLoading": {
+      "value": 0.1,
+      "reason": "The file records one flood loss over an 11-year history, but pump backup, barriers and valve status remain unknown; retain the reference loading for unmodelled causes.",
+      "basis": "offer"
+     }
+    }
+   }
+  },
+  "cautious": {
+   "role": "cautious",
+   "status": "done",
+   "model": "gpt-6-luna",
+   "ms": 15548,
+   "attempts": 1,
+   "usage": {
+    "promptTokens": 6583,
+    "outputTokens": 1607,
+    "thinkingTokens": 207,
+    "finishReason": "stop"
+   },
+   "raw": "{\"stance\":\"I take a cautious but evidence-bounded view: the portfolio hazard is a susceptibility proxy rather than measured depth, while the offer has dry point readings but mapped water in the buffer for the rarest tier and significant basement plant exposure.\",\"parameters\":[{\"name\":\"depthScaleM\",\"reason\":\"The score is not measured depth, but the common-tier highest score is 0.685 and the widest-tier scale should allow meaningful depth without treating the proxy as observation.\",\"basis\":\"data_profile\",\"value\":4.5},{\"name\":\"fragility.informal_iron_sheet\",\"reason\":\"Informal iron-sheet buildings make up 29.8% of buildings but only 0.3% of insured value; the JRC Africa residential curve supports material damage as depth rises, so I use a high multiplier without the maximum.\",\"basis\":\"data_profile\",\"value\":1.8},{\"name\":\"fragility.semi_permanent\",\"reason\":\"Semi-permanent buildings are 30.2% of the portfolio and only 1.3% of value, supporting above-reference vulnerability while the synthetic class label leaves construction detail uncertain.\",\"basis\":\"data_profile\",\"value\":1.5},{\"name\":\"fragility.permanent_masonry\",\"reason\":\"Permanent masonry represents 13.3% of insured value, and the JRC residential curve rises from 0.22 damage at 0.5 m to 0.64 at 2 m; I retain the reference multiplier absent more specific evidence.\",\"basis\":\"jrc_reference\",\"value\":1},{\"name\":\"fragility.concrete_rcc\",\"reason\":\"Concrete RCC holds 85.1% of insured value, but the JRC reference assigns it a lower 0.7 multiplier; I keep that value because the input gives no class-specific flood performance evidence.\",\"basis\":\"data_profile\",\"value\":0.7},{\"name\":\"cap.informal_iron_sheet\",\"reason\":\"The reference cap is 0.95 and the class is a lightweight informal type, so I allow near-total damage but do not exceed the allowed full-loss ceiling.\",\"basis\":\"judgement\",\"value\":0.98},{\"name\":\"cap.semi_permanent\",\"reason\":\"The 30.2% building share makes this class material to exposure, and the 0.9 reference cap is increased cautiously because the synthetic class has no resilience details.\",\"basis\":\"data_profile\",\"value\":0.95},{\"name\":\"cap.permanent_masonry\",\"reason\":\"Masonry is not described beyond its synthetic class, so I move only slightly above the 0.85 reference cap rather than assume complete destruction.\",\"basis\":\"judgement\",\"value\":0.9},{\"name\":\"cap.concrete_rcc\",\"reason\":\"Although RCC represents 85.1% of portfolio value, the reference cap of 0.8 reflects comparatively robust construction; I raise it modestly because no site-level resistance data is supplied.\",\"basis\":\"data_profile\",\"value\":0.85},{\"name\":\"returnPeriods.extreme\",\"reason\":\"No tier has an empirically assigned return period and the score is a susceptibility proxy; I use a shorter-than-reference 5-year interval as a cautious judgement, not a calibrated frequency.\",\"basis\":\"judgement\",\"value\":5},{\"name\":\"returnPeriods.severe\",\"reason\":\"The tiers are nested score cuts rather than observed events, so 15 years is a cautious but unvalidated interval above the 5-year extreme tier.\",\"basis\":\"judgement\",\"value\":15},{\"name\":\"returnPeriods.moderate\",\"reason\":\"The moderate tier affects 110 buildings versus 51 in severe, supporting a broader, less frequent event; 30 years remains an uncertain judgement rather than measured recurrence.\",\"basis\":\"data_profile\",\"value\":30},{\"name\":\"returnPeriods.occasional\",\"reason\":\"The occasional tier affects 174 buildings compared with 110 moderate, so I assign a longer 75-year interval while keeping it below the widest tier.\",\"basis\":\"data_profile\",\"value\":75},{\"name\":\"returnPeriods.common\",\"reason\":\"The common tier affects 259 buildings and 49.3% of insured value, the widest footprint, so it receives the longest interval; the 200-year assignment is judgement because no return periods are observed.\",\"basis\":\"data_profile\",\"value\":200},{\"name\":\"offer.bufferRadiusM\",\"reason\":\"The point is dry in every tier, but the common-tier buffer depth is 0.310 m at the stated 250 m radius; the location is not marked approximate, so I retain the reference radius.\",\"basis\":\"offer\",\"value\":250},{\"name\":\"offer.ingressThresholdM\",\"reason\":\"The offer has two basements, 4.5 m basement depth and critical plant in B1, so a slightly lower-than-reference threshold is a cautious assumption; barriers and valves are unstated, not evidence of protection.\",\"basis\":\"offer\",\"value\":0.08},{\"name\":\"offer.basementDamageExtreme\",\"reason\":\"Critical plant and six equipment items are below ground, but the frequent extreme tier has zero point, buffer and ponding depths, so this first rung stays near its reference.\",\"basis\":\"offer\",\"value\":0.15},{\"name\":\"offer.basementDamageSevere\",\"reason\":\"The severe-tier depths are also zero and the document lists three pumps but does not state backup, so I increase this rung only modestly over the prior rung.\",\"basis\":\"offer\",\"value\":0.28},{\"name\":\"offer.basementDamageModerate\",\"reason\":\"At the 50-year moderate tier, the drains are designed for 50 years and the map and ponding depths remain zero; the below-ground critical plant supports a cautious increase over severe.\",\"basis\":\"offer\",\"value\":0.43},{\"name\":\"offer.basementDamageOccasional\",\"reason\":\"The 100-year tier has overloaded drains and critical plant in B1, while pump backup and flood barriers are unstated, supporting a clearer increase over the moderate rung.\",\"basis\":\"offer\",\"value\":0.62},{\"name\":\"offer.basementDamageCommon\",\"reason\":\"The common tier has 0.310 m mapped within the buffer and overloaded drains, with six items and central plant below ground; I make this the highest rung but stop short of total loss.\",\"basis\":\"offer\",\"value\":0.78},{\"name\":\"offer.belowGroundShare\",\"reason\":\"The offer gives valueBelowGroundKes as null, so no stated value can replace the default share; the 4.5 m underground fuel tank and B1 plant indicate exposure but do not quantify its share.\",\"basis\":\"offer\",\"value\":0.1},{\"name\":\"offer.outageDaysExtreme\",\"reason\":\"BI cover is null rather than stated as covered, so this ladder has no effect here and I use its reference value.\",\"basis\":\"offer\",\"value\":2},{\"name\":\"offer.outageDaysSevere\",\"reason\":\"BI cover is not stated, making this rung ineffective for the offer; I retain the reference value rather than infer cover.\",\"basis\":\"offer\",\"value\":5},{\"name\":\"offer.outageDaysModerate\",\"reason\":\"The document does not say business interruption is covered, so this rung has no effect and remains at reference.\",\"basis\":\"offer\",\"value\":10},{\"name\":\"offer.outageDaysOccasional\",\"reason\":\"Although critical plant is in B1, BI cover is unstated; with no demonstrated cover this rung has no effect and stays at reference.\",\"basis\":\"offer\",\"value\":20},{\"name\":\"offer.outageDaysCommon\",\"reason\":\"The offer does not state BI cover, so this rung has no effect; I use the reference despite the basement plant exposure.\",\"basis\":\"offer\",\"value\":40},{\"name\":\"offer.uncertaintyLoading\",\"reason\":\"Drainage condition is only a placeholder, pump backup and barriers are unstated, and the document records one flood claim over 11 years; these gaps justify a moderate increase over reference.\",\"basis\":\"offer\",\"value\":0.15}]}",
+   "output": {
+    "depthScaleM": {
+     "value": 4.5,
+     "reason": "The score is not measured depth, but the common-tier highest score is 0.685 and the widest-tier scale should allow meaningful depth without treating the proxy as observation.",
+     "basis": "data_profile"
+    },
+    "fragility": {
+     "informal_iron_sheet": {
+      "value": 1.8,
+      "reason": "Informal iron-sheet buildings make up 29.8% of buildings but only 0.3% of insured value; the JRC Africa residential curve supports material damage as depth rises, so I use a high multiplier without the maximum.",
+      "basis": "data_profile"
+     },
+     "semi_permanent": {
+      "value": 1.5,
+      "reason": "Semi-permanent buildings are 30.2% of the portfolio and only 1.3% of value, supporting above-reference vulnerability while the synthetic class label leaves construction detail uncertain.",
+      "basis": "data_profile"
+     },
+     "permanent_masonry": {
+      "value": 1,
+      "reason": "Permanent masonry represents 13.3% of insured value, and the JRC residential curve rises from 0.22 damage at 0.5 m to 0.64 at 2 m; I retain the reference multiplier absent more specific evidence.",
+      "basis": "jrc_reference"
+     },
+     "concrete_rcc": {
+      "value": 0.7,
+      "reason": "Concrete RCC holds 85.1% of insured value, but the JRC reference assigns it a lower 0.7 multiplier; I keep that value because the input gives no class-specific flood performance evidence.",
+      "basis": "data_profile"
+     }
+    },
+    "cap": {
+     "informal_iron_sheet": {
+      "value": 0.98,
+      "reason": "The reference cap is 0.95 and the class is a lightweight informal type, so I allow near-total damage but do not exceed the allowed full-loss ceiling.",
+      "basis": "judgement"
+     },
+     "semi_permanent": {
+      "value": 0.95,
+      "reason": "The 30.2% building share makes this class material to exposure, and the 0.9 reference cap is increased cautiously because the synthetic class has no resilience details.",
+      "basis": "data_profile"
+     },
+     "permanent_masonry": {
+      "value": 0.9,
+      "reason": "Masonry is not described beyond its synthetic class, so I move only slightly above the 0.85 reference cap rather than assume complete destruction.",
+      "basis": "judgement"
+     },
+     "concrete_rcc": {
+      "value": 0.85,
+      "reason": "Although RCC represents 85.1% of portfolio value, the reference cap of 0.8 reflects comparatively robust construction; I raise it modestly because no site-level resistance data is supplied.",
+      "basis": "data_profile"
+     }
+    },
+    "returnPeriods": {
+     "extreme": {
+      "value": 5,
+      "reason": "No tier has an empirically assigned return period and the score is a susceptibility proxy; I use a shorter-than-reference 5-year interval as a cautious judgement, not a calibrated frequency.",
+      "basis": "judgement"
+     },
+     "severe": {
+      "value": 15,
+      "reason": "The tiers are nested score cuts rather than observed events, so 15 years is a cautious but unvalidated interval above the 5-year extreme tier.",
+      "basis": "judgement"
+     },
+     "moderate": {
+      "value": 30,
+      "reason": "The moderate tier affects 110 buildings versus 51 in severe, supporting a broader, less frequent event; 30 years remains an uncertain judgement rather than measured recurrence.",
+      "basis": "data_profile"
+     },
+     "occasional": {
+      "value": 75,
+      "reason": "The occasional tier affects 174 buildings compared with 110 moderate, so I assign a longer 75-year interval while keeping it below the widest tier.",
+      "basis": "data_profile"
+     },
+     "common": {
+      "value": 200,
+      "reason": "The common tier affects 259 buildings and 49.3% of insured value, the widest footprint, so it receives the longest interval; the 200-year assignment is judgement because no return periods are observed.",
+      "basis": "data_profile"
+     }
+    },
+    "stance": "I take a cautious but evidence-bounded view: the portfolio hazard is a susceptibility proxy rather than measured depth, while the offer has dry point readings but mapped water in the buffer for the rarest tier and significant basement plant exposure.",
+    "offerJudgement": {
+     "bufferRadiusM": {
+      "value": 250,
+      "reason": "The point is dry in every tier, but the common-tier buffer depth is 0.310 m at the stated 250 m radius; the location is not marked approximate, so I retain the reference radius.",
+      "basis": "offer"
+     },
+     "ingressThresholdM": {
+      "value": 0.08,
+      "reason": "The offer has two basements, 4.5 m basement depth and critical plant in B1, so a slightly lower-than-reference threshold is a cautious assumption; barriers and valves are unstated, not evidence of protection.",
+      "basis": "offer"
+     },
+     "basementDamageExtreme": {
+      "value": 0.15,
+      "reason": "Critical plant and six equipment items are below ground, but the frequent extreme tier has zero point, buffer and ponding depths, so this first rung stays near its reference.",
+      "basis": "offer"
+     },
+     "basementDamageSevere": {
+      "value": 0.28,
+      "reason": "The severe-tier depths are also zero and the document lists three pumps but does not state backup, so I increase this rung only modestly over the prior rung.",
+      "basis": "offer"
+     },
+     "basementDamageModerate": {
+      "value": 0.43,
+      "reason": "At the 50-year moderate tier, the drains are designed for 50 years and the map and ponding depths remain zero; the below-ground critical plant supports a cautious increase over severe.",
+      "basis": "offer"
+     },
+     "basementDamageOccasional": {
+      "value": 0.62,
+      "reason": "The 100-year tier has overloaded drains and critical plant in B1, while pump backup and flood barriers are unstated, supporting a clearer increase over the moderate rung.",
+      "basis": "offer"
+     },
+     "basementDamageCommon": {
+      "value": 0.78,
+      "reason": "The common tier has 0.310 m mapped within the buffer and overloaded drains, with six items and central plant below ground; I make this the highest rung but stop short of total loss.",
+      "basis": "offer"
+     },
+     "belowGroundShare": {
+      "value": 0.1,
+      "reason": "The offer gives valueBelowGroundKes as null, so no stated value can replace the default share; the 4.5 m underground fuel tank and B1 plant indicate exposure but do not quantify its share.",
+      "basis": "offer"
+     },
+     "outageDaysExtreme": {
+      "value": 2,
+      "reason": "BI cover is null rather than stated as covered, so this ladder has no effect here and I use its reference value.",
+      "basis": "offer"
+     },
+     "outageDaysSevere": {
+      "value": 5,
+      "reason": "BI cover is not stated, making this rung ineffective for the offer; I retain the reference value rather than infer cover.",
+      "basis": "offer"
+     },
+     "outageDaysModerate": {
+      "value": 10,
+      "reason": "The document does not say business interruption is covered, so this rung has no effect and remains at reference.",
+      "basis": "offer"
+     },
+     "outageDaysOccasional": {
+      "value": 20,
+      "reason": "Although critical plant is in B1, BI cover is unstated; with no demonstrated cover this rung has no effect and stays at reference.",
+      "basis": "offer"
+     },
+     "outageDaysCommon": {
+      "value": 40,
+      "reason": "The offer does not state BI cover, so this rung has no effect; I use the reference despite the basement plant exposure.",
+      "basis": "offer"
+     },
+     "uncertaintyLoading": {
+      "value": 0.15,
+      "reason": "Drainage condition is only a placeholder, pump backup and barriers are unstated, and the document records one flood claim over 11 years; these gaps justify a moderate increase over reference.",
+      "basis": "offer"
+     }
+    }
+   }
+  },
+  "critic": {
+   "role": "critic",
+   "status": "done",
+   "model": "gpt-6-luna",
+   "ms": 15034,
+   "attempts": 1,
+   "usage": {
+    "promptTokens": 6710,
+    "outputTokens": 1621,
+    "thinkingTokens": 0,
+    "finishReason": "stop"
+   },
+   "raw": "{\n  \"summary\": \"The reference output is useful as a scenario illustration, but it is not reliable as a calibrated flood-loss estimate: the portfolio is synthetic, hazard scores are susceptibility proxies rather than measured depths, and key exposure and validation warnings remain unresolved. The offer adds material uncertainty because its mapped depths are dry at the point but wet within the widest-tier buffer, while basement protection, below-ground value and business-interruption cover are not fully stated.\",\n  \"challenges\": [\n    {\n      \"id\": \"C1\",\n      \"title\": \"Hazard layer misses half the named flood areas\",\n      \"detail\": \"Hotspot validation flags only 12 of 24 named flood areas and misses locations including Donholm, Kibera, Westlands and Lang'ata. The score is built from terrain and river proximity, not measured flooding, so missing hotspots may make both the footprint and depth ordering misleading.\",\n      \"severity\": \"high\",\n      \"affects\": [\"hazard\", \"depthScaleM\", \"returnPeriods.extreme\", \"returnPeriods.severe\", \"returnPeriods.moderate\", \"returnPeriods.occasional\", \"returnPeriods.common\"],\n      \"recommendation\": \"Treat results as screening scenarios, not calibrated event losses; review the missed areas against local flood observations and test sensitivity to depth scaling and tier return periods before relying on the loss curve.\"\n    },\n    {\n      \"id\": \"C2\",\n      \"title\": \"Insured values are ten times the documented formula\",\n      \"detail\": \"The warning reports values at 9.97–10.05 times floor area × cost per m², with KES 63.6bn in the file versus KES 6.4bn from the documented formula. The portfolio is synthetic, and this discrepancy directly scales building losses and changes the apparent concentration of risk.\",\n      \"severity\": \"high\",\n      \"affects\": [\"data\"],\n      \"recommendation\": \"Reconcile the value multiplier with the data owner and state explicitly which value basis is used; do not treat the resulting portfolio totals as credible exposure until checked.\"\n    },\n    {\n      \"id\": \"C3\",\n      \"title\": \"Offer point is dry while the common-tier buffer is wet\",\n      \"detail\": \"The offer's point depth is zero in every tier, but its 250 m buffer reaches 0.310 m in the common tier; nearest mapped water is about 148 m away. The building is 24,500 m² and its location is marked exact, but the buffer still represents footprint and coordinate error, so whether 250 m is suitable is uncertain.\",\n      \"severity\": \"high\",\n      \"affects\": [\"offer\", \"offer.bufferRadiusM\"],\n      \"recommendation\": \"Check the building footprint and coordinate against the hazard map, and test whether the 250 m search radius is appropriate for this site; disclose that the widest-tier offer signal depends on nearby water rather than point flooding.\"\n    },\n    {\n      \"id\": \"C4\",\n      \"title\": \"Basement exposure is material but protection and value are unstated\",\n      \"detail\": \"The offer has two basements, a 4.5 m-deep fuel tank, central plant and six items of equipment below ground. The 3 × 15 kW sump pumps have no stated backup status, and barriers, non-return valves and value below ground are all null; those omissions do not establish protection or a zero basement value.\",\n      \"severity\": \"high\",\n      \"affects\": [\"offer\", \"offer.ingressThresholdM\", \"offer.basementDamageExtreme\", \"offer.basementDamageSevere\", \"offer.basementDamageModerate\", \"offer.basementDamageOccasional\", \"offer.basementDamageCommon\", \"offer.belowGroundShare\"],\n      \"recommendation\": \"Request below-ground values and evidence of pump backup, barriers and non-return valves from the broker; until supplied, report basement-driver results as assumption-sensitive and do not infer protection from missing information.\"\n    },\n    {\n      \"id\": \"C5\",\n      \"title\": \"Residential damage curve is applied to a large commercial building\",\n      \"detail\": \"The JRC curve is explicitly for Africa residential buildings, while this offer is commercial, concrete RCC, 18 floors above ground and insured for KES 1.09bn. The portfolio is also heavily value-concentrated in concrete RCC (85.1%), so a residential curve and unvalidated class assumptions affect much of the modeled value.\",\n      \"severity\": \"high\",\n      \"affects\": [\"depthScaleM\", \"fragility.concrete_rcc\", \"cap.concrete_rcc\", \"offer\"],\n      \"recommendation\": \"State the occupancy and curve mismatch as a limitation and test alternative vulnerability assumptions; seek commercial vulnerability evidence before treating the reference parameters as validated.\"\n    },\n    {\n      \"id\": \"C6\",\n      \"title\": \"Drain design is stated, but drainage condition and pump resilience are not\",\n      \"detail\": \"The document says storm drains were designed for a 50-year recurrence interval, and the offer depth table marks overload at 100- and 250-year tiers, not at 50 years. However, the drainage condition is only a placeholder description and sump-pump backup is null, so the stated design period does not establish actual capacity or operational resilience.\",\n      \"severity\": \"medium\",\n      \"affects\": [\"offer\"],\n      \"recommendation\": \"Verify maintenance, municipal connection capacity and pump backup with the broker; disclose that the overload trigger uses the stated 50-year design assumption rather than confirmed site performance.\"\n    },\n    {\n      \"id\": \"C7\",\n      \"title\": \"One reported flood loss cannot validate the modeled hazard\",\n      \"detail\": \"The offer records one flood loss of KES 850,000 over an 11-year history, but the input gives no event date, cause, depth, damage breakdown or confirmation that the history is complete. It is therefore weak evidence for or against the modeled dry point, buffer water or basement response.\",\n      \"severity\": \"medium\",\n      \"affects\": [\"offer\", \"offer.bufferRadiusM\", \"offer.ingressThresholdM\", \"offer.basementDamageExtreme\", \"offer.basementDamageSevere\", \"offer.basementDamageModerate\", \"offer.basementDamageOccasional\", \"offer.basementDamageCommon\"],\n      \"recommendation\": \"Ask for the claim circumstances and any other flood or water-ingress incidents; do not use the single stated claim as calibration evidence without supporting details.\"\n    },\n    {\n      \"id\": \"C8\",\n      \"title\": \"Reference parameters lack local calibration and score use is uneven\",\n      \"detail\": \"The reference depth scale is 4 m and tier return periods are assigned as 10, 25, 50, 100 and 250 years, but the score tiers have no fixed return periods and the input supplies no local calibration for these choices. The reference vulnerability multipliers and caps likewise have no stated portfolio-specific evidence; the score range is rescaled by tier and only the top 5% to 40% of cells is retained.\",\n      \"severity\": \"medium\",\n      \"affects\": [\"depthScaleM\", \"fragility.informal_iron_sheet\", \"fragility.semi_permanent\", \"fragility.permanent_masonry\", \"fragility.concrete_rcc\", \"cap.informal_iron_sheet\", \"cap.semi_permanent\", \"cap.permanent_masonry\", \"cap.concrete_rcc\", \"returnPeriods.extreme\", \"returnPeriods.severe\", \"returnPeriods.moderate\", \"returnPeriods.occasional\", \"returnPeriods.common\"],\n      \"recommendation\": \"Present the reference set as judgment-based assumptions rather than calibrated parameters, and provide sensitivity results across allowed depth, vulnerability and return-period choices.\"\n    }\n  ]\n}",
+   "output": {
+    "summary": "The reference output is useful as a scenario illustration, but it is not reliable as a calibrated flood-loss estimate: the portfolio is synthetic, hazard scores are susceptibility proxies rather than measured depths, and key exposure and validation warnings remain unresolved. The offer adds material uncertainty because its mapped depths are dry at the point but wet within the widest-tier buffer, while basement protection, below-ground value and business-interruption cover are not fully stated.",
+    "challenges": [
+     {
+      "id": "C1",
+      "title": "Hazard layer misses half the named flood areas",
+      "detail": "Hotspot validation flags only 12 of 24 named flood areas and misses locations including Donholm, Kibera, Westlands and Lang'ata. The score is built from terrain and river proximity, not measured flooding, so missing hotspots may make both the footprint and depth ordering misleading.",
+      "severity": "high",
+      "affects": [
+       "hazard",
+       "depthScaleM",
+       "returnPeriods.extreme",
+       "returnPeriods.severe",
+       "returnPeriods.moderate",
+       "returnPeriods.occasional",
+       "returnPeriods.common"
+      ],
+      "recommendation": "Treat results as screening scenarios, not calibrated event losses; review the missed areas against local flood observations and test sensitivity to depth scaling and tier return periods before relying on the loss curve."
+     },
+     {
+      "id": "C2",
+      "title": "Insured values are ten times the documented formula",
+      "detail": "The warning reports values at 9.97–10.05 times floor area × cost per m², with KES 63.6bn in the file versus KES 6.4bn from the documented formula. The portfolio is synthetic, and this discrepancy directly scales building losses and changes the apparent concentration of risk.",
+      "severity": "high",
+      "affects": [
+       "data"
+      ],
+      "recommendation": "Reconcile the value multiplier with the data owner and state explicitly which value basis is used; do not treat the resulting portfolio totals as credible exposure until checked."
+     },
+     {
+      "id": "C3",
+      "title": "Offer point is dry while the common-tier buffer is wet",
+      "detail": "The offer's point depth is zero in every tier, but its 250 m buffer reaches 0.310 m in the common tier; nearest mapped water is about 148 m away. The building is 24,500 m² and its location is marked exact, but the buffer still represents footprint and coordinate error, so whether 250 m is suitable is uncertain.",
+      "severity": "high",
+      "affects": [
+       "offer",
+       "offer.bufferRadiusM"
+      ],
+      "recommendation": "Check the building footprint and coordinate against the hazard map, and test whether the 250 m search radius is appropriate for this site; disclose that the widest-tier offer signal depends on nearby water rather than point flooding."
+     },
+     {
+      "id": "C4",
+      "title": "Basement exposure is material but protection and value are unstated",
+      "detail": "The offer has two basements, a 4.5 m-deep fuel tank, central plant and six items of equipment below ground. The 3 × 15 kW sump pumps have no stated backup status, and barriers, non-return valves and value below ground are all null; those omissions do not establish protection or a zero basement value.",
+      "severity": "high",
+      "affects": [
+       "offer",
+       "offer.ingressThresholdM",
+       "offer.basementDamageExtreme",
+       "offer.basementDamageSevere",
+       "offer.basementDamageModerate",
+       "offer.basementDamageOccasional",
+       "offer.basementDamageCommon",
+       "offer.belowGroundShare"
+      ],
+      "recommendation": "Request below-ground values and evidence of pump backup, barriers and non-return valves from the broker; until supplied, report basement-driver results as assumption-sensitive and do not infer protection from missing information."
+     },
+     {
+      "id": "C5",
+      "title": "Residential damage curve is applied to a large commercial building",
+      "detail": "The JRC curve is explicitly for Africa residential buildings, while this offer is commercial, concrete RCC, 18 floors above ground and insured for KES 1.09bn. The portfolio is also heavily value-concentrated in concrete RCC (85.1%), so a residential curve and unvalidated class assumptions affect much of the modeled value.",
+      "severity": "high",
+      "affects": [
+       "depthScaleM",
+       "fragility.concrete_rcc",
+       "cap.concrete_rcc",
+       "offer"
+      ],
+      "recommendation": "State the occupancy and curve mismatch as a limitation and test alternative vulnerability assumptions; seek commercial vulnerability evidence before treating the reference parameters as validated."
+     },
+     {
+      "id": "C6",
+      "title": "Drain design is stated, but drainage condition and pump resilience are not",
+      "detail": "The document says storm drains were designed for a 50-year recurrence interval, and the offer depth table marks overload at 100- and 250-year tiers, not at 50 years. However, the drainage condition is only a placeholder description and sump-pump backup is null, so the stated design period does not establish actual capacity or operational resilience.",
+      "severity": "medium",
+      "affects": [
+       "offer"
+      ],
+      "recommendation": "Verify maintenance, municipal connection capacity and pump backup with the broker; disclose that the overload trigger uses the stated 50-year design assumption rather than confirmed site performance."
+     },
+     {
+      "id": "C7",
+      "title": "One reported flood loss cannot validate the modeled hazard",
+      "detail": "The offer records one flood loss of KES 850,000 over an 11-year history, but the input gives no event date, cause, depth, damage breakdown or confirmation that the history is complete. It is therefore weak evidence for or against the modeled dry point, buffer water or basement response.",
+      "severity": "medium",
+      "affects": [
+       "offer",
+       "offer.bufferRadiusM",
+       "offer.ingressThresholdM",
+       "offer.basementDamageExtreme",
+       "offer.basementDamageSevere",
+       "offer.basementDamageModerate",
+       "offer.basementDamageOccasional",
+       "offer.basementDamageCommon"
+      ],
+      "recommendation": "Ask for the claim circumstances and any other flood or water-ingress incidents; do not use the single stated claim as calibration evidence without supporting details."
+     },
+     {
+      "id": "C8",
+      "title": "Reference parameters lack local calibration and score use is uneven",
+      "detail": "The reference depth scale is 4 m and tier return periods are assigned as 10, 25, 50, 100 and 250 years, but the score tiers have no fixed return periods and the input supplies no local calibration for these choices. The reference vulnerability multipliers and caps likewise have no stated portfolio-specific evidence; the score range is rescaled by tier and only the top 5% to 40% of cells is retained.",
+      "severity": "medium",
+      "affects": [
+       "depthScaleM",
+       "fragility.informal_iron_sheet",
+       "fragility.semi_permanent",
+       "fragility.permanent_masonry",
+       "fragility.concrete_rcc",
+       "cap.informal_iron_sheet",
+       "cap.semi_permanent",
+       "cap.permanent_masonry",
+       "cap.concrete_rcc",
+       "returnPeriods.extreme",
+       "returnPeriods.severe",
+       "returnPeriods.moderate",
+       "returnPeriods.occasional",
+       "returnPeriods.common"
+      ],
+      "recommendation": "Present the reference set as judgment-based assumptions rather than calibrated parameters, and provide sensitivity results across allowed depth, vulnerability and return-period choices."
+     }
+    ]
+   }
+  },
+  "chair": {
+   "role": "chair",
+   "status": "done",
+   "model": "gpt-6-luna",
+   "ms": 19724,
+   "attempts": 1,
+   "usage": {
+    "promptTokens": 13370,
+    "outputTokens": 2739,
+    "thinkingTokens": 180,
+    "finishReason": "stop"
+   },
+   "raw": "{\n  \"summary\": \"I treat the synthetic portfolio’s susceptibility scores as screening proxies, not measured flood depths or calibrated event frequencies, and retain restrained, reference-anchored assumptions pending local validation. The offer’s point is dry, but the common-tier buffer is wet; deep basements and critical plant matter, while protection, below-ground value and BI cover remain unconfirmed. The offer site was read using the stated 250 m buffer, which captures nearby mapped water despite dry point readings.\",\n  \"parameters\": [\n    {\n      \"name\": \"depthScaleM\",\n      \"reason\": \"The 0–1 terrain-and-river-proximity score is not measured depth, and only 12 of 24 named flood areas are flagged; I choose a midpoint between the proposals rather than treat either scale as calibrated.\",\n      \"basis\": \"data_profile\",\n      \"leans\": \"between\",\n      \"value\": 2.5\n    },\n    {\n      \"name\": \"fragility.informal_iron_sheet\",\n      \"reason\": \"Informal iron-sheet buildings are 29.8% of buildings but only 0.3% of insured value; I retain the JRC reference multiplier because the synthetic class gives no condition evidence.\",\n      \"basis\": \"data_profile\",\n      \"leans\": \"optimist\",\n      \"value\": 1.5\n    },\n    {\n      \"name\": \"fragility.semi_permanent\",\n      \"reason\": \"Semi-permanent buildings are 30.2% of buildings and 1.3% of insured value, but the profile gives no construction-condition detail to support a higher multiplier than the JRC reference.\",\n      \"basis\": \"data_profile\",\n      \"leans\": \"optimist\",\n      \"value\": 1.2\n    },\n    {\n      \"name\": \"fragility.permanent_masonry\",\n      \"reason\": \"The JRC Africa residential curve is the stated damage basis, while the profile gives no masonry-specific performance evidence; I keep its reference multiplier.\",\n      \"basis\": \"jrc_reference\",\n      \"leans\": \"between\",\n      \"value\": 1\n    },\n    {\n      \"name\": \"fragility.concrete_rcc\",\n      \"reason\": \"Concrete RCC represents 85.1% of insured value, but the synthetic profile supplies no flood-performance evidence; I retain the JRC reference multiplier and flag the commercial-curve mismatch.\",\n      \"basis\": \"jrc_reference\",\n      \"leans\": \"between\",\n      \"value\": 0.7\n    },\n    {\n      \"name\": \"cap.informal_iron_sheet\",\n      \"reason\": \"The profile identifies 179 informal iron-sheet buildings but gives no evidence of their maximum damage share; I retain the reference cap rather than presume near-total loss.\",\n      \"basis\": \"data_profile\",\n      \"leans\": \"optimist\",\n      \"value\": 0.95\n    },\n    {\n      \"name\": \"cap.semi_permanent\",\n      \"reason\": \"The 181 semi-permanent buildings have no stated repair or resilience characteristics, so the reference cap is more supportable than an increased cap.\",\n      \"basis\": \"data_profile\",\n      \"leans\": \"optimist\",\n      \"value\": 0.9\n    },\n    {\n      \"name\": \"cap.permanent_masonry\",\n      \"reason\": \"The profile gives 156 permanent-masonry buildings but no evidence for a different maximum damage share; I use the reference cap.\",\n      \"basis\": \"data_profile\",\n      \"leans\": \"between\",\n      \"value\": 0.85\n    },\n    {\n      \"name\": \"cap.concrete_rcc\",\n      \"reason\": \"RCC accounts for 85.1% of insured value, yet that concentration does not establish a higher maximum damage share; I retain its reference cap.\",\n      \"basis\": \"data_profile\",\n      \"leans\": \"optimist\",\n      \"value\": 0.8\n    },\n    {\n      \"name\": \"returnPeriods.extreme\",\n      \"reason\": \"The score tiers have no fixed return periods, and the 5%-to-40% nested cuts are not observed event frequencies; I use the 10-year reference as an uncalibrated scenario assignment.\",\n      \"basis\": \"data_profile\",\n      \"leans\": \"optimist\",\n      \"value\": 10\n    },\n    {\n      \"name\": \"returnPeriods.severe\",\n      \"reason\": \"The severe tier affects 51 buildings, but that count does not establish recurrence; I retain the 25-year reference, above the extreme assignment.\",\n      \"basis\": \"data_profile\",\n      \"leans\": \"optimist\",\n      \"value\": 25\n    },\n    {\n      \"name\": \"returnPeriods.moderate\",\n      \"reason\": \"The moderate tier affects 110 buildings, which describes its footprint rather than frequency; I retain the 50-year reference between adjacent tiers.\",\n      \"basis\": \"data_profile\",\n      \"leans\": \"optimist\",\n      \"value\": 50\n    },\n    {\n      \"name\": \"returnPeriods.occasional\",\n      \"reason\": \"The 174 buildings affected in this tier do not calibrate recurrence, so I keep the 100-year reference and its strict ordering.\",\n      \"basis\": \"data_profile\",\n      \"leans\": \"optimist\",\n      \"value\": 100\n    },\n    {\n      \"name\": \"returnPeriods.common\",\n      \"reason\": \"The common tier is the widest footprint, affecting 259 buildings, and is defined as the rarest event; with no observed frequency, I retain the 250-year reference as a scenario assumption.\",\n      \"basis\": \"data_profile\",\n      \"leans\": \"optimist\",\n      \"value\": 250\n    },\n    {\n      \"name\": \"offer.bufferRadiusM\",\n      \"reason\": \"The offer uses a stated 250 m search radius; its common-tier buffer depth is 0.310 m and nearest mapped water is about 148 m away, so I retain that radius pending footprint review.\",\n      \"basis\": \"offer\",\n      \"leans\": \"between\",\n      \"value\": 250\n    },\n    {\n      \"name\": \"offer.ingressThresholdM\",\n      \"reason\": \"There are two basements with critical B1 plant, but barriers and non-return valves are unstated; I use the 0.1 m reference rather than infer protection or a lower trigger.\",\n      \"basis\": \"offer\",\n      \"leans\": \"optimist\",\n      \"value\": 0.1\n    },\n    {\n      \"name\": \"offer.basementDamageExtreme\",\n      \"reason\": \"The ladder is steeper than the reference overall because critical plant is in B1 and pump backup is unknown; this first rung stays at the reference 0.15.\",\n      \"basis\": \"offer\",\n      \"leans\": \"between\",\n      \"value\": 0.15\n    },\n    {\n      \"name\": \"offer.basementDamageSevere\",\n      \"reason\": \"The six below-ground equipment items support a modest step up from the prior rung, while the severe-tier point, buffer and ponding depths are zero.\",\n      \"basis\": \"offer\",\n      \"leans\": \"between\",\n      \"value\": 0.28\n    },\n    {\n      \"name\": \"offer.basementDamageModerate\",\n      \"reason\": \"The 4.5 m-deep basement and critical plant support an increase over severe, although the moderate-tier mapped and ponding depths are zero.\",\n      \"basis\": \"offer\",\n      \"leans\": \"cautious\",\n      \"value\": 0.43\n    },\n    {\n      \"name\": \"offer.basementDamageOccasional\",\n      \"reason\": \"The occasional tier marks drains overloaded and pump backup and barriers are unstated, supporting a larger step than the prior rung.\",\n      \"basis\": \"offer\",\n      \"leans\": \"cautious\",\n      \"value\": 0.62\n    },\n    {\n      \"name\": \"offer.basementDamageCommon\",\n      \"reason\": \"The common tier has 0.310 m within the buffer and overloaded drains, alongside B1 plant; I set the highest rung above reference but below total loss.\",\n      \"basis\": \"offer\",\n      \"leans\": \"cautious\",\n      \"value\": 0.78\n    },\n    {\n      \"name\": \"offer.belowGroundShare\",\n      \"reason\": \"The stated below-ground value is null, while the offer lists six equipment items and an underground fuel tank; the 0.1 fallback is judgement, not a measured share.\",\n      \"basis\": \"judgement\",\n      \"leans\": \"cautious\",\n      \"value\": 0.1\n    },\n    {\n      \"name\": \"offer.outageDaysExtreme\",\n      \"reason\": \"BI cover is null, so this rung has no effect unless cover is confirmed; I retain the reference value.\",\n      \"basis\": \"offer\",\n      \"leans\": \"between\",\n      \"value\": 2\n    },\n    {\n      \"name\": \"offer.outageDaysSevere\",\n      \"reason\": \"The offer does not state BI cover, so this rung has no current effect and remains at reference.\",\n      \"basis\": \"offer\",\n      \"leans\": \"between\",\n      \"value\": 5\n    },\n    {\n      \"name\": \"offer.outageDaysModerate\",\n      \"reason\": \"BI cover is not stated, so this rung has no current effect; I retain its reference value rather than assume cover.\",\n      \"basis\": \"offer\",\n      \"leans\": \"between\",\n      \"value\": 10\n    },\n    {\n      \"name\": \"offer.outageDaysOccasional\",\n      \"reason\": \"Critical plant is in B1, but the offer does not state BI cover; this rung therefore has no current effect and stays at reference.\",\n      \"basis\": \"offer\",\n      \"leans\": \"between\",\n      \"value\": 20\n    },\n    {\n      \"name\": \"offer.outageDaysCommon\",\n      \"reason\": \"The offer leaves BI cover unstated, so this rung has no current effect; I use the reference value despite the basement plant exposure.\",\n      \"basis\": \"offer\",\n      \"leans\": \"between\",\n      \"value\": 40\n    },\n    {\n      \"name\": \"offer.uncertaintyLoading\",\n      \"reason\": \"The drainage condition is only a placeholder and pump backup, barriers and valves are unstated; I choose a moderate increase over reference for these unmodelled uncertainties.\",\n      \"basis\": \"offer\",\n      \"leans\": \"cautious\",\n      \"value\": 0.15\n    }\n  ],\n  \"responses\": [\n    {\n      \"challengeId\": \"C1\",\n      \"verdict\": \"accepted\",\n      \"response\": \"Treat outputs as screening scenarios, not calibrated flood losses; the missed 12 of 24 named areas and proxy hazard support a restrained depth assumption and review against local observations.\"\n    },\n    {\n      \"challengeId\": \"C2\",\n      \"verdict\": \"accepted\",\n      \"response\": \"Use the file’s insured values as supplied, but flag the reported roughly tenfold formula discrepancy and request reconciliation before relying on portfolio totals.\"\n    },\n    {\n      \"challengeId\": \"C3\",\n      \"verdict\": \"partly\",\n      \"response\": \"Retain the stated 250 m radius because the common-tier buffer contains 0.310 m and mapped water is about 148 m away; disclose that this signal is nearby water, not point flooding, and request footprint and coordinate checks.\"\n    },\n    {\n      \"challengeId\": \"C4\",\n      \"verdict\": \"accepted\",\n      \"response\": \"Use a cautious, rising basement ladder and a fallback below-ground share because two basements contain critical plant and equipment; request actual values and evidence of pump backup, barriers and valves.\"\n    },\n    {\n      \"challengeId\": \"C5\",\n      \"verdict\": \"accepted\",\n      \"response\": \"Retain the supplied JRC reference assumptions without treating them as commercial validation; flag the residential curve and RCC concentration and seek commercial vulnerability evidence.\"\n    },\n    {\n      \"challengeId\": \"C6\",\n      \"verdict\": \"accepted\",\n      \"response\": \"The offer’s overload flags begin at the 100-year tier against its stated 50-year drain design; treat that as the model trigger, not verified operational capacity, and request maintenance and pump-backup details.\"\n    },\n    {\n      \"challengeId\": \"C7\",\n      \"verdict\": \"accepted\",\n      \"response\": \"Do not use the single KES 850,000 claim over 11 years to calibrate hazard or basement response; ask for its date, cause, damage details and completeness of history.\"\n    },\n    {\n      \"challengeId\": \"C8\",\n      \"verdict\": \"accepted\",\n      \"response\": \"Keep the reference-based fragility, caps and return periods as uncalibrated assumptions, with the selected depth scale tempered by proxy limitations; test sensitivity before relying on the loss curve.\"\n    }\n  ]\n}",
+   "output": {
+    "summary": "I treat the synthetic portfolio’s susceptibility scores as screening proxies, not measured flood depths or calibrated event frequencies, and retain restrained, reference-anchored assumptions pending local validation. The offer’s point is dry, but the common-tier buffer is wet; deep basements and critical plant matter, while protection, below-ground value and BI cover remain unconfirmed. The offer site was read using the stated 250 m buffer, which captures nearby mapped water despite dry point readings.",
+    "decision": {
+     "depthScaleM": {
+      "value": 2.5,
+      "reason": "The 0–1 terrain-and-river-proximity score is not measured depth, and only 12 of 24 named flood areas are flagged; I choose a midpoint between the proposals rather than treat either scale as calibrated.",
+      "basis": "data_profile",
+      "leans": "between"
+     },
+     "fragility": {
+      "informal_iron_sheet": {
+       "value": 1.5,
+       "reason": "Informal iron-sheet buildings are 29.8% of buildings but only 0.3% of insured value; I retain the JRC reference multiplier because the synthetic class gives no condition evidence.",
+       "basis": "data_profile",
+       "leans": "optimist"
+      },
+      "semi_permanent": {
+       "value": 1.2,
+       "reason": "Semi-permanent buildings are 30.2% of buildings and 1.3% of insured value, but the profile gives no construction-condition detail to support a higher multiplier than the JRC reference.",
+       "basis": "data_profile",
+       "leans": "optimist"
+      },
+      "permanent_masonry": {
+       "value": 1,
+       "reason": "The JRC Africa residential curve is the stated damage basis, while the profile gives no masonry-specific performance evidence; I keep its reference multiplier.",
+       "basis": "jrc_reference",
+       "leans": "between"
+      },
+      "concrete_rcc": {
+       "value": 0.7,
+       "reason": "Concrete RCC represents 85.1% of insured value, but the synthetic profile supplies no flood-performance evidence; I retain the JRC reference multiplier and flag the commercial-curve mismatch.",
+       "basis": "jrc_reference",
+       "leans": "between"
+      }
+     },
+     "cap": {
+      "informal_iron_sheet": {
+       "value": 0.95,
+       "reason": "The profile identifies 179 informal iron-sheet buildings but gives no evidence of their maximum damage share; I retain the reference cap rather than presume near-total loss.",
+       "basis": "data_profile",
+       "leans": "optimist"
+      },
+      "semi_permanent": {
+       "value": 0.9,
+       "reason": "The 181 semi-permanent buildings have no stated repair or resilience characteristics, so the reference cap is more supportable than an increased cap.",
+       "basis": "data_profile",
+       "leans": "optimist"
+      },
+      "permanent_masonry": {
+       "value": 0.85,
+       "reason": "The profile gives 156 permanent-masonry buildings but no evidence for a different maximum damage share; I use the reference cap.",
+       "basis": "data_profile",
+       "leans": "between"
+      },
+      "concrete_rcc": {
+       "value": 0.8,
+       "reason": "RCC accounts for 85.1% of insured value, yet that concentration does not establish a higher maximum damage share; I retain its reference cap.",
+       "basis": "data_profile",
+       "leans": "optimist"
+      }
+     },
+     "returnPeriods": {
+      "extreme": {
+       "value": 10,
+       "reason": "The score tiers have no fixed return periods, and the 5%-to-40% nested cuts are not observed event frequencies; I use the 10-year reference as an uncalibrated scenario assignment.",
+       "basis": "data_profile",
+       "leans": "optimist"
+      },
+      "severe": {
+       "value": 25,
+       "reason": "The severe tier affects 51 buildings, but that count does not establish recurrence; I retain the 25-year reference, above the extreme assignment.",
+       "basis": "data_profile",
+       "leans": "optimist"
+      },
+      "moderate": {
+       "value": 50,
+       "reason": "The moderate tier affects 110 buildings, which describes its footprint rather than frequency; I retain the 50-year reference between adjacent tiers.",
+       "basis": "data_profile",
+       "leans": "optimist"
+      },
+      "occasional": {
+       "value": 100,
+       "reason": "The 174 buildings affected in this tier do not calibrate recurrence, so I keep the 100-year reference and its strict ordering.",
+       "basis": "data_profile",
+       "leans": "optimist"
+      },
+      "common": {
+       "value": 250,
+       "reason": "The common tier is the widest footprint, affecting 259 buildings, and is defined as the rarest event; with no observed frequency, I retain the 250-year reference as a scenario assumption.",
+       "basis": "data_profile",
+       "leans": "optimist"
+      }
+     }
+    },
+    "responses": [
+     {
+      "challengeId": "C1",
+      "verdict": "accepted",
+      "response": "Treat outputs as screening scenarios, not calibrated flood losses; the missed 12 of 24 named areas and proxy hazard support a restrained depth assumption and review against local observations."
+     },
+     {
+      "challengeId": "C2",
+      "verdict": "accepted",
+      "response": "Use the file’s insured values as supplied, but flag the reported roughly tenfold formula discrepancy and request reconciliation before relying on portfolio totals."
+     },
+     {
+      "challengeId": "C3",
+      "verdict": "partly",
+      "response": "Retain the stated 250 m radius because the common-tier buffer contains 0.310 m and mapped water is about 148 m away; disclose that this signal is nearby water, not point flooding, and request footprint and coordinate checks."
+     },
+     {
+      "challengeId": "C4",
+      "verdict": "accepted",
+      "response": "Use a cautious, rising basement ladder and a fallback below-ground share because two basements contain critical plant and equipment; request actual values and evidence of pump backup, barriers and valves."
+     },
+     {
+      "challengeId": "C5",
+      "verdict": "accepted",
+      "response": "Retain the supplied JRC reference assumptions without treating them as commercial validation; flag the residential curve and RCC concentration and seek commercial vulnerability evidence."
+     },
+     {
+      "challengeId": "C6",
+      "verdict": "accepted",
+      "response": "The offer’s overload flags begin at the 100-year tier against its stated 50-year drain design; treat that as the model trigger, not verified operational capacity, and request maintenance and pump-backup details."
+     },
+     {
+      "challengeId": "C7",
+      "verdict": "accepted",
+      "response": "Do not use the single KES 850,000 claim over 11 years to calibrate hazard or basement response; ask for its date, cause, damage details and completeness of history."
+     },
+     {
+      "challengeId": "C8",
+      "verdict": "accepted",
+      "response": "Keep the reference-based fragility, caps and return periods as uncalibrated assumptions, with the selected depth scale tempered by proxy limitations; test sensitivity before relying on the loss curve."
+     }
+    ],
+    "offerJudgement": {
+     "bufferRadiusM": {
+      "value": 250,
+      "reason": "The offer uses a stated 250 m search radius; its common-tier buffer depth is 0.310 m and nearest mapped water is about 148 m away, so I retain that radius pending footprint review.",
+      "basis": "offer",
+      "leans": "between"
+     },
+     "ingressThresholdM": {
+      "value": 0.1,
+      "reason": "There are two basements with critical B1 plant, but barriers and non-return valves are unstated; I use the 0.1 m reference rather than infer protection or a lower trigger.",
+      "basis": "offer",
+      "leans": "optimist"
+     },
+     "basementDamageExtreme": {
+      "value": 0.15,
+      "reason": "The ladder is steeper than the reference overall because critical plant is in B1 and pump backup is unknown; this first rung stays at the reference 0.15.",
+      "basis": "offer",
+      "leans": "between"
+     },
+     "basementDamageSevere": {
+      "value": 0.28,
+      "reason": "The six below-ground equipment items support a modest step up from the prior rung, while the severe-tier point, buffer and ponding depths are zero.",
+      "basis": "offer",
+      "leans": "between"
+     },
+     "basementDamageModerate": {
+      "value": 0.43,
+      "reason": "The 4.5 m-deep basement and critical plant support an increase over severe, although the moderate-tier mapped and ponding depths are zero.",
+      "basis": "offer",
+      "leans": "cautious"
+     },
+     "basementDamageOccasional": {
+      "value": 0.62,
+      "reason": "The occasional tier marks drains overloaded and pump backup and barriers are unstated, supporting a larger step than the prior rung.",
+      "basis": "offer",
+      "leans": "cautious"
+     },
+     "basementDamageCommon": {
+      "value": 0.78,
+      "reason": "The common tier has 0.310 m within the buffer and overloaded drains, alongside B1 plant; I set the highest rung above reference but below total loss.",
+      "basis": "offer",
+      "leans": "cautious"
+     },
+     "belowGroundShare": {
+      "value": 0.1,
+      "reason": "The stated below-ground value is null, while the offer lists six equipment items and an underground fuel tank; the 0.1 fallback is judgement, not a measured share.",
+      "basis": "judgement",
+      "leans": "cautious"
+     },
+     "outageDaysExtreme": {
+      "value": 2,
+      "reason": "BI cover is null, so this rung has no effect unless cover is confirmed; I retain the reference value.",
+      "basis": "offer",
+      "leans": "between"
+     },
+     "outageDaysSevere": {
+      "value": 5,
+      "reason": "The offer does not state BI cover, so this rung has no current effect and remains at reference.",
+      "basis": "offer",
+      "leans": "between"
+     },
+     "outageDaysModerate": {
+      "value": 10,
+      "reason": "BI cover is not stated, so this rung has no current effect; I retain its reference value rather than assume cover.",
+      "basis": "offer",
+      "leans": "between"
+     },
+     "outageDaysOccasional": {
+      "value": 20,
+      "reason": "Critical plant is in B1, but the offer does not state BI cover; this rung therefore has no current effect and stays at reference.",
+      "basis": "offer",
+      "leans": "between"
+     },
+     "outageDaysCommon": {
+      "value": 40,
+      "reason": "The offer leaves BI cover unstated, so this rung has no current effect; I use the reference value despite the basement plant exposure.",
+      "basis": "offer",
+      "leans": "between"
+     },
+     "uncertaintyLoading": {
+      "value": 0.15,
+      "reason": "The drainage condition is only a placeholder and pump backup, barriers and valves are unstated; I choose a moderate increase over reference for these unmodelled uncertainties.",
+      "basis": "offer",
+      "leans": "cautious"
+     }
+    }
+   }
+  }
+ },
+ "optimist": null,
+ "cautious": null,
+ "final": null,
+ "fingerprint": "c28bbf95",
+ "basis": {
+  "mode": "all_drivers",
+  "judgement": {
+   "bufferRadiusM": 250,
+   "ingressThresholdM": 0.1,
+   "basementDamageExtreme": 0.15,
+   "basementDamageSevere": 0.25,
+   "basementDamageModerate": 0.4,
+   "basementDamageOccasional": 0.55,
+   "basementDamageCommon": 0.7,
+   "belowGroundShare": 0.08,
+   "outageDaysExtreme": 2,
+   "outageDaysSevere": 5,
+   "outageDaysModerate": 10,
+   "outageDaysOccasional": 20,
+   "outageDaysCommon": 40,
+   "uncertaintyLoading": 0.1,
+   "drainDesignRp": 25,
+   "drainOverloadDepthM": 0.1,
+   "annualRentShare": 0.08,
+   "costOfCapital": 0.08,
+   "minimumRatePerMille": 0.1
+  }
+ },
+ "offerJudgement": {
+  "optimist": {
+   "bufferRadiusM": 250,
+   "ingressThresholdM": 0.1,
+   "basementDamageExtreme": 0.15,
+   "basementDamageSevere": 0.25,
+   "basementDamageModerate": 0.4,
+   "basementDamageOccasional": 0.55,
+   "basementDamageCommon": 0.7,
+   "belowGroundShare": 0.08,
+   "outageDaysExtreme": 2,
+   "outageDaysSevere": 5,
+   "outageDaysModerate": 10,
+   "outageDaysOccasional": 20,
+   "outageDaysCommon": 40,
+   "uncertaintyLoading": 0.1
+  },
+  "cautious": {
+   "bufferRadiusM": 250,
+   "ingressThresholdM": 0.08,
+   "basementDamageExtreme": 0.15,
+   "basementDamageSevere": 0.28,
+   "basementDamageModerate": 0.43,
+   "basementDamageOccasional": 0.62,
+   "basementDamageCommon": 0.78,
+   "belowGroundShare": 0.1,
+   "outageDaysExtreme": 2,
+   "outageDaysSevere": 5,
+   "outageDaysModerate": 10,
+   "outageDaysOccasional": 20,
+   "outageDaysCommon": 40,
+   "uncertaintyLoading": 0.15
+  },
+  "final": {
+   "bufferRadiusM": 250,
+   "ingressThresholdM": 0.1,
+   "basementDamageExtreme": 0.15,
+   "basementDamageSevere": 0.28,
+   "basementDamageModerate": 0.43,
+   "basementDamageOccasional": 0.62,
+   "basementDamageCommon": 0.78,
+   "belowGroundShare": 0.1,
+   "outageDaysExtreme": 2,
+   "outageDaysSevere": 5,
+   "outageDaysModerate": 10,
+   "outageDaysOccasional": 20,
+   "outageDaysCommon": 40,
+   "uncertaintyLoading": 0.15
+  },
+  "reasons": {
+   "bufferRadiusM": {
+    "reason": "The offer uses a stated 250 m search radius; its common-tier buffer depth is 0.310 m and nearest mapped water is about 148 m away, so I retain that radius pending footprint review.",
+    "basis": "offer",
+    "leans": "between"
+   },
+   "ingressThresholdM": {
+    "reason": "There are two basements with critical B1 plant, but barriers and non-return valves are unstated; I use the 0.1 m reference rather than infer protection or a lower trigger.",
+    "basis": "offer",
+    "leans": "optimist"
+   },
+   "basementDamageExtreme": {
+    "reason": "The ladder is steeper than the reference overall because critical plant is in B1 and pump backup is unknown; this first rung stays at the reference 0.15.",
+    "basis": "offer",
+    "leans": "between"
+   },
+   "basementDamageSevere": {
+    "reason": "The six below-ground equipment items support a modest step up from the prior rung, while the severe-tier point, buffer and ponding depths are zero.",
+    "basis": "offer",
+    "leans": "between"
+   },
+   "basementDamageModerate": {
+    "reason": "The 4.5 m-deep basement and critical plant support an increase over severe, although the moderate-tier mapped and ponding depths are zero.",
+    "basis": "offer",
+    "leans": "cautious"
+   },
+   "basementDamageOccasional": {
+    "reason": "The occasional tier marks drains overloaded and pump backup and barriers are unstated, supporting a larger step than the prior rung.",
+    "basis": "offer",
+    "leans": "cautious"
+   },
+   "basementDamageCommon": {
+    "reason": "The common tier has 0.310 m within the buffer and overloaded drains, alongside B1 plant; I set the highest rung above reference but below total loss.",
+    "basis": "offer",
+    "leans": "cautious"
+   },
+   "belowGroundShare": {
+    "reason": "The stated below-ground value is null, while the offer lists six equipment items and an underground fuel tank; the 0.1 fallback is judgement, not a measured share.",
+    "basis": "judgement",
+    "leans": "cautious"
+   },
+   "outageDaysExtreme": {
+    "reason": "BI cover is null, so this rung has no effect unless cover is confirmed; I retain the reference value.",
+    "basis": "offer",
+    "leans": "between"
+   },
+   "outageDaysSevere": {
+    "reason": "The offer does not state BI cover, so this rung has no current effect and remains at reference.",
+    "basis": "offer",
+    "leans": "between"
+   },
+   "outageDaysModerate": {
+    "reason": "BI cover is not stated, so this rung has no current effect; I retain its reference value rather than assume cover.",
+    "basis": "offer",
+    "leans": "between"
+   },
+   "outageDaysOccasional": {
+    "reason": "Critical plant is in B1, but the offer does not state BI cover; this rung therefore has no current effect and stays at reference.",
+    "basis": "offer",
+    "leans": "between"
+   },
+   "outageDaysCommon": {
+    "reason": "The offer leaves BI cover unstated, so this rung has no current effect; I use the reference value despite the basement plant exposure.",
+    "basis": "offer",
+    "leans": "between"
+   },
+   "uncertaintyLoading": {
+    "reason": "The drainage condition is only a placeholder and pump backup, barriers and valves are unstated; I choose a moderate increase over reference for these unmodelled uncertainties.",
+    "basis": "offer",
+    "leans": "cautious"
+   }
+  },
+  "adjustments": [],
+  "brief": {
+   "housingClass": "concrete_rcc",
+   "occupancy": "commercial",
+   "insuredValueKes": 1090000000,
+   "floorAreaM2": 24500,
+   "locationApproximate": false,
+   "basements": 2,
+   "basementDepthM": 4.5,
+   "criticalPlantInBasement": true,
+   "equipmentBelowGroundCount": 6,
+   "valueBelowGroundKes": null,
+   "drainageCondition": null,
+   "drainDesignRp": 50,
+   "sumpPumpCapacity": null,
+   "sumpPumpBackup": null,
+   "floodBarriers": null,
+   "nonReturnValves": null,
+   "biCovered": null,
+   "floodLossCount": 1,
+   "floodLossTotalKes": 850000,
+   "floodHistoryYears": 11,
+   "nearestRiverM": 662.9856447567064,
+   "nearestDrainM": 2592.3072083719253,
+   "quotes": [],
+   "bufferRadiusM": 250,
+   "depthsByTier": [
+    {
+     "tier": "extreme",
+     "returnPeriod": 10,
+     "pointM": 0,
+     "bufferM": 0,
+     "pondingM": 0,
+     "overloaded": false
+    },
+    {
+     "tier": "severe",
+     "returnPeriod": 25,
+     "pointM": 0,
+     "bufferM": 0,
+     "pondingM": 0,
+     "overloaded": false
+    },
+    {
+     "tier": "moderate",
+     "returnPeriod": 50,
+     "pointM": 0,
+     "bufferM": 0,
+     "pondingM": 0,
+     "overloaded": false
+    },
+    {
+     "tier": "occasional",
+     "returnPeriod": 100,
+     "pointM": 0,
+     "bufferM": 0,
+     "pondingM": 0,
+     "overloaded": true
+    },
+    {
+     "tier": "common",
+     "returnPeriod": 250,
+     "pointM": 0,
+     "bufferM": 0.3101118206977844,
+     "pondingM": 0,
+     "overloaded": true
+    }
+   ],
+   "nearestMappedWaterM": 148.1541704436843
+  }
+ },
+ "finalParams": {
+  "depthScaleM": 2.5,
+  "fragility": {
+   "informal_iron_sheet": 1.5,
+   "semi_permanent": 1.2,
+   "permanent_masonry": 1,
+   "concrete_rcc": 0.7
+  },
+  "cap": {
+   "informal_iron_sheet": 0.95,
+   "semi_permanent": 0.9,
+   "permanent_masonry": 0.85,
+   "concrete_rcc": 0.8
+  },
+  "returnPeriods": {
+   "extreme": 10,
+   "severe": 25,
+   "moderate": 50,
+   "occasional": 100,
+   "common": 250
+  }
+ },
+ "inputs": {
+  "dataset": "team_a_nairobi",
+  "buildings": 600,
+  "totalTivKes": 63635075000,
+  "reference": "bdc87191"
+ }
+}

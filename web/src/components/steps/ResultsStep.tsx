@@ -9,7 +9,7 @@ import { DRIVER_IDS, type DriverId, type OfferDrivers } from "@/lib/offer/driver
 import { plural } from "@/lib/offer/shared";
 import { isPriced, PORTFOLIO_KEYS, settersOf, settersText, type FocusJudgement, type OfferFocusProps, type PricedFocus } from "@/lib/offer/focus";
 import { BASEMENT_LADDER, JUDGEMENT_BOUNDS, ladderRung, OUTAGE_LADDER, type OfferJudgement } from "@/lib/offer/judgement";
-import { EP_HELP, LOSS_MODE_LABELS, SETTER_WORDS, annualChance, kes1, pct1, perMille, rpLabel, rpWithChance, selectMode, shareText } from "@/lib/labels";
+import { EP_HELP, isPlaceholder, LOSS_MODE_LABELS, PLACEHOLDER_RATE_LINE, SETTER_WORDS, annualChance, kes1, pct1, perMille, rpLabel, rpWithChance, selectMode, shareText } from "@/lib/labels";
 import { lossAtReturnPeriod, STANDARD_RETURN_PERIODS } from "@/lib/model/financial";
 import type { TermsResult } from "@/lib/model/terms";
 import { HOUSING_CLASSES, HOUSING_LABELS, type ModelResult } from "@/lib/model/types";
@@ -23,7 +23,7 @@ import { driverSeries, PORTFOLIO_SERIES, StackedBars, type StackColumn } from ".
 import { DecisionPanel } from "../DecisionPanel";
 import { OasisCheck } from "../OasisCheck";
 import { DriverSources, offerKindOf } from "../DriverSources";
-import { Button, Card, Fold, Note, Segmented, StepHeader, StepLink, Tag } from "../ui";
+import { Button, Card, Fold, InsuredValueFlag, Note, PlaceholderBadge, Segmented, StepHeader, StepLink, Tag } from "../ui";
 import { CLASS_COLORS } from "./DataStep";
 
 const curve = (r: ModelResult): Point[] => r.scenarios.map((s) => ({ x: s.returnPeriod, y: s.lossKes }));
@@ -36,7 +36,7 @@ interface PortfolioProps {
   session: Session;
   active: Active;
   deliberation: Deliberation | null;
-  /** The terrain-only session, which the Oasis check was run against. */
+  /** The terrain-only session. Not read here: the Oasis check takes the data set and the result in force. */
   engineSession?: Session;
   /** The same assumptions on terrain flooding alone, shown when drainage is switched on. */
   terrainResult?: ModelResult | null;
@@ -44,6 +44,8 @@ interface PortfolioProps {
   terms: TermsResult;
   /** Who set the assumptions behind the loss drivers, for the source line of the portfolio's loss by driver. */
   judgement?: FocusJudgement | null;
+  /** "Saved run from <date>, model <name>" while the run shipped with the app sets the assumptions in force; null otherwise. */
+  savedRunLabel?: string | null;
 }
 
 interface Props extends PortfolioProps, OfferFocusProps {
@@ -94,6 +96,8 @@ export function ResultsStep({ offerFocus, decision, onDecision, dataSource, onOp
           dataSource={dataSource}
           onOpenStep={onOpenStep}
           onJudgement={onJudgement}
+          savedRunLabel={portfolio.savedRunLabel}
+          portfolioRun={{ dataset: portfolio.session.dataset, result: portfolio.active.result, source: portfolio.active.source }}
         />
       ) : (
         <PortfolioResults {...portfolio} onOpenStep={onOpenStep} />
@@ -208,6 +212,11 @@ function PremiumBuildUp({ focus, onJudgement, onOpenStep }: { focus: PricedFocus
                     <tr key={line.id} className={`align-top ${strong ? "border-t-2 border-ink" : "border-t border-line"}`}>
                       <th scope="row" className="py-2 pr-2 text-left font-normal">
                         <span className={`text-ink ${total ? "font-semibold" : "font-medium"}`}>{driverLine(line.id)?.label ?? line.label}</span>
+                        {all && (line.id === "capital_load" || line.id === "minimum") && (
+                          <span className="mt-1 block">
+                            <PlaceholderBadge />
+                          </span>
+                        )}
                         {/* A driver in force carries no sentence of its own: the caption says once what every one of them is. */}
                         {line.text && <span className="mt-0.5 block max-w-md text-xs leading-relaxed text-ink-2">{line.text}</span>}
                         {line.id === "minimum" && <MinimumRateInput judgement={judgement} onJudgement={onJudgement} disabled={!all} />}
@@ -225,8 +234,7 @@ function PremiumBuildUp({ focus, onJudgement, onOpenStep }: { focus: PricedFocus
             </table>
           </div>
           <p className="mt-3 max-w-3xl text-sm leading-relaxed text-ink">
-            <span className="font-semibold">Flood rate: {perMille(p.floodRatePerMille)}</span> of the sum insured, set by {p.setBy === "modelled" ? "the modelled figures" : "the minimum rate"}.
-            {off.length > 0 && (
+            <span className="font-semibold">Flood rate: {perMille(p.floodRatePerMille)}</span> of the sum insured, set by {p.setBy === "modelled" ? "the modelled figures" : "the minimum rate"}.            {off.length > 0 && (
               <span className="text-ink-2">
                 {" "}Not in this price: {off.join(", ")}. Why each is off is in <StepLink to="loss" onOpenStep={onOpenStep} />.
               </span>
@@ -317,7 +325,7 @@ function noteAssumptions(judgement: FocusJudgement): NonNullable<DecisionNoteInp
   const v = judgement.inForce;
   const who = judgement.setBy;
   type Item = NonNullable<DecisionNoteInput["assumptions"]>[number];
-  const one = (key: keyof OfferJudgement, label: string, value: string): Item => ({ label, value, setBy: who[key] });
+  const one = (key: keyof OfferJudgement, label: string, value: string): Item => ({ label, value, setBy: who[key], ...(isPlaceholder(key) ? { placeholder: true } : {}) });
   // A ladder is one line when one party set every rung; otherwise each rung, by the name every screen gives it, says who set it.
   const ladder = (keys: (keyof OfferJudgement)[], label: string, text: (value: number) => string, unit: string): Item[] =>
     settersOf(judgement, keys).length === 1
@@ -367,6 +375,7 @@ function noteDrivers(d: OfferDrivers): Pick<DecisionNoteInput, "drivers" | "prem
           kes: line.kes,
           ratePerMille: line.ratePerMille,
           total: line.id === "technical" || line.id === "flood_premium",
+          ...(all && (line.id === "capital_load" || line.id === "minimum") ? { placeholder: true } : {}),
           note:
             line.id === "capital_load" && p.capital.addedLoss100Kes !== null
               ? `${shareText(p.capital.costOfCapital)} of ${kes1(Math.max(0, p.capital.addedLoss100Kes))} added to the portfolio's 1-in-100 ${p.capital.basis} loss`
@@ -486,6 +495,8 @@ function OfferResults({
   dataSource,
   onOpenStep,
   onJudgement,
+  savedRunLabel,
+  portfolioRun,
 }: {
   focus: PricedFocus;
   decision: DecisionRecord;
@@ -493,6 +504,9 @@ function OfferResults({
   dataSource?: string;
   onOpenStep?: (id: StepId) => void;
   onJudgement?: (next: Partial<OfferJudgement>) => void;
+  savedRunLabel?: string | null;
+  /** The portfolio's run under the header's settings, for the Oasis check: it follows the same settings as the portfolio view. */
+  portfolioRun?: { dataset: Session["dataset"]; result: ModelResult; source: Active["source"] };
 }) {
   const { terms, conditions, drivers, questions } = focus;
   const { total, building, portfolio } = focus.price;
@@ -524,7 +538,7 @@ function OfferResults({
 
   const sources: ChartSource[] = [
     { kind: "real", text: focus.hazardKind === "score" ? "Hazard maps; depth is an assumed scale on their score" : "Flood depth maps" },
-    { kind: basis, text: usingAi ? "Hazard and damage assumptions agreed by the agents" : "Reference hazard and damage assumptions" },
+    { kind: basis, text: usingAi ? `Hazard and damage assumptions agreed by the agents${savedRunLabel ? ` (${savedRunLabel})` : ""}` : "Reference hazard and damage assumptions" },
     ...(all
       ? [
           {
@@ -592,6 +606,12 @@ function OfferResults({
                   }`
                 : `Counting only the water depth at the building, flood on ${name} costs ${kes1(premium.floodPremiumKes)} in an average year, on a sum insured of ${kes1(drivers.tivKes)}. No margin and no minimum are added. ${selectMode("all_drivers")} for the full price.`}
             </p>
+            {all && (
+              <p className="mt-2 flex max-w-2xl flex-wrap items-center gap-x-2 gap-y-1 text-sm leading-relaxed text-ink-2">
+                <PlaceholderBadge />
+                <span className="min-w-0">{PLACEHOLDER_RATE_LINE}</span>
+              </p>
+            )}
             <p className="mt-1 text-sm leading-relaxed text-ink-2">Per mille means KES for every KES 1,000 of the sum insured.</p>
           </div>
           <dl className="grid min-w-0 content-start gap-4">
@@ -753,6 +773,13 @@ function OfferResults({
         </Card>
       </div>
 
+      {/* The portfolio under the header's settings, checked by Oasis where a run was made for them. */}
+      {portfolioRun && (
+        <Fold summary="Independent check: the portfolio run through Oasis LMF" className="mt-2">
+          <OasisCheck dataset={portfolioRun.dataset} result={portfolioRun.result} source={portfolioRun.source} />
+        </Fold>
+      )}
+
       <Card
         title="Before you decide"
         className="mt-4"
@@ -874,7 +901,7 @@ function OfferResults({
 }
 
 /** The portfolio's results: the step as it stands without an offer, and the second view with one. */
-function PortfolioResults({ session, active, deliberation, engineSession, terrainResult, terms, judgement, onOpenStep }: PortfolioProps & { onOpenStep?: (id: StepId) => void }) {
+function PortfolioResults({ session, active, deliberation, terrainResult, terms, judgement, savedRunLabel, onOpenStep }: PortfolioProps & { onOpenStep?: (id: StepId) => void }) {
   const { dataset, reference } = session;
   const r = active.result;
   const isScore = dataset.hazardKind === "score";
@@ -886,7 +913,7 @@ function PortfolioResults({ session, active, deliberation, engineSession, terrai
   const usingAi = active.source === "ai";
   const basis = usingAi ? "ai" : "assumption";
   const all = r.mode === "all_drivers";
-  const basisText = `${LOSS_MODE_LABELS[r.mode]}. ${usingAi ? "Assumptions agreed by the agents" : "Reference assumptions"}`;
+  const basisText = `${LOSS_MODE_LABELS[r.mode]}. ${usingAi ? `Assumptions agreed by the agents${savedRunLabel ? ` (${savedRunLabel})` : ""}` : "Reference assumptions"}`;
   // The portfolio's loss by driver, when the engine ran with all loss drivers: one bar per scenario.
   const driverColumns: StackColumn[] = all
     ? r.scenarios.flatMap((sc, i) =>
@@ -1073,6 +1100,7 @@ function PortfolioResults({ session, active, deliberation, engineSession, terrai
               </div>
             ))}
           </dl>
+          <InsuredValueFlag ratio={session.report.tivRatio?.median} className="mt-2 max-w-3xl" />
           {all && <p className="mt-2 max-w-3xl text-xs leading-relaxed text-muted">With {LOSS_MODE_LABELS.all_drivers} a building counts as affected once any driver puts water at it, drain overload included.</p>}
         </Fold>
         <SourceLine
@@ -1342,7 +1370,7 @@ function PortfolioResults({ session, active, deliberation, engineSession, terrai
         </Fold>
 
         <Fold summary="Independent check: the same model run through Oasis LMF" className="py-1.5">
-          <OasisCheck session={engineSession ?? session} />
+          <OasisCheck dataset={dataset} result={r} source={active.source} />
         </Fold>
       </div>
     </div>

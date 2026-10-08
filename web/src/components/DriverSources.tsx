@@ -1,12 +1,12 @@
 "use client";
 
 import { fmtKes } from "@/lib/format";
-import type { SourceKind } from "@/lib/labels";
+import { isPlaceholder, type SourceKind } from "@/lib/labels";
 import type { DriverSource } from "@/lib/offer/drivers";
 import { settersOf, settersText, type FocusJudgement, type OfferFocus, type PricedFocus } from "@/lib/offer/focus";
 import type { StepId } from "@/lib/steps";
 import { SourceBadge } from "./charts/ChartFrame";
-import { StepLink, Tag } from "./ui";
+import { PlaceholderBadge, StepLink, Tag } from "./ui";
 
 /** The badge of a figure read from the offer: AI when the model read the document and code checked it, Real data when the fixed rules did. */
 export const offerKindOf = (focus: Pick<OfferFocus, "document">): SourceKind => (focus.document.path === "model" ? "ai" : "real");
@@ -14,7 +14,8 @@ export const offerKindOf = (focus: Pick<OfferFocus, "document">): SourceKind => 
 /**
  * What a figure rests on, one line per source, drawn the same on every step:
  *   the offer       the badge of how the document was read, the sentence, and the way to its place in the document
- *   an assumption   always the Assumption badge, the AI badge as well when the agents set part of it, and who set it
+ *   an assumption   always the Assumption badge, the AI badge as well when the agents set part of it, and who set it;
+ *                   the cost of capital and the minimum rate carry the placeholder badge in its place
  *   the data        the Real data badge
  * A figure the underwriter typed over the document is marked "Typed" in place of a badge.
  */
@@ -46,6 +47,8 @@ export function DriverSources({
           <li key={i} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
             {source.kind === "offer" ? (
               source.quote ? <SourceBadge kind={offerKind} /> : <Tag kind="none">Typed</Tag>
+            ) : source.kind === "assumption" && source.keys.some(isPlaceholder) ? (
+              <PlaceholderBadge />
             ) : (
               <SourceBadge kind={source.kind === "data" ? "real" : "assumption"} />
             )}

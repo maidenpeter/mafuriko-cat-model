@@ -45,7 +45,10 @@ Nothing is counted twice, and All loss drivers never prices a building below Dep
 - **The premium build-up.** On Results: the modelled average annual loss by driver, the
   uncertainty loading, a capital load (8% of what the offer adds to the portfolio's 1-in-100
   gross loss, so never more than 8% of the flood limit), then a minimum rate (0.1 per mille)
-  as a floor. That gives the flood
+  as a floor. The cost of capital and the minimum rate are placeholders for figures only
+  Kenya Re underwriting can set: both stay editable, both carry the badge "Assumption, to be
+  set by Kenya Re underwriting" wherever they are shown, and neither is a market figure. The
+  flood rate says once, beside it, that it rests on them. That gives the flood
   premium and a flood rate per mille, shown beside the offer's own all-risks rate when it
   states a premium. The offer's own flood loss history sits beside it as a sense check and
   is not blended in.
@@ -81,8 +84,9 @@ You need Node.js 20 or newer.
    says so.
 2. **Keys.** Copy `web/.env.example` to `web/.env.local` and paste in the provider key:
    `OPENAI_API_KEY`, or the `GEMINI_API_KEY` settings. `AGENT_PROVIDER` chooses between them.
-   Without a key the app still runs end to end: the offer is read by fixed rules, the model
-   uses reference assumptions, and the screen says so.
+   Without a key the app still runs end to end: the offer is read by fixed rules, the Agents
+   step replays the run saved with the app (from `web/public/agents`), and the screen says
+   so. With no saved run shipped, the model uses its reference assumptions.
 3. **Start it.**
 
    ```bash
@@ -94,54 +98,76 @@ You need Node.js 20 or newer.
    For development use `npm run dev` instead of the last line. More detail, the settings and
    the tests are in [web/README.md](web/README.md).
 
-## A three-minute demo
+## A five-minute demo
 
-1. **Dashboard.** The app opens here with the model already loaded: a "Price an offer"
-   call-out at the top, then the portfolio's figures and charts.
-2. **Give it the offer.** Press **Price an offer** and choose the Nairobi test offer (a
-   Word, PDF or text file), or open `http://localhost:3000/?offer=1`, which loads it from
-   `data/test-data` and reads it straight away. The **View** switch in the control bar
-   goes to **Offer**, and the row of four figures under it now shows this building's sum
-   insured, 1-in-100 gross loss, average annual loss and the flood rate from the premium
-   build-up. Flip **Losses from** to "Depth only" and back to see what the drivers beyond
-   the depth at the point add for this building.
-3. **Price an offer.** The page opens on where the building is: its class and ward, the
-   terms, the checks and the way on to the hazard map, so you can go straight on. Below it
-   the extracted values are compact rows, each marked "AI, verified", "AI, unverified" or
-   "rules". Any value can be edited, and a value code could not check waits to be confirmed
-   and holds the price back until it is settled. **View the document** opens the memo with
-   each value's sentence marked. The basements, the equipment below ground, the drain
-   design, the pumps and the cover are read here too, and what the document leaves out is
-   folded below as questions for the broker.
-4. **Read the data.** Where the offer sits in the portfolio: the split of its value with the
-   source of each figure, and its value per m2 against the range for its class.
-5. **Agents.** Run the panel. An Optimist, a Cautious voice and a Critic work in parallel
-   and a Chair settles the assumptions: the model's own, and the ones behind the loss
-   drivers (buffer, ingress threshold, basement damage, value below ground, outage days,
-   uncertainty). The step shows what their judgement does to this offer's price: the same
-   building under the reference, optimistic, cautious and agreed assumptions.
-6. **Hazard map.** The map zooms to the building and draws its outline from OpenStreetMap
-   and the buffer ring around it, with the portfolio's insured buildings nearby. Move the
-   return period slider and read the depth at the point, the depth within the buffer, the
-   ponding and whether the drains are overloaded.
-7. **Vulnerability.** The building as components: the structure on the damage curve of its
-   construction class, the basement machinery and contents on the basement ladder, and
-   business interruption, each with its value and damage per return period.
-8. **Loss engine.** The stack for each return period: surrounding flooding, drainage
-   ponding, drain overload, basement ingress, business interruption and the uncertainty
-   loading, then the deductible and the limit, each line naming its source.
-9. **Results.** The decision page: the "Loss by driver" chart, the premium build-up, the
-   broker questions, the points for the underwriter with their evidence sorted by severity,
-   and suggested conditions. Record Accept, Accept with conditions, Refer or Decline with a
-   note, then **Download decision note** for a one-page printable summary.
-10. **Audit.** Every check (the model's and the offer's, the checks on the loss drivers among
-    them), the extraction record, every assumption beyond flood depth with its value, range,
-    source and who set it, what each model call used, and where the model data came from,
-    with the audit report as a PDF, the written note and the full audit file as downloads.
+Ten stops, in order. The header stays in view throughout: a control bar with the switches
+**View** (Offer or Portfolio), **Losses from** (Depth only or All loss drivers), **Flood source**
+(Terrain only or Terrain + drainage) and, once a run of the agents is in force, **Assumptions**
+(Agreed by agents or Reference, no AI); under it a row of four figures that follows those
+switches on every step. Nothing below needs a key or a network connection; where a stop is
+different offline, it says so.
 
-The **View** switch in the control bar (Offer or Portfolio) returns to the portfolio view of
-every step at any time; no step has a switch of its own. An offer for a building outside the maps (the Nzoia test offer, for example) stops
-with "Outside the hazard maps loaded: flood cannot be priced here" and shows no loss figure.
+1. **Dashboard.** The app opens here with the Nairobi starter kit loaded. With no run of the
+   agents in this browser, the run saved with the app is replayed straight away, so the
+   assumptions in force are the agents'. At the top is the **Price an offer** call-out; under
+   it the portfolio's six figures and charts. The total insured value carries a flag: the
+   exposure file's values are a fixed multiple of their own documented formula, and Read the
+   data explains it.
+2. **Give it the offer.** Press **Price an offer**, then **Choose a file** and pick the
+   Landmark Plaza memo (a Word, PDF or text file), or open `http://localhost:3000/?offer=1`,
+   which loads the Nairobi test offer from `data/test-data` and reads it straight away. The
+   **View** switch goes to **Offer**, and the row of four figures now shows the building's sum
+   insured, 1-in-100 gross loss, average annual loss and flood rate.
+3. **Price an offer.** The first card says who read the file (the model, or the fixed rules
+   when no key is set), where pricing stands and how many values need your check; its button
+   **See the building on the hazard map** jumps ahead. Below it each extracted value is a
+   compact row marked "Verified", "Check this" or "Not stated", and any value can be edited
+   or confirmed; a value code could not check holds the price back until it is settled.
+   **View the document** opens the memo with each value's sentence marked. What the document
+   leaves out is folded below as questions for the broker.
+4. **Hazard map.** The map zooms to the building and stands it as a 3D block on its
+   OpenStreetMap outline, with the buffer ring and the portfolio's buildings around it.
+   Offline there is no outline to look up, so a square block of approximate shape marks the
+   stated coordinates instead. The call-out beside the building gives the water at the site
+   and the loss in the flood chosen. In the control strip above the map, **Play the flood**
+   sweeps the return periods from the most frequent to the rarest, the slider picks one,
+   **3D view** tilts the map and the chips switch layers; the fullscreen button takes the
+   strip, the map and the key with it.
+5. **Losses from.** Flip **Losses from** to **Depth only**: the figures row and every step
+   go back to the depth at the building's point and drainage ponding, the model as it was
+   before the loss drivers, to the last decimal. Flip it back to **All loss drivers** to see
+   what surrounding flooding, drain overload, basement ingress and the uncertainty loading add.
+6. **Agents.** The run card is tagged "Saved run from <date>, model <name>": the run that
+   ships with the app, its replies as given and every figure worked out again by code. **Run
+   the agents** makes a live run when a key is set. The card under it shows what their
+   judgement does to this offer: the flood rate under the reference, optimistic, cautious and
+   agreed assumptions, and the spread to carry. **Assumptions** in the bar switches between
+   **Agreed by agents** and **Reference, no AI** on every step, from the saved run alone.
+7. **Vulnerability.** The JRC flood damage curve with the building on it: one diamond for each
+   flood modelled, at its depth of water and its share of value lost. Below, the building as
+   components: the structure, the value below ground on the basement ladder, and lost rent
+   or revenue.
+8. **Loss engine.** One flood, step by step, in five steps: how much water reaches the
+   building, what the water damages, what the model cannot see, the damage in full, and what
+   the insurer pays after the deductible and the limit. Each line names its source.
+9. **Results.** The offer's page: the flood rate and the flood premium, with the line that
+   they rest on two placeholders to be set by Kenya Re underwriting (the capital load and the
+   minimum rate: the minimum rate is editable under **How the flood rate is built up**, both
+   are editable in the Agents step's table of assumptions), the loss by driver at
+   each return period, what the offer does to the portfolio, the points to weigh and the
+   suggested conditions. Record a decision, then **Download decision note** or **Print or save
+   as PDF**: one page. **Independent check: the portfolio run through Oasis LMF** follows the
+   header settings: with **Reference, no AI** selected it shows the Oasis run for Terrain
+   only or Terrain + drainage with Depth only, and for Terrain + drainage with All loss
+   drivers; any other combination says "Not checked by Oasis for these settings".
+10. **Audit.** Every check, the extraction record, every assumption beyond flood depth with
+    its value, range, source and who set it, what each model call used, and the model data.
+    **Download the building-level export** gives, for the settings in force, each building's
+    depth and final damage ratio at every return period: the file Oasis is fed. The audit
+    report prints as a PDF, and the written note and the full audit file download.
+
+An offer for a building outside the maps (the Nzoia test offer, for example) stops with
+"Outside the hazard maps loaded: flood cannot be priced here" and shows no loss figure.
 
 ## What is real, synthetic, assumed and from AI
 
@@ -150,7 +176,7 @@ The app marks every figure with one of four badges.
 | Badge | What carries it |
 |---|---|
 | Real data | The terrain and the mapped rivers behind the hazard maps; the county's named flood areas; OpenStreetMap rivers, drains, settlement outlines and building outlines; the ward boundaries; the published damage curve; the words of the offer document. |
-| Synthetic | The portfolio: every building, its location and its insured value. It is not a real client's holdings. |
+| Synthetic | The portfolio: every building, its location and its insured value. It is not a real client's holdings. Its insured values are as written in the exposure file, a fixed multiple of the formula documented with it; every total of them on screen and in the records carries that flag. |
 | Assumption | Reading the hazard score as a depth; the return period given to each map; the fragility and damage cap of each construction class; the drainage ponding rule; the 19 figures behind the loss drivers beyond depth (buffer, drain design and overload depth, ingress threshold, basement damage ladder, value below ground, outage days, rent, uncertainty loading, cost of capital, minimum rate); the example insurance terms used where an offer states none; the thresholds behind the flags. |
 | AI | The values read from an offer by the hosted model, each checked against its sentence by code; the assumptions the agents agree, each with its reason and kept in its range by code. Never a loss. |
 
@@ -162,6 +188,7 @@ plan.
 - [PLAN.md](PLAN.md): the model, the decisions, the checks and the honest limits.
 - [web/README.md](web/README.md): running, settings, the steps and where the code is.
 - [oasis/](oasis/README.md): the same portfolio run through the open-source Oasis LMF engine
-  as an independent check of the loss arithmetic.
+  as an independent check, for three settings of the header: Terrain only and Terrain +
+  drainage with Depth only, and Terrain + drainage with All loss drivers.
 - [web/public/geo/SOURCES.md](web/public/geo/SOURCES.md): the source and licence of every
   map layer.

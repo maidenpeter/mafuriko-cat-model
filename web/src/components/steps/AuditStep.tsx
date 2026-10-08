@@ -14,7 +14,8 @@
  *                           with its source sentence and the result of the check on it
  *   Agent usage and cost    per agent and in total; a cost only when token prices are set on the server
  *   Model data, insurance terms, assumptions and where each came from, limits, run log
- *   Exports                 the print view (save as PDF), the written note, the audit file, the agent run
+ *   Exports                 the print view (save as PDF), the written note, the audit file, the building-level
+ *                           export for the settings in force, the agent run
  *
  * The page is laid out once as plain rows (auditPage) and drawn twice from them: on screen, and as a
  * self-contained black on white document for printing (auditHtml). Nothing is priced here: every
@@ -53,16 +54,17 @@ import {
   unusedForDepth,
 } from "@/lib/export";
 import { fmtInt, fmtNum } from "@/lib/format";
-import { kes1, LOSS_MODE_LABELS, PORTFOLIO_DRIVERS_LINE, type SourceKind } from "@/lib/labels";
+import { insuredValueFlag, kes1, LOSS_MODE_LABELS, PLACEHOLDER_BADGE, PORTFOLIO_DRIVERS_LINE, type SourceKind } from "@/lib/labels";
 import { flattenParams, REFERENCE_PARAMS } from "@/lib/model/params";
 import type { TermsResult } from "@/lib/model/terms";
 import type { LossMode } from "@/lib/model/drivers";
+import { buildingExport, buildingExportCsv } from "@/lib/oasisExport";
 import { isPriced, type FocusJudgement, type OfferFocus, type OfferFocusProps } from "@/lib/offer/focus";
 import { plural } from "@/lib/offer/shared";
 import { download, slim, type Active, type LogEntry, type Session } from "@/lib/session";
 import { STEP_NAMES, type StepId } from "@/lib/steps";
 import { SourceBadge, SourceLine, type ChartSource } from "../charts/ChartFrame";
-import { Button, Card, CheckList, ChecksSummary, Note, selectView, StepHeader, StepLink, Tag } from "../ui";
+import { Button, Card, CheckList, ChecksSummary, Note, PlaceholderBadge, selectView, StepHeader, StepLink, Tag } from "../ui";
 
 interface Props extends OfferFocusProps {
   session: Session;
@@ -80,6 +82,8 @@ interface Props extends OfferFocusProps {
   prices?: Prices | null;
   /** The underwriter's decision on the offer, as recorded on the Results step. */
   decision?: DecisionRecord | null;
+  /** "Saved run from <date>, model <name>" while the run shipped with the app sets the assumptions in force; null otherwise. */
+  savedRunLabel?: string | null;
   /** Opens another step of the walkthrough. */
   onOpenStep?: (id: StepId) => void;
 }
@@ -135,7 +139,7 @@ interface AuditPage {
 /** The assumptions beyond flood depth as a plain table, for the print view. */
 const beyondTable = (rows: BeyondDepthRow[]): Rows => ({
   head: ["Assumption", "In force", "Reference", "Allowed range", "Who set it", "Source", "Used for"],
-  rows: rows.map((r) => [r.label, r.value, r.referenceText, r.rangeText, r.setByText, `${r.source}${r.quote ? ` "${r.quote}"` : ""}`, r.usedFor]),
+  rows: rows.map((r) => [r.placeholder ? `${r.label} (${PLACEHOLDER_BADGE})` : r.label, r.value, r.referenceText, r.rangeText, r.setByText, `${r.source}${r.quote ? ` "${r.quote}"` : ""}`, r.usedFor]),
 });
 
 const tokens = (n: number | null) => (n === null ? NOT_REPORTED : fmtInt(n));
@@ -214,6 +218,8 @@ export function auditPage(p: {
   offer: OfferFocus | null;
   /** The assumptions beyond flood depth and who set each. Left out, the offer's own block is used. */
   judgement?: FocusJudgement | null;
+  /** The shipped run's name while it sets the assumptions in force. */
+  savedRunLabel?: string | null;
 }): AuditPage {
   const { session, active, terms, offer, decision } = p;
   const mode: LossMode = active.result.mode ?? "depth_only";
@@ -221,6 +227,7 @@ export function auditPage(p: {
   const { dataset } = session;
   const isScore = dataset.hazardKind === "score";
   const ref = new Map(flattenParams(REFERENCE_PARAMS).map((x) => [x.path, x.value]));
+  const tivFlag = insuredValueFlag(session.report.tivRatio?.median);
 
   const model: [string, string][] = [
     [
@@ -234,6 +241,7 @@ export function auditPage(p: {
     ["Data set", dataset.name],
     ["Hazard maps", `${fmtInt(dataset.scenarios.length)} ${isScore ? "tiers, read as a hazard score" : "flood depth maps"}`],
     ["Insured buildings", fmtInt(dataset.buildings.length)],
+    ["Total insured value", `${kes1(session.reference.totalTivKes)}${tivFlag ? `. ${tivFlag.full} ${tivFlag.where}` : ""}`],
     ["Flood source", dataset.drainage ? "Terrain and drainage" : "Terrain only"],
     ["Losses from", LOSS_MODE_LABELS[mode]],
   ];
@@ -290,7 +298,7 @@ export function auditPage(p: {
         ? "Both figures are the defaults, read off the retained losses."
         : `The attachment ${terms.xol.attachmentIsDefault ? "is the default" : "was typed in"}; the limit ${terms.xol.limitIsDefault ? "is the default" : "was typed in"}.`
     }`,
-    assumptionsSource: active.source === "ai" ? "Agreed by the agents" : "Reference values",
+    assumptionsSource: active.source === "ai" ? `Agreed by the agents${p.savedRunLabel ? ` (${p.savedRunLabel})` : ""}` : "Reference values",
     assumptions: {
       head: ["Assumption", "In force", "Reference", "Where it came from"],
       rows: flattenParams(active.params)
@@ -368,7 +376,7 @@ export function auditHtml(page: AuditPage, log: LogEntry[], generated: Date): st
   parts.push(`<h2>Agent usage and cost</h2>`, page.usage.table ? table(page.usage.table) : "", `<ul>${page.usage.notes.map((n) => `<li>${e(n)}</li>`).join("")}</ul>`);
   parts.push(`<h2>Model data</h2>`, facts(page.model));
   parts.push(`<h2>Insurance terms in force</h2>`, `<p>${e(TERMS_NOTICE)}.</p>`, table(page.terms), `<p>Excess of loss applied: ${e(page.xol)}</p>`, `<h3>Portfolio average annual loss</h3>`, facts(page.termsAal));
-  parts.push(`<h2>Assumptions in force: ${e(page.assumptionsSource.toLowerCase())}</h2>`, table(page.assumptions));
+  parts.push(`<h2>Assumptions in force: ${e(page.assumptionsSource.charAt(0).toLowerCase() + page.assumptionsSource.slice(1))}</h2>`, table(page.assumptions));
   parts.push(
     `<h2>Assumptions beyond flood depth</h2>`,
     `<p><strong>Losses from: ${e(page.beyond.modeLabel)}.</strong> ${e(page.beyond.modeLine)}</p>`,
@@ -454,7 +462,7 @@ function Folded({ title, children }: { title: string; children: ReactNode }) {
 
 const Raw = ({ text }: { text: string }) => <pre className="max-h-96 overflow-auto rounded-lg border border-line bg-surface p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap wrap-anywhere text-ink-2">{text}</pre>;
 
-export function AuditStep({ session, active, deliberation, checks, log, terms, modelSource, dataSource, prices = null, decision = null, focus = null, offerFocus = null, judgement = null, onOpenStep }: Props) {
+export function AuditStep({ session, active, deliberation, checks, log, terms, modelSource, dataSource, prices = null, decision = null, focus = null, offerFocus = null, judgement = null, savedRunLabel = null, onOpenStep }: Props) {
   const isScore = session.dataset.hazardKind === "score";
   const [printNote, setPrintNote] = useState<string | null>(null);
   // The saved Oasis run ships with the app as a small file. The written note compares it with this run; without it the note says so.
@@ -478,7 +486,7 @@ export function AuditStep({ session, active, deliberation, checks, log, terms, m
   const offerHidden = !offer && read !== null;
 
   const source = dataSource ?? `${session.dataset.name}, read from ${session.uploadName}`;
-  const page = auditPage({ session, active, deliberation, checks, terms, modelSource, dataSource: source, prices, decision, offer, judgement });
+  const page = auditPage({ session, active, deliberation, checks, terms, modelSource, dataSource: source, prices, decision, offer, judgement, savedRunLabel });
   const allChecks = page.groups.flatMap((g) => g.checks);
   /** A link to another step, where that step is the home of what this page only names. */
   const stepLink = (id: StepId) => <StepLink to={id} onOpenStep={onOpenStep} />;
@@ -528,6 +536,8 @@ export function AuditStep({ session, active, deliberation, checks, log, terms, m
         <Button onClick={print}>Print or save the audit as PDF</Button>
         <Button variant="secondary" onClick={() => download(`${base()}-note.md`, buildNote(session, active, deliberation, checks, terms, extras), "text/markdown")}>Download the written note</Button>
         <Button variant="secondary" onClick={() => download(`${base()}-audit.json`, JSON.stringify(buildAudit(session, active, deliberation, checks, log, terms, extras), null, 1))}>Download the full audit file</Button>
+        {/* One row per building and return period for the settings in force: what oasis/build_and_run.py reads. */}
+        <Button variant="secondary" onClick={() => download(`${base()}-buildings.csv`, buildingExportCsv(buildingExport(session.dataset, active.result, active.source)), "text/csv")}>Download the building-level export</Button>
         {deliberation?.final && <Button variant="ghost" onClick={() => download(`${base()}-agent-run.json`, JSON.stringify(slim(deliberation), null, 1))}>Save the agent run for replay</Button>}
       </div>
       <p className="-mt-2 mb-4 max-w-3xl text-xs leading-relaxed text-muted">The print view opens in a new window as a plain black on white page. Choose &quot;Save as PDF&quot; as the printer to keep it as a file.</p>
@@ -641,7 +651,14 @@ export function AuditStep({ session, active, deliberation, checks, log, terms, m
             <tbody className="divide-y divide-line">
               {page.beyond.rows.map((r) => (
                 <tr key={r.key}>
-                  <th scope="row" className="py-1.5 text-left align-top font-normal text-ink-2">{r.label}</th>
+                  <th scope="row" className="py-1.5 text-left align-top font-normal text-ink-2">
+                    {r.label}
+                    {r.placeholder && (
+                      <span className="mt-1 block">
+                        <PlaceholderBadge />
+                      </span>
+                    )}
+                  </th>
                   <td className="tabular py-1.5 pl-3 text-right align-top font-semibold whitespace-nowrap text-ink">{r.value}</td>
                   <td className="tabular py-1.5 pl-3 text-right align-top whitespace-nowrap text-ink-2">{r.referenceText}</td>
                   <td className="py-1.5 pl-3 align-top text-ink-2">{r.rangeText}</td>

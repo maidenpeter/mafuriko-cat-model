@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { annualChance, axisTicks, EP_HELP, kes1, pct1, rpLabel, rpWithChance, SOURCE_KINDS, SOURCE_LABELS, wrapLabel } from "../src/lib/labels";
+import { annualChance, axisTicks, EP_HELP, insuredValueFlag, isPlaceholder, kes1, pct1, PLACEHOLDER_BADGE, PLACEHOLDER_RATE_LINE, rpLabel, rpWithChance, SOURCE_KINDS, SOURCE_LABELS, wrapLabel } from "../src/lib/labels";
 
 describe("return period labels", () => {
   it("writes a return period as 1-in-N", () => {
@@ -142,5 +142,29 @@ describe("wrapping labels for SVG", () => {
   it("copes with an empty label and a silly width", () => {
     expect(wrapLabel("", 10)).toEqual([""]);
     expect(wrapLabel("ab", 0)).toEqual(["a", "b"]);
+  });
+});
+
+describe("the two placeholders and the insured value flag", () => {
+  it("badges the cost of capital and the minimum rate, and nothing else", () => {
+    expect(PLACEHOLDER_BADGE).toBe("Assumption, to be set by Kenya Re underwriting");
+    expect(isPlaceholder("costOfCapital")).toBe(true);
+    expect(isPlaceholder("minimumRatePerMille")).toBe(true);
+    expect(isPlaceholder("bufferRadiusM")).toBe(false);
+    expect(PLACEHOLDER_RATE_LINE).toContain("to be set by Kenya Re underwriting");
+    expect(`${PLACEHOLDER_BADGE} ${PLACEHOLDER_RATE_LINE}`).not.toMatch(/market|going rate/i);
+  });
+
+  it("flags insured values that are a multiple of their formula, and only then", () => {
+    const flag = insuredValueFlag(10);
+    expect(flag?.short).toBe("10 times the documented formula");
+    expect(flag?.full).toBe("Insured values are as written in the exposure file: 10 times the documented formula.");
+    expect(flag?.where).toContain("Read the data");
+    expect(insuredValueFlag(9.96)?.short).toBe("10 times the documented formula");
+    expect(insuredValueFlag(1)).toBeNull();
+    expect(insuredValueFlag(1.04)).toBeNull();
+    expect(insuredValueFlag(null)).toBeNull();
+    expect(insuredValueFlag(undefined)).toBeNull();
+    expect(insuredValueFlag(Number.NaN)).toBeNull();
   });
 });

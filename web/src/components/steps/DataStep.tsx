@@ -23,7 +23,7 @@
 import type { ReactNode } from "react";
 import { rangePlacement, type RangePlacement } from "@/lib/dashboard";
 import { fmtBytes, fmtInt, fmtNum, fmtPct } from "@/lib/format";
-import { kes1, LOSS_MODE_LABELS, type SourceKind } from "@/lib/labels";
+import { insuredValueFlag, kes1, LOSS_MODE_LABELS, type SourceKind } from "@/lib/labels";
 import { HOUSING_CLASSES, HOUSING_LABELS, type HousingClass } from "@/lib/model/types";
 import { DRIVER_LABELS, type DriverComponent, type DriverSource, type StatedValuePart } from "@/lib/offer/drivers";
 import { isPriced, type FocusField, type FocusJudgement, type OfferFocusProps, type PricedFocus } from "@/lib/offer/focus";
@@ -32,7 +32,7 @@ import type { Session } from "@/lib/session";
 import { STEP_NAMES, type StepId } from "@/lib/steps";
 import { ChartFrame, SourceLine } from "../charts/ChartFrame";
 import { DriverSources, offerKindOf } from "../DriverSources";
-import { Button, Card, CheckList, ChecksSummary, Fold, Note, selectView, StatusIcon, StepHeader, Tag } from "../ui";
+import { Button, Card, CheckList, ChecksSummary, Fold, InsuredValueFlag, Note, selectView, StatusIcon, StepHeader, Tag } from "../ui";
 
 export const CLASS_COLORS: Record<HousingClass, string> = {
   informal_iron_sheet: "var(--series-1)",
@@ -103,7 +103,7 @@ export function DataStep({ session, focus = null, offerFocus = null, onOpenStep 
         <Card title="What was read" aside={<ChecksSummary checks={session.dataChecks} />}>
           <div className="grid gap-x-6 gap-y-4 grid-cols-[repeat(auto-fit,minmax(min(9rem,100%),1fr))]">
             <Figure label="Buildings" value={fmtInt(dataset.buildings.length)} />
-            <Figure label="Total insured value" value={kes1(reference.totalTivKes)} note="As written in the file" />
+            <Figure label="Total insured value" value={kes1(reference.totalTivKes)} note={<>As written in the file <InsuredValueFlag ratio={session.report.tivRatio?.median} inline /></>} />
             <Figure label="Hazard maps" value={dataset.rasters.length || "None"} note={dataset.hazardKind === "score" ? "Susceptibility score, 0 to 1" : "Flood depth, metres"} />
           </div>
           <ValueMismatch session={session} className="mt-4" />
@@ -154,12 +154,13 @@ function Figure({ label, value, note }: { label: string; value: ReactNode; note?
 /** The warning when the file's insured values are a fixed multiple of their own formula. Nothing when they agree. */
 function ValueMismatch({ session, className = "" }: { session: Session; className?: string }) {
   const ratio = session.report.tivRatio;
-  if (!ratio || Math.abs(ratio.median - 1) < 0.05) return null;
+  const flag = insuredValueFlag(ratio?.median);
+  if (!ratio || !flag) return null;
   const total = session.reference.totalTivKes;
   return (
     <div className={className}>
       <Note tone="warn">
-        <strong className="font-semibold text-ink">Insured values do not match their own formula.</strong> Every row&apos;s value is {fmtNum(ratio.median, 1)}× its floor area × cost per m². The file totals {kes1(total)}; the documented formula gives {kes1(total / ratio.median)}. The model uses the values as they are in the file, so every loss figure carries this factor.
+        <strong className="font-semibold text-ink">{flag.full}</strong> Every row&apos;s value is {fmtNum(ratio.median, 1)}× its floor area × cost per m². The file totals {kes1(total)}; the documented formula gives {kes1(total / ratio.median)}. The model uses the values as they are in the file, so every loss figure carries this factor.
       </Note>
     </div>
   );
@@ -352,7 +353,7 @@ function PortfolioJoined({ focus, session, onOpenStep }: { focus: PricedFocus; s
     <Card title="The portfolio this offer joins" aside={<ChecksSummary checks={session.dataChecks} />}>
       <div className="grid gap-x-6 gap-y-4 grid-cols-[repeat(auto-fit,minmax(min(9rem,100%),1fr))]">
         <Figure label="Buildings held" value={fmtInt(dataset.buildings.length)} />
-        <Figure label="Their insured value" value={kes1(reference.totalTivKes)} />
+        <Figure label="Their insured value" value={kes1(reference.totalTivKes)} note={<InsuredValueFlag ratio={session.report.tivRatio?.median} inline />} />
         <Figure label="Of this offer's class" value={mix ? fmtInt(mix.count) : "None"} note={`${building.housingLabel ?? HOUSING_LABELS[cls]}${mix ? `, holding ${kes1(mix.tivKes)}` : ""}`} />
         <Figure label="This offer's share" value={share} note={`Of all insured value once ${focus.several ? "the whole offer" : "it"} is added`} />
       </div>

@@ -1,7 +1,8 @@
-import { kes1, perMille } from "@/lib/labels";
+import { kes1, perMille, PLACEHOLDER_RATE_LINE } from "@/lib/labels";
 import { isPriced, type OfferFocus, type PricedFocus } from "@/lib/offer/focus";
 import { plural } from "@/lib/offer/shared";
 import type { Active } from "@/lib/session";
+import { InsuredValueFlag } from "../ui";
 import { GUTTER } from "./layout";
 
 interface Figure {
@@ -9,6 +10,10 @@ interface Figure {
   value: string;
   /** The one figure of the row an underwriter looks for first. */
   strong?: boolean;
+  /** A total of the portfolio's insured values: it carries the insured value flag. */
+  insuredTotal?: boolean;
+  /** A caution held on the figure, shown on hover and read by a screen reader, marked with the Assumption glyph. */
+  note?: string;
 }
 
 /**
@@ -27,6 +32,8 @@ interface Props {
   active: Active;
   /** How many buildings the portfolio holds. */
   buildings: number;
+  /** The exposure file's insured values over their documented formula (session.report.tivRatio?.median): the total insured value carries the flag when they differ. */
+  tivRatio?: number | null;
 }
 
 /**
@@ -34,7 +41,7 @@ interface Props {
  * first, kept in view on every step. They follow the switches in the control bar above, so the row
  * does not say again which settings are in force.
  */
-export function FiguresRow({ focus, offerFocus, active, buildings }: Props) {
+export function FiguresRow({ focus, offerFocus, active, buildings, tivRatio }: Props) {
   const whose = focus ? "Offer" : "Portfolio";
   const name = focus ? (focus.line.insured ?? focus.building.name) : plural(buildings, "building");
   const figures = focus ? offerFigures(focus) : portfolioFigures(active);
@@ -49,9 +56,16 @@ export function FiguresRow({ focus, offerFocus, active, buildings }: Props) {
         </p>
         <dl className="grid min-w-0 basis-full grid-cols-2 gap-x-3 gap-y-1.5 @3xl:flex @5xl:basis-auto @7xl:gap-x-5">
           {figures.map((x) => (
-            <div key={x.label} className={CELL}>
-              <dt className="text-xs text-muted">{x.label}</dt>
-              <dd className={`tabular text-base font-semibold ${x.strong ? "text-brand" : "text-ink"}`}>{x.value}</dd>
+            <div key={x.label} className={CELL} title={x.note}>
+              <dt className="text-xs text-muted">
+                {x.label}
+                {x.note && <span aria-hidden className="ml-1">△</span>}
+                {x.note && <span className="sr-only">. {x.note}</span>}
+              </dt>
+              <dd className={`tabular text-base font-semibold ${x.strong ? "text-brand" : "text-ink"}`}>
+                {x.value}
+                {x.insuredTotal && <InsuredValueFlag ratio={tivRatio} inline className="ml-1.5 align-baseline" />}
+              </dd>
             </div>
           ))}
         </dl>
@@ -74,7 +88,7 @@ function offerFigures(focus: PricedFocus): Figure[] {
     { label: "Sum insured", value: kes1(total.tivKes) },
     { label: "1-in-100 gross loss", value: total.loss100GrossKes !== null ? kes1(total.loss100GrossKes) : "not modelled" },
     { label: "Average annual loss, gross", value: kes1(total.aalGrossKes) },
-    { label: rateLabel, value: perMille(premium.floodRatePerMille), strong: true },
+    { label: rateLabel, value: perMille(premium.floodRatePerMille), strong: true, note: focus.mode === "depth_only" ? undefined : PLACEHOLDER_RATE_LINE },
   ];
 }
 
@@ -86,7 +100,7 @@ function portfolioFigures(active: Active): Figure[] {
     return loss != null ? kes1(loss) : "not modelled";
   };
   return [
-    { label: "Total insured value", value: kes1(r.totalTivKes) },
+    { label: "Total insured value", value: kes1(r.totalTivKes), insuredTotal: true },
     { label: "1-in-100 ground-up loss", value: at(100), strong: true },
     { label: "1-in-250 ground-up loss", value: at(250) },
     { label: "Average annual loss, ground-up", value: kes1(r.aalKes) },

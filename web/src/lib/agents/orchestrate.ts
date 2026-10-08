@@ -62,8 +62,12 @@ export interface OfferDeliberation {
   reasons: Record<string, { reason: string; basis: string; leans?: string }>;
   /** Every figure code corrected, in any of the three sets: out of its range, or a ladder rung lower than the one before it. */
   adjustments: RoleJudgementAdjustment[];
-  /** The facts of the offer the agents were given, so the screen can tell whether they ran with the offer now loaded. */
-  brief: OfferBrief;
+  /**
+   * The facts of the offer the agents were given, so the screen can tell whether they ran with the offer now loaded.
+   * Left out for a run that ships with the app once its offer key has matched the offer on screen (agents/shipped.ts):
+   * the figures are then taken to be for this offer.
+   */
+  brief?: OfferBrief;
 }
 
 export interface Deliberation {
@@ -119,7 +123,7 @@ function savedBasis(raw: unknown): ModelBasis | undefined {
  * read: a reply saved under an earlier set of figures holds other keys, which are ignored, and a
  * figure a reply lacks is left out, so the reference value stays in force for it.
  */
-function settleJudgement(runs: Deliberation["runs"], brief: OfferBrief): OfferDeliberation {
+function settleJudgement(runs: Deliberation["runs"], brief: OfferBrief | undefined): OfferDeliberation {
   const adjustments: RoleJudgementAdjustment[] = [];
   const enforce = (role: RoleJudgementAdjustment["role"], set: JudgementProposal | undefined): Partial<OfferJudgement> | null => {
     const argued = toJudgement(set);

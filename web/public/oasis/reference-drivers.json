@@ -1,0 +1,217 @@
+{
+  "engine": "Oasis LMF",
+  "oasislmfVersion": "2.5.8",
+  "generatedAt": "2026-10-08T20:45:26+00:00",
+  "dataset": "team_a_nairobi",
+  "tivBasis": "file",
+  "mode": "damage_ratios",
+  "view": {
+    "dataset": "team_a_nairobi",
+    "hazardKind": "score",
+    "floodSource": "terrain_drainage",
+    "floodSourceLabel": "Terrain + drainage",
+    "drainage": {
+      "reachM": 300,
+      "pondingDepthM": {
+        "extreme": 0.15,
+        "severe": 0.25,
+        "moderate": 0.35,
+        "occasional": 0.45,
+        "common": 0.6
+      }
+    },
+    "lossesFrom": "all_drivers",
+    "lossesFromLabel": "All loss drivers",
+    "assumptions": {
+      "set": "reference",
+      "params": {
+        "depthScaleM": 4,
+        "fragility": {
+          "informal_iron_sheet": 1.5,
+          "semi_permanent": 1.2,
+          "permanent_masonry": 1,
+          "concrete_rcc": 0.7
+        },
+        "cap": {
+          "informal_iron_sheet": 0.95,
+          "semi_permanent": 0.9,
+          "permanent_masonry": 0.85,
+          "concrete_rcc": 0.8
+        },
+        "returnPeriods": {
+          "extreme": 10,
+          "severe": 25,
+          "moderate": 50,
+          "occasional": 100,
+          "common": 250
+        }
+      },
+      "beyondDepth": {
+        "bufferRadiusM": 250,
+        "drainDesignRp": 25,
+        "drainOverloadDepthM": 0.1
+      }
+    },
+    "buildings": 600,
+    "totalInsuredValueKes": 63635075000,
+    "scenarios": [
+      {
+        "id": "extreme",
+        "returnPeriod": 10,
+        "tierSlope": 0.6258330642548402,
+        "lossKes": 2688729815.868586,
+        "affected": 174
+      },
+      {
+        "id": "severe",
+        "returnPeriod": 25,
+        "tierSlope": 0.7195169741535701,
+        "lossKes": 4794503862.838126,
+        "affected": 235
+      },
+      {
+        "id": "moderate",
+        "returnPeriod": 50,
+        "tierSlope": 0.8271202671667404,
+        "lossKes": 9082803749.659626,
+        "affected": 600
+      },
+      {
+        "id": "occasional",
+        "returnPeriod": 100,
+        "tierSlope": 0.9137705065349516,
+        "lossKes": 11981528696.928677,
+        "affected": 600
+      },
+      {
+        "id": "common",
+        "returnPeriod": 250,
+        "tierSlope": 1,
+        "lossKes": 15473448346.826462,
+        "affected": 600
+      }
+    ],
+    "averageAnnualLossKes": 612850473.2376918,
+    "fingerprint": "0b90e5f6"
+  },
+  "params": {
+    "depthScaleM": 4.0,
+    "fragility": {
+      "informal_iron_sheet": 1.5,
+      "semi_permanent": 1.2,
+      "permanent_masonry": 1.0,
+      "concrete_rcc": 0.7
+    },
+    "cap": {
+      "informal_iron_sheet": 0.95,
+      "semi_permanent": 0.9,
+      "permanent_masonry": 0.85,
+      "concrete_rcc": 0.8
+    },
+    "returnPeriods": {
+      "extreme": 10,
+      "severe": 25,
+      "moderate": 50,
+      "occasional": 100,
+      "common": 250
+    }
+  },
+  "slopes": null,
+  "samples": 10,
+  "periods": 1000,
+  "events": [
+    {
+      "tier": "extreme",
+      "returnPeriod": 10,
+      "oasisLossKes": 2687139328,
+      "ourLossKes": 2688729816
+    },
+    {
+      "tier": "severe",
+      "returnPeriod": 25,
+      "oasisLossKes": 4793667072,
+      "ourLossKes": 4794503863
+    },
+    {
+      "tier": "moderate",
+      "returnPeriod": 50,
+      "oasisLossKes": 9089346560,
+      "ourLossKes": 9082803750
+    },
+    {
+      "tier": "occasional",
+      "returnPeriod": 100,
+      "oasisLossKes": 11984833536,
+      "ourLossKes": 11981528697
+    },
+    {
+      "tier": "common",
+      "returnPeriod": 250,
+      "oasisLossKes": 15478381568,
+      "ourLossKes": 15473448347
+    }
+  ],
+  "ep": {
+    "oep": [
+      {
+        "returnPeriod": 10,
+        "lossKes": 2687139328
+      },
+      {
+        "returnPeriod": 25,
+        "lossKes": 4793667072
+      },
+      {
+        "returnPeriod": 50,
+        "lossKes": 9089346560
+      },
+      {
+        "returnPeriod": 100,
+        "lossKes": 11984833536
+      },
+      {
+        "returnPeriod": 250,
+        "lossKes": 15478381568
+      }
+    ],
+    "aep": [
+      {
+        "returnPeriod": 10,
+        "lossKes": 2687139328
+      },
+      {
+        "returnPeriod": 25,
+        "lossKes": 4793667072
+      },
+      {
+        "returnPeriod": 50,
+        "lossKes": 9089346560
+      },
+      {
+        "returnPeriod": 100,
+        "lossKes": 11984833536
+      },
+      {
+        "returnPeriod": 250,
+        "lossKes": 15478381568
+      }
+    ]
+  },
+  "aal": {
+    "oasisKes": 481817696,
+    "ourTrapezoidKes": 612850473,
+    "ourDiscreteKes": 481824869
+  },
+  "maxEventDiffPct": 0.072,
+  "notes": [
+    "Oasis LMF 2.5.8 ran the five tier events on 600 buildings (total TIV KES 63,635.1m, file TIV basis) with 10 samples per event over 1,000 periods, ground-up loss only.",
+    "View checked: Terrain + drainage, All loss drivers, reference assumptions, result fingerprint 0b90e5f6. The rows of the app's building-level export reproduce the event losses in that view to within 0.000000%.",
+    "The final ground-up damage ratio of every building at every return period comes from the app's building-level export, after every loss driver in force. The Oasis intensity bins are damage ratio bins and the vulnerability maps each bin to itself, so Oasis adds nothing to the damage it is given. Our figures are the app's own: damage ratio times insured value, added up.",
+    "Every event loss matches the app to within 0.072%. The small gap comes from Oasis storing damage ratios in 0.1% steps. The app's figures with the same rounding match Oasis to 0.00002%.",
+    "Each event occurs in a share of periods equal to its exceedance band (for example 60 of 1,000 periods for the 1-in-10 event, 4 for the 1-in-250), and no period holds more than one event. So Oasis OEP and AEP at each tier's return period equal that tier's event loss (largest gap 0.0000%), which confirms the loss to return period mapping the app uses.",
+    "Oasis AAL (KES 481.8m) is the average loss per period, which is each event's loss times its band probability, a step curve. The same banded sum from our losses is KES 481.8m (-0.001%).",
+    "The app's AAL (KES 612.9m) joins the five points with straight lines over annual exceedance probability (trapezoid), so it is 27.2% higher than the step value. Both treat events more frequent than 1-in-10 as no loss and hold the 1-in-250 loss for anything rarer; the difference is only the shape assumed between the five points.",
+    "The vulnerability functions are deterministic (each damage ratio bin maps to itself), so every sample equals the mean: analytical and sample-mean event losses agree to 0.00000%, and the mean-damage, full-uncertainty, per-sample and sample-mean EP curves agree to 0.00001%.",
+    "This checks the financial engine (damage ratio times insured value, added up over the portfolio), the event to period mapping and the OEP, AEP and AAL maths, whatever loss drivers set the damage. It does not test how the damage ratios were reached: the hazard, the loss drivers and the damage function are taken from the app as given."
+  ]
+}

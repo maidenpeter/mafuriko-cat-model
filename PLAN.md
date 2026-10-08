@@ -168,8 +168,8 @@ period is the sum of six drivers, then the deductible and the limit:
   after them.
 - **Depth only.** The depth is the deeper of the terrain depth at the point
   and the drainage ponding, nothing else: the model exactly as it was. Every
-  earlier figure, the checks in section 6 and the Oasis comparison refer to
-  it. Tests pin its results.
+  earlier figure and the checks in section 6 refer to it, and two of the
+  three Oasis runs check it (section 8). Tests pin its results.
 - **The portfolio.** Drivers 1 to 3 apply to every building of the synthetic
   portfolio, with one drain design return period for all of them. The
   portfolio has no basement or rent data, so drivers 4 and 5 are not modelled
@@ -195,8 +195,8 @@ keeps each inside its range, and each ladder never falls as events get rarer:
 | Drain design return period, when the offer does not state it (years) | 25 | 2 to 200 | No, set on screen |
 | Surface water when the drains are overloaded (m) | 0.10 | 0 to 0.5 | No, set on screen |
 | A year's rent or revenue, when the offer does not state it (share of insured value) | 0.08 | 0 to 0.3 | No, set on screen |
-| Cost of capital (share per year) | 0.08 | 0 to 0.3 | No, set on screen |
-| Minimum flood rate (per mille of insured value) | 0.1 | 0 to 2 | No, set on screen |
+| Cost of capital (share per year) | 0.08, a placeholder | 0 to 0.3 | No, set on screen |
+| Minimum flood rate (per mille of insured value) | 0.1, a placeholder | 0 to 2 | No, set on screen |
 
 That is 19 figures, 14 of them argued by the agents. Each one in force is
 marked with who set it: the **offer** (read from the document, with its
@@ -204,6 +204,16 @@ sentence), the **agents** (the agreed set, when they ran on this offer and
 "Agreed by agents" is on), **typed** (the underwriter typed over it) or
 **reference**. "Reference, no AI" uses the reference value for everything the
 agents would set.
+
+The cost of capital and the minimum flood rate are placeholders for figures
+only Kenya Re underwriting can set. Both stay editable (the Agents step's
+table of assumptions, and the minimum rate in the premium build-up on
+Results), both carry the badge "Assumption, to be set by Kenya Re
+underwriting" wherever they are shown or printed, and neither is ever called
+a market figure. Where the flood rate or the flood premium is the headline
+(the figures row, the Dashboard, Results, the Agents step, the decision note
+and the written note) one line beside it says it rests on these two
+placeholders, so nobody reads it as a quote.
 
 **Premium build-up** (an offer, on Results). Modelled average annual loss by
 driver, gross; the uncertainty loading as its own line; a capital load of the
@@ -317,7 +327,10 @@ This is the part we lost on last year, so it is a feature in its own right.
   written note (data sources with links, every assumption with its value,
   the AI features and what each changed, drainage, the insurance terms, the
   Oasis check, limits), which is also a required deliverable. When an offer
-  is priced the note opens with it. From Results: the one-page decision note.
+  is priced the note opens with it. Also from Audit: the building-level
+  export for the settings in force (depth and final damage ratio per building
+  and return period), which the Oasis check reads. From Results: the one-page
+  decision note.
 - **Losses beyond flood depth on the record.** Audit lists every one of the
   19 assumptions with its value in force, its allowed range, its source and
   who set it, and says which mode is in force. The note and the audit file
@@ -406,14 +419,14 @@ when the header's View switch is on Portfolio.
 | Step | In Offer mode | Portfolio view |
 |---|---|---|
 | 0. Dashboard | A call-out with the offer's headline figures, its 1-in-100 loss by driver and the decision recorded on it, then the portfolio. The page has no View switch. | With no offer read, the call-out is "Price an offer" with one button that opens step 1. Then the portfolio's figures and charts, what the agents changed and the model chain with its checks. |
-| 1. Price an offer | The one upload: a Word, PDF or text file. Once it is read, first where the building is (its class and ward, the terms, the checks) with the way on to the hazard map; then the extracted values as compact rows, each marked "AI, verified", "AI, unverified" or "rules", editable, and confirmed by a person where code could not check it; among them the values the loss drivers read (number and depth of basements, equipment below ground, drain design return period, sump pump capacity and backup power, flood barriers and non-return valves, value split, rent, business interruption cover, premium); the document behind "View the document"; the broker questions, folded. What was sent and received is in Audit. | The same: the page has no View switch. |
-| 2. Read the data | Where the offer sits in the portfolio; the value split with the source of each figure (offer quote or assumption); under-insurance, from the value per m² against the class range. | Files found, each tagged real or synthetic; data checks; the 10× notice. |
-| 3. Agents | Three columns working in parallel, then the Chair's decision in a panel that scrolls inside a fixed height; the assumption ledger, the model's parameters and the beyond-depth assumptions, with who set each; the offer priced under each set of assumptions; usage per agent. | The portfolio's loss under each set. |
-| 4. Hazard map | The map zoomed to the building, its outline from the nearest OpenStreetMap building within 30 m (a marker, and a line saying so, when none is found) and the buffer ring around it; a return period slider; per return period the depth at the point, the depth within the buffer, ponding and "drains overloaded: yes or no"; distance to the nearest wet cell, river and drain. Portfolio layers are toggles, off by default. | The interactive map of Nairobi with insured buildings, wards, waterways, settlements and facilities. The hotspot test and the drainage sensitivity sit under "Model validation". |
-| 5. Vulnerability | The building as components: structure (JRC curve), basement machinery and contents (basement ladder), business interruption (outage days), each with its value and damage per return period. | Damage curves and ratios per construction class. |
-| 6. Loss engine | The stack for one return period, line by line: surrounding flooding, drainage ponding, drain overload, basement ingress, business interruption, uncertainty loading, then deductible and limit, each line naming its source; and the same figures for every return period in one table. | The portfolio engine with drivers 1 to 3, the Insurance terms panel, and each event from ground-up to gross to net. |
-| 7. Results | The underwriter's decision page: the "Loss by driver" chart; the premium build-up and the flood rate beside the all-risks rate; broker questions; points for the underwriter with evidence, sorted by severity; suggested conditions; the decision and its note; "Download decision note". The headline figures are in the row of figures in the header. | Total exposure, losses at key return periods, the loss curve with its band, the portfolio's loss by driver, breakdowns, with and without AI, the Oasis check. |
-| 8. Audit | The offer on record with its decision and the count of broker questions; every check, the model's and the offer's; the extraction record; the assumptions beyond flood depth with value, range, source and who set each; agent usage; the model data source; and the exports, including the audit report as a PDF, which lists the questions. | The same, without the offer. |
+| 1. Price an offer | The one upload: a Word, PDF or text file. Once it is read, first where the building is (its class and ward, the terms, the checks) with the way on to the hazard map; then the extracted values as compact rows, each marked "Verified", "Check this" or "Not stated" (the extraction record in Audit says "AI, verified", "AI, unverified" or "rules"), editable, and confirmed by a person where code could not check it; among them the values the loss drivers read (number and depth of basements, equipment below ground, drain design return period, sump pump capacity and backup power, flood barriers and non-return valves, value split, rent, business interruption cover, premium); the document behind "View the document"; the broker questions, folded. What was sent and received is in Audit. | The same: the page has no View switch. |
+| 2. Read the data | Where the offer sits in the portfolio; the value split with the source of each figure (offer quote or assumption); under-insurance, from the value per m² against the class range. | Files found, each tagged real or synthetic; data checks; the 10× notice, which every total of insured values elsewhere (figures row, Dashboard, Results, Audit, the written note and the audit file) carries as a short flag pointing back here. |
+| 3. Agents | With no run in this browser, the run saved with the app (`web/public/agents/`) is replayed on load and tagged "Saved run from <date>, model <name>"; a live run stays available. Three columns working in parallel, then the Chair's decision in a panel that scrolls inside a fixed height; the assumption ledger, the model's parameters and the beyond-depth assumptions, with who set each; the offer priced under each set of assumptions; usage per agent. | The portfolio's loss under each set. |
+| 4. Hazard map | The map zoomed to the building, standing as a 3D block on the nearest OpenStreetMap building outline within 30 m (a square block of approximate shape, and a line saying so, when none is found or the lookup is offline), with a call-out giving the water at the site, and the buffer ring around it; above the map a control strip with "Play the flood", the return period slider, "3D view" and the layer chips, all going fullscreen with the map; per return period the depth at the point, the depth within the buffer, ponding and "drains overloaded: yes or no"; distance to the nearest wet cell, river and drain. Portfolio layers are toggles, off by default. | The interactive map of Nairobi with insured buildings, wards, waterways, settlements and facilities. The hotspot test and the drainage sensitivity sit under "Model validation". |
+| 5. Vulnerability | The JRC damage curve with the building on it, one diamond per flood modelled; then the building as components: structure (JRC curve), basement machinery and contents (basement ladder), business interruption (outage days), each with its value and damage per return period. | Damage curves and ratios per construction class. |
+| 6. Loss engine | One flood in five steps (the water at the building, what it damages, what the model cannot see, the damage in full, what the insurer pays); the stack for one return period, line by line: surrounding flooding, drainage ponding, drain overload, basement ingress, business interruption, uncertainty loading, then deductible and limit, each line naming its source; and the same figures for every return period in one table. | The portfolio engine with drivers 1 to 3, the Insurance terms panel, and each event from ground-up to gross to net. |
+| 7. Results | The underwriter's decision page: the price and the flood rate, with the line that they rest on two placeholders; the premium build-up beside the all-risks rate; the "Loss by driver" chart; what the offer does to the portfolio; the Oasis check on the portfolio for the header settings; broker questions; points for the underwriter with evidence, sorted by severity; suggested conditions; the decision and its note; "Download decision note", one printed page. | Total exposure, losses at key return periods, the loss curve with its band, the portfolio's loss by driver, breakdowns, with and without AI, the Oasis check. |
+| 8. Audit | The offer on record with its decision and the count of broker questions; every check, the model's and the offer's; the extraction record; the assumptions beyond flood depth with value, range, source and who set each; agent usage; the model data source with the total insured value and its flag; and the exports, including the audit report as a PDF, which lists the questions, and the building-level export for the settings in force. | The same, without the offer. |
 
 The header has three rows. A slim top bar holds the brand, "Step N of 8"
 with the step's name, and the two display settings (theme and text size). A
@@ -452,7 +465,7 @@ loaded: flood cannot be priced here"; the steps then show the portfolio view.
   **Zod** for schemas, **Vitest** for unit tests.
 
 ```
-README.md                 what it is, how to run it, a three-minute demo
+README.md                 what it is, how to run it, a five-minute demo in ten stops
 PLAN.md
 data/                     hackathon starter kit: data/data is the model data folder
 oasis/                    the independent check with Oasis LMF
@@ -490,16 +503,50 @@ against being handed something unexpected on the day.
 
 ### Independent check with Oasis LMF
 
-`oasis/build_and_run.py` writes the portfolio as an Oasis exposure file and the
-hazard and damage assumptions as Oasis model files, runs them through the
-open-source Oasis engine (oasislmf 2.5.8), and saves a summary to
-`web/public/oasis/reference.json`. The Results step compares it with the live
-engine. The comparison refers to Depth only on reference assumptions: the
-loss drivers beyond depth are not in the Oasis run. On reference assumptions
-every event loss agrees within 0.05%, and the step-method average annual loss
-agrees within 0.01%. The app's own average
-annual loss draws a straight line between events, so it sits above the Oasis
-step value; both readings are shown.
+The Oasis check covers what the screen shows. The app writes a building-level
+export for the settings in force (Audit, "Download the building-level
+export"): one row per building and return period with the depth of water at
+the site and the final ground-up damage ratio after every loss driver, and a
+header naming the view (flood source, losses from, the assumptions and the
+result's fingerprint). `oasis/build_and_run.py` writes the portfolio as an
+Oasis exposure file, turns the export into Oasis model files, runs them
+through the open-source Oasis engine (oasislmf 2.5.8) and saves a summary,
+with the view copied into it, under `web/public/oasis/`.
+
+The script reads the export in one of two ways:
+
+- `--depths`: Oasis is given the depths and applies the damage function
+  itself, so it checks the damage function, the financial engine and the
+  exceedance and average annual loss arithmetic.
+- `--damage-ratios`: Oasis is given the final damage ratios and an identity
+  vulnerability (each damage ratio bin maps to itself), so it checks the
+  financial engine and the exceedance and average annual loss arithmetic for
+  any set of loss drivers. It does not check how the ratios were reached.
+
+Three runs ship with the app, all on reference assumptions with nothing typed
+over:
+
+| File | View | Oasis is given | What it proves | Largest event difference | Step average annual loss |
+|---|---|---|---|---|---|
+| `reference.json` | Terrain only, Depth only | Depths | Damage function, financial engine, exceedance and average annual loss arithmetic | 0.041% | Oasis KES 102.40m, this app KES 102.41m (-0.010%) |
+| `reference-drainage.json` | Terrain + drainage, Depth only | Depths | The same three, with drainage ponding in the depths | 0.084% | Oasis KES 130.90m, this app KES 130.93m (-0.026%) |
+| `reference-drivers.json` | Terrain + drainage, All loss drivers | Final damage ratios | Financial engine and the arithmetic with drivers 1 to 3 in the damage. Not the damage function or the drivers | 0.072% | Oasis KES 481.82m, this app KES 481.82m (-0.001%) |
+
+The Results step loads the file made for exactly the combination in the
+header and shows it only when its view carries the fingerprint of the result
+on screen. For any other combination it says "Not checked by Oasis for these
+settings" and shows no figures: assumptions agreed by the agents, a typed
+figure that reaches the portfolio, Terrain only with All loss drivers, other
+model data. It never shows a match from other settings.
+
+Not covered by any run: the hazard itself (both engines read the same
+depths); the damage curve's own figures; how the loss drivers reach the
+damage ratio; basement ingress, business interruption, the uncertainty
+loading and the premium build-up, which belong to an offer and not to the
+portfolio; the insurance terms and the reinsurance (the runs are ground-up).
+The app's own average annual loss draws a straight line between events, so it
+sits above the Oasis step value; both readings are shown. The three
+comparison tables and the commands are in `oasis/README.md`.
 
 ## 9. Build order
 
@@ -586,7 +633,10 @@ Each phase ends with something that works, so there is always a demo.
 - The basement damage ladder, the outage days, the value below ground and the
   rent when the offer does not state them, the uncertainty loading, the cost
   of capital and the minimum rate are assumptions, not measurements. Each is
-  shown with the Assumption badge, its range and who set it.
+  shown with the Assumption badge, its range and who set it; the cost of
+  capital and the minimum rate carry "Assumption, to be set by Kenya Re
+  underwriting" in its place, because they are placeholders and not market
+  figures.
 - Sump pumps, backup power, flood barriers and non-return valves are read
   from the offer, given to the agents and asked about, and change no figure
   by themselves: there is no formula for them.
@@ -598,8 +648,13 @@ Each phase ends with something that works, so there is always a demo.
   gross loss, and at the reference cost of capital it can be the largest line
   of the premium build-up. It can never exceed the cost of capital × the
   flood limit.
-- The Oasis comparison refers to Depth only on reference assumptions. It
-  does not test the loss drivers beyond depth.
+- The Oasis check covers three settings, all on reference assumptions:
+  Terrain only with Depth only and Terrain + drainage with Depth only (the
+  damage function, the financial engine and the loss arithmetic), and
+  Terrain + drainage with All loss drivers (the financial engine and the loss
+  arithmetic only: Oasis is given the final damage ratios, so it does not
+  test the drivers themselves). Any other setting, and every figure of an
+  offer, is not checked by Oasis, and the app says so.
 - An offer has a ground-up and a gross loss. Net is a portfolio figure.
 - The flags on an offer rest on thresholds we chose (water at the building at
   1-in-25 or more frequent is high; 1% and 5% added to the portfolio's

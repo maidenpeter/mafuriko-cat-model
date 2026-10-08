@@ -11,6 +11,21 @@ Run from the project root inside the virtualenv that has oasislmf installed:
 
     python oasis/build_and_run.py --data-dir data/data/team_a_nairobi \
         --out web/public/oasis/reference.json
+
+The hazard at each building comes from one of three places:
+
+    (neither flag)          this script works out the depths itself, from the hazard scores,
+                            the tier slopes and the depth scale (terrain only, depth only)
+    --depths <csv>          the depths come from the app's building-level export; this script
+                            applies the damage function, so Oasis checks the damage function too
+    --damage-ratios <csv>   the final ground-up damage ratios come from the export; the Oasis
+                            intensity bins are damage ratio bins and the vulnerability maps each
+                            bin to itself, so Oasis checks the financial engine and the EP and
+                            AAL maths for any set of loss drivers
+
+With either CSV the export's header (the view: flood source, losses from, assumptions,
+result fingerprint) is copied into the output JSON, so the web app can tell which settings
+the run was made for.
 """
 from __future__ import annotations
 
@@ -122,9 +137,81 @@ def tidy_params(params: dict) -> dict:
     return out
 
 
+# ---------------------------------------------------------------- the app's export
+
+VIEW_PREFIX = "# view:"
+EXPORT_COLUMNS = ["building", "loc_id", "housing_class", "insured_value_kes", "scenario", "return_period", "depth_m",
+                  "damage_ratio"]
+
+
+def read_export(path: str, view_path: str | None = None) -> tuple[pd.DataFrame, dict | None]:
+    """Read the app's building-level export: the rows, and the view from its comment line.
+
+    A view JSON given on the command line replaces the one in the CSV.
+    """
+    view, comment_lines = None, 0
+    with open(path, encoding="utf-8-sig") as fh:
+        for line in fh:
+            if not line.startswith("#"):
+                break
+            comment_lines += 1
+            if line.startswith(VIEW_PREFIX):
+                view = json.loads(line[len(VIEW_PREFIX):])
+    if view_path:
+        with open(view_path, encoding="utf-8") as fh:
+            view = json.load(fh)
+    rows = pd.read_csv(path, skiprows=comment_lines, dtype={"loc_id": str, "scenario": str, "housing_class": str})
+    missing = [c for c in EXPORT_COLUMNS if c not in rows.columns]
+    if missing:
+        raise SystemExit(f"{os.path.basename(path)} is not a building-level export: missing columns {missing}")
+    return rows, view
+
+
+def export_inputs(rows: pd.DataFrame, df: pd.DataFrame) -> dict:
+    """Line the export up with the exposure file, building by building, and split it by tier.
+
+    Stops when the two do not describe the same portfolio: a check against other buildings,
+    classes or insured values would prove nothing.
+    """
+    n = len(df)
+    scenarios = sorted(rows["scenario"].unique())
+    if scenarios != sorted(eng.SCORE_TIERS):
+        raise SystemExit(f"The export holds scenarios {scenarios}; this check is built for the five score tiers "
+                         f"{eng.SCORE_TIERS}.")
+    out = {"depths": {}, "ratios": {}, "returnPeriods": {}, "tiv": None}
+    for t in eng.SCORE_TIERS:
+        sub = rows[rows["scenario"] == t].sort_values("building")
+        if len(sub) != n or not np.array_equal(sub["building"].to_numpy(dtype=np.int64), np.arange(1, n + 1)):
+            raise SystemExit(f"The export has {len(sub)} rows for tier {t}; the exposure file has {n} buildings.")
+        if not np.array_equal(sub["loc_id"].fillna("").str.strip().to_numpy(), df["loc_id"].to_numpy()):
+            raise SystemExit("The export's buildings are not the exposure file's buildings, in the same order.")
+        if not np.array_equal(sub["housing_class"].to_numpy(), df["housing_class"].to_numpy()):
+            raise SystemExit("The export's housing classes differ from the exposure file's.")
+        tiv = sub["insured_value_kes"].to_numpy(dtype=float)
+        if not np.allclose(tiv, df["tiv_file_kes"].to_numpy(dtype=float), rtol=1e-12, atol=0.0):
+            raise SystemExit("The export's insured values differ from the exposure file's.")
+        rp = sub["return_period"].unique()
+        if len(rp) != 1:
+            raise SystemExit(f"Tier {t} carries more than one return period in the export: {list(rp)}")
+        depth = sub["depth_m"].to_numpy(dtype=float)
+        ratio = sub["damage_ratio"].to_numpy(dtype=float)
+        if not (np.isfinite(depth).all() and (depth >= 0).all() and np.isfinite(ratio).all()
+                and (ratio >= 0).all() and (ratio <= 1).all()):
+            raise SystemExit(f"Tier {t}: a depth is below zero or a damage ratio is outside 0 to 1 in the export.")
+        out["depths"][t], out["ratios"][t], out["returnPeriods"][t], out["tiv"] = depth, ratio, float(rp[0]), tiv
+    return out
+
+
 # ---------------------------------------------------------------- Oasis inputs
 
-def build_inputs(run_dir, df, tiv, depths, params, pset, samples, intensity_step, damage_step):
+def build_inputs(run_dir, df, tiv, intensity, params, pset, samples, intensity_step, damage_step, mode="depths"):
+    """Write the OED files and the Oasis model files.
+
+    mode "depths": intensity[tier] is the depth in metres at each building, and the vulnerability
+    is the damage function at each depth bin. mode "damage_ratios": intensity[tier] is the final
+    damage ratio at each building, the intensity bins are the damage bins, and the vulnerability
+    maps each bin to itself.
+    """
     from oasislmf.pytools.converters.csvtobin.manager import csvtobin
 
     exp_dir = os.path.join(run_dir, "exposure")
@@ -189,11 +276,14 @@ def build_inputs(run_dir, df, tiv, depths, params, pset, samples, intensity_step
     write_csv(account, paths["account"])
     write_csv(keys, paths["keys"])
 
-    # Footprint: one row per (event, wet building), probability 1 in the building's depth bin.
+    # Footprint: one row per (event, wet building), probability 1 in the building's depth bin
+    # (or, with damage ratios, in its damage ratio bin; a building with no damage is left out).
+    by_ratio = mode == "damage_ratios"
+    n_damage = int(round(1.0 / damage_step)) + 1
     footprint_parts = []
-    max_bin = int(math.ceil(params["depthScaleM"] / intensity_step))
+    max_bin = n_damage - 1 if by_ratio else int(math.ceil(params["depthScaleM"] / intensity_step))
     for t in eng.SCORE_TIERS:
-        k = intensity_bin_index(depths[t], intensity_step)
+        k = damage_bin_index(intensity[t], damage_step) - 1 if by_ratio else intensity_bin_index(intensity[t], intensity_step)
         wet = k > 0
         max_bin = max(max_bin, int(k.max()) if wet.any() else 0)
         footprint_parts.append(pd.DataFrame({
@@ -209,17 +299,18 @@ def build_inputs(run_dir, df, tiv, depths, params, pset, samples, intensity_step
              max_intensity_bin_idx=max_bin, no_intensity_uncertainty=False, decompressed_size=False,
              no_validation=False)
 
-    # Intensity bins (for reference; the engine only uses bin ids): bin k = ((k-1)w, kw], midpoint value.
+    # Intensity bins (for reference; the engine only uses bin ids). Depths: bin k = ((k-1)w, kw], midpoint
+    # value. Damage ratios: bin k is the point k x damage_step, the same value as damage bin k + 1.
     k_all = np.arange(1, max_bin + 1)
+    ratio_points = np.round(k_all * damage_step, 10)
     write_csv(pd.DataFrame({
         "bin_index": k_all,
-        "bin_from": (k_all - 1) * intensity_step,
-        "bin_to": k_all * intensity_step,
-        "interpolation": (k_all - 0.5) * intensity_step,
+        "bin_from": ratio_points if by_ratio else (k_all - 1) * intensity_step,
+        "bin_to": ratio_points if by_ratio else k_all * intensity_step,
+        "interpolation": ratio_points if by_ratio else (k_all - 0.5) * intensity_step,
     }), os.path.join(csv_dir, "intensity_bin_dict.csv"))
 
     # Damage bins: point bins every damage_step from 0 to 1, so every sample equals the mean.
-    n_damage = int(round(1.0 / damage_step)) + 1
     values = np.round(np.arange(n_damage) * damage_step, 10)
     write_csv(pd.DataFrame({
         "bin_index": np.arange(1, n_damage + 1),
@@ -231,15 +322,18 @@ def build_inputs(run_dir, df, tiv, depths, params, pset, samples, intensity_step
     csvtobin(os.path.join(csv_dir, "damage_bin_dict.csv"), os.path.join(model_dir, "damage_bin_dict.bin"), "damagebin",
              no_validation=False)
 
-    # Vulnerability: one function per housing class, damage at each depth bin's midpoint, probability 1.
+    # Vulnerability: one function per housing class, probability 1. Depths: damage at each depth bin's
+    # midpoint. Damage ratios: the identity, intensity bin k to the damage bin of the same value, so
+    # Oasis adds nothing to the damage it is given.
     mid_depth = (k_all - 0.5) * intensity_step
     vuln_parts = []
     for cls in eng.HOUSING_CLASSES:
-        dmg = eng.damage_ratio(mid_depth, params["fragility"][cls], params["cap"][cls])
+        dmg_bin = k_all + 1 if by_ratio else damage_bin_index(
+            eng.damage_ratio(mid_depth, params["fragility"][cls], params["cap"][cls]), damage_step)
         vuln_parts.append(pd.DataFrame({
             "vulnerability_id": VULNERABILITY_ID[cls],
             "intensity_bin_id": k_all,
-            "damage_bin_id": damage_bin_index(dmg, damage_step),
+            "damage_bin_id": dmg_bin,
             "probability": 1.0,
         }))
     write_csv(pd.concat(vuln_parts, ignore_index=True), os.path.join(csv_dir, "vulnerability.csv"))
@@ -430,27 +524,68 @@ def main(argv=None) -> int:
                     "(default: <system temp>/mafuriko-oasis); the run uses a subfolder named after the run, "
                     "which is replaced on each run, and the results are copied back to oasis/runs")
     ap.add_argument("--parse-only", action="store_true", help="skip the Oasis run and read the outputs of the last run")
+    source = ap.add_mutually_exclusive_group()
+    source.add_argument("--depths", metavar="CSV", help="the app's building-level export; its depths are used and the "
+                        "damage function is applied here, so Oasis checks the damage function too")
+    source.add_argument("--damage-ratios", metavar="CSV", help="the app's building-level export; its final damage ratios "
+                        "are used with an identity vulnerability, so Oasis checks the financial engine and the EP and "
+                        "AAL maths for any set of loss drivers")
+    ap.add_argument("--view", help="view JSON of the export, when the CSV does not carry it on its comment line")
     args = ap.parse_args(argv)
 
     t0 = time.time()
     dataset = os.path.basename(os.path.normpath(args.data_dir))
+    export_path = args.depths or args.damage_ratios
+    mode = "damage_ratios" if args.damage_ratios else "depths"
+    by_ratio = mode == "damage_ratios"
+    if export_path and args.tiv_basis != "file":
+        ap.error("--tiv-basis documented cannot be used with an export: the export carries the app's insured values")
+    if args.view and not export_path:
+        ap.error("--view needs --depths or --damage-ratios")
     params, adjustments = eng.load_params(args.params)
     df, info = eng.load_exposure(args.data_dir)
-    tiv, tiv_fallbacks = eng.building_tiv(df, args.tiv_basis)
+    view, exported, curve_gap, view_gap = None, None, None, None
+    slopes = slope_source = slope_gap = ras_slopes = ras_reason = col_slopes = None
 
-    # Tier slopes: rasters when readable (as the app does when they are loaded), otherwise the building columns.
-    col_slopes = eng.slopes_from_columns(df)
-    ras_slopes, ras_reason = (None, "not requested")
-    if args.slopes_from in ("auto", "rasters"):
-        ras_slopes, ras_reason = eng.slopes_from_rasters(args.data_dir)
-        if ras_slopes is None and args.slopes_from == "rasters":
-            raise SystemExit(f"Could not fit slopes on the rasters: {ras_reason}")
-    slopes = ras_slopes if ras_slopes is not None else col_slopes
-    slope_source = "rasters" if ras_slopes is not None else "columns"
-    slope_gap = max(abs(col_slopes[t] - (ras_slopes or col_slopes)[t]) for t in eng.SCORE_TIERS)
+    if export_path:
+        # The app's own depths or damage ratios, for the settings named in the export's view.
+        rows, view = read_export(export_path, args.view)
+        exported = export_inputs(rows, df)
+        if view and not args.params:
+            params, adjustments = eng.enforce_bounds(view["assumptions"]["params"])
+        params["returnPeriods"] = dict(exported["returnPeriods"])
+        tiv, tiv_fallbacks = exported["tiv"], 0
+        if by_ratio:
+            our_loss = {t: float((exported["ratios"][t] * tiv).sum()) for t in eng.SCORE_TIERS}
+        else:
+            frag, cap = eng.class_arrays(df, params)
+            our_ratio = {t: eng.damage_ratio(exported["depths"][t], frag, cap) for t in eng.SCORE_TIERS}
+            our_loss = {t: float((our_ratio[t] * tiv).sum()) for t in eng.SCORE_TIERS}
+            # How far the Python copy of the damage function sits from the app's own ratio, building by building.
+            curve_gap = max(float(np.abs(our_ratio[t] - exported["ratios"][t]).max()) for t in eng.SCORE_TIERS)
+        intensity = exported["ratios"] if by_ratio else exported["depths"]
+        if view:
+            # The export and the exposure file must give the app's own event losses, or the run is for another view.
+            app_loss = {s["id"]: float(s["lossKes"]) for s in view["scenarios"]}
+            view_gap = max(abs(pct(our_loss[t], app_loss[t])) for t in eng.SCORE_TIERS)
+            if view_gap > 1e-4:
+                raise SystemExit(f"The export's rows do not reproduce the event losses in its own view (largest gap "
+                                 f"{view_gap:.6f}%). Make the export again and check --params.")
+    else:
+        tiv, tiv_fallbacks = eng.building_tiv(df, args.tiv_basis)
+        # Tier slopes: rasters when readable (as the app does when they are loaded), otherwise the building columns.
+        col_slopes = eng.slopes_from_columns(df)
+        ras_slopes, ras_reason = (None, "not requested")
+        if args.slopes_from in ("auto", "rasters"):
+            ras_slopes, ras_reason = eng.slopes_from_rasters(args.data_dir)
+            if ras_slopes is None and args.slopes_from == "rasters":
+                raise SystemExit(f"Could not fit slopes on the rasters: {ras_reason}")
+        slopes = ras_slopes if ras_slopes is not None else col_slopes
+        slope_source = "rasters" if ras_slopes is not None else "columns"
+        slope_gap = max(abs(col_slopes[t] - (ras_slopes or col_slopes)[t]) for t in eng.SCORE_TIERS)
+        ours = eng.run_engine(df, tiv, slopes, params)
+        our_loss, intensity = ours["eventLossKes"], ours["depths"]
 
-    ours = eng.run_engine(df, tiv, slopes, params)
-    our_loss = ours["eventLossKes"]
     rps = params["returnPeriods"]
     pset = period_set(rps, args.min_periods)
     points = eng.curve_points(our_loss, rps)
@@ -458,18 +593,26 @@ def main(argv=None) -> int:
     band_prob = [pset["counts"][t] / pset["periods"] for t in eng.SCORE_TIERS]
     our_disc = eng.banded_aal([(rps[t], our_loss[t]) for t in eng.SCORE_TIERS], band_prob)
 
-    # What Oasis should return given its discrete files: same engine, depth and damage rounded to the bins.
+    # What Oasis should return given its discrete files: the same figures, rounded to the bins.
     frag, cap = eng.class_arrays(df, params)
     tiv32 = tiv.astype(np.float32).astype(np.float64)  # Oasis stores TIV as 32-bit floats
     our_binned = {}
     for t in eng.SCORE_TIERS:
-        k = intensity_bin_index(ours["depths"][t], args.intensity_step_m)
+        if by_ratio:
+            dmg = (damage_bin_index(intensity[t], args.damage_step) - 1) * args.damage_step
+            our_binned[t] = float((dmg * tiv32).sum())
+            continue
+        k = intensity_bin_index(intensity[t], args.intensity_step_m)
         mid = np.where(k > 0, (k - 0.5) * args.intensity_step_m, 0.0)
         dmg = (damage_bin_index(eng.damage_ratio(mid, frag, cap), args.damage_step) - 1) * args.damage_step
         our_binned[t] = float((np.where(k > 0, dmg, 0.0) * tiv32).sum())
 
     params_tag = hashlib.sha1(json.dumps(params, sort_keys=True).encode()).hexdigest()[:8]
-    run_name = args.run_name or f"{dataset}_{args.tiv_basis}_{params_tag}"
+    if export_path:
+        default_name = f"{dataset}_{mode}_{(view or {}).get('fingerprint') or params_tag}"
+    else:
+        default_name = f"{dataset}_{args.tiv_basis}_{params_tag}"
+    run_name = args.run_name or default_name
     run_dir = os.path.join(HERE, "runs", run_name)
     os.makedirs(run_dir, exist_ok=True)
     model_run_dir = os.path.join(run_dir, "oasis_run")
@@ -477,8 +620,8 @@ def main(argv=None) -> int:
 
     print(f"Building Oasis inputs in {run_dir} ...", flush=True)
     t_build = time.time()
-    paths, stats = build_inputs(run_dir, df, tiv, ours["depths"], params, pset, args.samples,
-                                args.intensity_step_m, args.damage_step)
+    paths, stats = build_inputs(run_dir, df, tiv, intensity, params, pset, args.samples,
+                                args.intensity_step_m, args.damage_step, mode)
     print(f"  built in {time.time() - t_build:.0f} s", flush=True)
     cmd = None
     if not args.parse_only:
@@ -527,11 +670,39 @@ def main(argv=None) -> int:
         f"Oasis LMF {oasislmf_version()} ran the five tier events on {len(df)} buildings "
         f"(total TIV {fmt_kes(total_tiv)}, {args.tiv_basis} TIV basis) with {args.samples} samples per event "
         f"over {pset['periods']:,} periods, ground-up loss only.",
-        "Our figures come from a Python copy of the app's engine (web/src/lib/model) run on the same file and "
-        "parameters.",
-        f"Every event loss matches our engine to within {max_event_diff:.3f}%. The small gap comes from the Oasis "
-        f"model files being discrete: depth is stored in {args.intensity_step_m * 1000:g} mm bins and damage ratios "
-        f"in {args.damage_step * 100:g}% steps. Our engine with the same rounding matches Oasis to {binned_diff:.5f}%.",
+    ]
+    if view:
+        notes.append(
+            f"View checked: {view['floodSourceLabel']}, {view['lossesFromLabel']}, {view['assumptions']['set']} "
+            f"assumptions, result fingerprint {view['fingerprint']}. The rows of the app's building-level export "
+            f"reproduce the event losses in that view to within {view_gap:.6f}%.")
+    if by_ratio:
+        notes += [
+            "The final ground-up damage ratio of every building at every return period comes from the app's "
+            "building-level export, after every loss driver in force. The Oasis intensity bins are damage ratio bins "
+            "and the vulnerability maps each bin to itself, so Oasis adds nothing to the damage it is given. Our "
+            "figures are the app's own: damage ratio times insured value, added up.",
+            f"Every event loss matches the app to within {max_event_diff:.3f}%. The small gap comes from Oasis "
+            f"storing damage ratios in {args.damage_step * 100:g}% steps. The app's figures with the same rounding "
+            f"match Oasis to {binned_diff:.5f}%.",
+        ]
+    else:
+        if exported:
+            notes.append(
+                "The depth of water at every building and return period comes from the app's building-level export. "
+                "The damage function was applied to those depths twice: as Oasis vulnerability files, and by a Python "
+                "copy of the app's damage function, which reproduces the app's own damage ratio at every building to "
+                f"within {curve_gap:.1e}.")
+        else:
+            notes.append("Our figures come from a Python copy of the app's engine (web/src/lib/model) run on the same "
+                         "file and parameters.")
+        notes += [
+            f"Every event loss matches our engine to within {max_event_diff:.3f}%. The small gap comes from the Oasis "
+            f"model files being discrete: depth is stored in {args.intensity_step_m * 1000:g} mm bins and damage "
+            f"ratios in {args.damage_step * 100:g}% steps. Our engine with the same rounding matches Oasis to "
+            f"{binned_diff:.5f}%.",
+        ]
+    notes += [
         f"Each event occurs in a share of periods equal to its exceedance band (for example "
         f"{pset['counts']['extreme']} of {pset['periods']:,} periods for the 1-in-{rps['extreme']:g} event, "
         f"{pset['counts']['common']} for the 1-in-{rps['common']:g}), and no period holds more than one event. "
@@ -544,17 +715,32 @@ def main(argv=None) -> int:
         f"probability (trapezoid), so it is {trap_vs_disc:.1f}% higher than the step value. Both treat events more "
         f"frequent than 1-in-{rps['extreme']:g} as no loss and hold the 1-in-{rps['common']:g} loss for anything "
         f"rarer; the difference is only the shape assumed between the five points.",
-        f"The vulnerability functions are deterministic (each depth bin maps to one damage value), so every sample "
+        f"The vulnerability functions are deterministic (each {'damage ratio bin maps to itself' if by_ratio else 'depth bin maps to one damage value'}), so every sample "
         f"equals the mean: analytical and sample-mean event losses agree to {analytic_vs_sample:.5f}%, and the "
         f"mean-damage, full-uncertainty, per-sample and sample-mean EP curves agree to {ep_variants_gap:.5f}%.",
-        f"Tier slopes were fitted on the {'five hazard rasters' if slope_source == 'rasters' else 'building hazard columns'}"
-        + (f"; the building columns give the same slopes to within {slope_gap:.1e}." if slope_source == "rasters" else
-           f" because the rasters could not be used ({ras_reason}).")
-        ,
-        "This checks the loss arithmetic, the event to period mapping and the OEP, AEP and AAL maths. It does not "
-        "test the hazard scores, the depth scale, the JRC damage curve or the class parameters, because both "
-        "engines take those from the same inputs.",
     ]
+    if by_ratio:
+        notes.append(
+            "This checks the financial engine (damage ratio times insured value, added up over the portfolio), the "
+            "event to period mapping and the OEP, AEP and AAL maths, whatever loss drivers set the damage. It does not "
+            "test how the damage ratios were reached: the hazard, the loss drivers and the damage function are taken "
+            "from the app as given.")
+    elif exported:
+        notes.append(
+            "This checks the damage function as Oasis applies it to the app's depths, the loss arithmetic, the event "
+            "to period mapping and the OEP, AEP and AAL maths. It does not test how the depths were reached (the "
+            "hazard scores, the depth scale, the drainage layer), nor the JRC curve's own figures or the class "
+            "parameters, because both engines take those from the same inputs.")
+    else:
+        notes += [
+            f"Tier slopes were fitted on the {'five hazard rasters' if slope_source == 'rasters' else 'building hazard columns'}"
+            + (f"; the building columns give the same slopes to within {slope_gap:.1e}." if slope_source == "rasters" else
+               f" because the rasters could not be used ({ras_reason}).")
+            ,
+            "This checks the loss arithmetic, the event to period mapping and the OEP, AEP and AAL maths. It does not "
+            "test the hazard scores, the depth scale, the JRC damage curve or the class parameters, because both "
+            "engines take those from the same inputs.",
+        ]
     if not pset["exact"]:
         eff = ", ".join(f"{t} 1-in-{pset['effectiveReturnPeriods'][t]:.2f}" for t in eng.SCORE_TIERS)
         notes.append(f"The return periods do not divide a whole number of periods, so the period counts were "
@@ -577,8 +763,12 @@ def main(argv=None) -> int:
         "generatedAt": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
         "dataset": dataset,
         "tivBasis": args.tiv_basis,
+        # What Oasis was fed: "depths" (it applied the damage function) or "damage_ratios" (identity vulnerability).
+        "mode": mode,
+        # The export's header: the settings the run was made for. None when the script worked out the depths itself.
+        "view": view,
         "params": tidy_params(params),
-        "slopes": {t: round(float(slopes[t]), 6) for t in eng.SCORE_TIERS},
+        "slopes": None if slopes is None else {t: round(float(slopes[t]), 6) for t in eng.SCORE_TIERS},
         "samples": args.samples,
         "periods": pset["periods"],
         "events": [
@@ -608,6 +798,7 @@ def main(argv=None) -> int:
         "inputs": stats,
         "exposure": info,
         "periodSet": pset,
+        "export": {"file": os.path.basename(export_path), "damageFunctionGap": curve_gap, "viewGapPct": view_gap} if export_path else None,
         "slopes": {"used": slope_source, "rasters": ras_slopes, "rasterNote": ras_reason, "columns": col_slopes},
         "eventLoss": {
             t: {"ours": our_loss[t], "oursBinned": our_binned[t], "oasisAnalytical": ev[1][t], "oasisSample": ev[2][t],

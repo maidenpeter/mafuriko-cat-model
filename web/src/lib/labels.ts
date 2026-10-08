@@ -15,6 +15,9 @@
  *   perMille(8.02)      "8.02 per mille"              every rate per mille of the insured value
  *   PORTFOLIO_DRIVERS_LINE  the one sentence on which loss drivers the portfolio carries
  *   SETTER_WORDS        who set a figure, in a short form, a sentence form and a counted form
+ *   PLACEHOLDER_BADGE   "Assumption, to be set by Kenya Re underwriting"  on the cost of capital and the minimum rate
+ *   PLACEHOLDER_RATE_LINE  once beside a headline flood rate: it rests on those two placeholders
+ *   insuredValueFlag(r) the flag beside every total of insured values when the file's values are r times their formula
  *   EP_HELP             the one line of help under the exceedance curve
  *   axisTicks(max)      round tick values from zero   used by BarChart and Waterfall
  *   wrapLabel(text, n)  lines of at most n characters used for labels drawn inside SVG
@@ -147,6 +150,41 @@ export const SOURCE_LABELS: Record<SourceKind, string> = {
   assumption: "Assumption",
   ai: "AI",
 };
+
+/**
+ * The badge on the two pricing figures only Kenya Re's underwriters can set: the cost of capital and
+ * the minimum flood rate. Each is a placeholder, editable on screen, and never a market figure.
+ * PlaceholderBadge in ui.tsx draws it; records write it in brackets after the figure.
+ */
+export const PLACEHOLDER_BADGE = "Assumption, to be set by Kenya Re underwriting";
+
+/** The two placeholders, by their names in OfferJudgement. */
+export const PLACEHOLDER_KEYS: readonly string[] = ["costOfCapital", "minimumRatePerMille"];
+
+/** True for the cost of capital and the minimum flood rate. */
+export const isPlaceholder = (key: string): boolean => PLACEHOLDER_KEYS.includes(key);
+
+/** Said once beside a flood rate or flood premium that is the headline, so nobody reads it as a quote. */
+export const PLACEHOLDER_RATE_LINE =
+  "This rate rests on two placeholders to be set by Kenya Re underwriting, the capital load and the minimum rate, so it is not a quote.";
+
+/**
+ * The flag every total of insured values carries when the exposure file's values are not what its
+ * own documented formula (floor area x cost per m²) gives. `ratio` is the median of value over formula,
+ * from the ingest report. null when the values agree with the formula within 5%, or nothing was measured.
+ *   short  beside a figure                        "10 times the documented formula"
+ *   full   as a sentence under a total            "Insured values are as written in the exposure file: 10 times the documented formula."
+ *   where  where the full explanation lives       "The check is explained under Read the data."
+ * An offer's own sum insured comes from the broker's document and never carries it.
+ */
+export function insuredValueFlag(ratio: number | null | undefined): { short: string; full: string; where: string } | null {
+  if (ratio === null || ratio === undefined || !Number.isFinite(ratio) || Math.abs(ratio - 1) < 0.05) return null;
+  const short = `${fmtNum(ratio, 1)} times the documented formula`;
+  return { short, full: `Insured values are as written in the exposure file: ${short}.`, where: INSURED_VALUE_FLAG_WHERE };
+}
+
+/** Where the full explanation of the insured value flag lives. */
+export const INSURED_VALUE_FLAG_WHERE = 'The check "Insured value equals floor area × cost per m²" under Read the data explains it.';
 
 /** The one line of help that sits under the exceedance curve. */
 export const EP_HELP = "Read across from a return period to the loss: a 1-in-100 loss has about a 1% chance of being exceeded in any year.";

@@ -1,16 +1,25 @@
 {
   "engine": "Oasis LMF",
   "oasislmfVersion": "2.5.8",
-  "generatedAt": "2026-10-08T20:42:55+00:00",
+  "generatedAt": "2026-10-08T20:44:11+00:00",
   "dataset": "team_a_nairobi",
   "tivBasis": "file",
   "mode": "depths",
   "view": {
     "dataset": "team_a_nairobi",
     "hazardKind": "score",
-    "floodSource": "terrain",
-    "floodSourceLabel": "Terrain only",
-    "drainage": null,
+    "floodSource": "terrain_drainage",
+    "floodSourceLabel": "Terrain + drainage",
+    "drainage": {
+      "reachM": 300,
+      "pondingDepthM": {
+        "extreme": 0.15,
+        "severe": 0.25,
+        "moderate": 0.35,
+        "occasional": 0.45,
+        "common": 0.6
+      }
+    },
     "lossesFrom": "depth_only",
     "lossesFromLabel": "Depth only",
     "assumptions": {
@@ -46,40 +55,40 @@
         "id": "extreme",
         "returnPeriod": 10,
         "tierSlope": 0.6258330642548402,
-        "lossKes": 380527456.61527574,
-        "affected": 32
+        "lossKes": 592233279.4265198,
+        "affected": 86
       },
       {
         "id": "severe",
         "returnPeriod": 25,
         "tierSlope": 0.7195169741535701,
-        "lossKes": 739364954.9007337,
-        "affected": 51
+        "lossKes": 1062456260.2646208,
+        "affected": 103
       },
       {
         "id": "moderate",
         "returnPeriod": 50,
         "tierSlope": 0.8271202671667404,
-        "lossKes": 1952414103.531654,
-        "affected": 110
+        "lossKes": 2399524294.86634,
+        "affected": 155
       },
       {
         "id": "occasional",
         "returnPeriod": 100,
         "tierSlope": 0.9137705065349516,
-        "lossKes": 3581174278.0674586,
-        "affected": 174
+        "lossKes": 4044755943.6941547,
+        "affected": 207
       },
       {
         "id": "common",
         "returnPeriod": 250,
         "tierSlope": 1,
-        "lossKes": 5945505626.312082,
-        "affected": 259
+        "lossKes": 6471817611.03932,
+        "affected": 280
       }
     ],
-    "averageAnnualLossKes": 140544567.05618668,
-    "fingerprint": "bdc87191"
+    "averageAnnualLossKes": 173918884.04320398,
+    "fingerprint": "b6cc5322"
   },
   "params": {
     "depthScaleM": 4.0,
@@ -110,94 +119,94 @@
     {
       "tier": "extreme",
       "returnPeriod": 10,
-      "oasisLossKes": 380371008,
-      "ourLossKes": 380527457
+      "oasisLossKes": 591737984,
+      "ourLossKes": 592233279
     },
     {
       "tier": "severe",
       "returnPeriod": 25,
-      "oasisLossKes": 739143040,
-      "ourLossKes": 739364955
+      "oasisLossKes": 1061915456,
+      "ourLossKes": 1062456260
     },
     {
       "tier": "moderate",
       "returnPeriod": 50,
-      "oasisLossKes": 1952820864,
-      "ourLossKes": 1952414104
+      "oasisLossKes": 2400825856,
+      "ourLossKes": 2399524295
     },
     {
       "tier": "occasional",
       "returnPeriod": 100,
-      "oasisLossKes": 3581434368,
-      "ourLossKes": 3581174278
+      "oasisLossKes": 4043869184,
+      "ourLossKes": 4044755944
     },
     {
       "tier": "common",
       "returnPeriod": 250,
-      "oasisLossKes": 5944936960,
-      "ourLossKes": 5945505626
+      "oasisLossKes": 6471403008,
+      "ourLossKes": 6471817611
     }
   ],
   "ep": {
     "oep": [
       {
         "returnPeriod": 10,
-        "lossKes": 380371008
+        "lossKes": 591737984
       },
       {
         "returnPeriod": 25,
-        "lossKes": 739143040
+        "lossKes": 1061915456
       },
       {
         "returnPeriod": 50,
-        "lossKes": 1952820864
+        "lossKes": 2400825856
       },
       {
         "returnPeriod": 100,
-        "lossKes": 3581434368
+        "lossKes": 4043869184
       },
       {
         "returnPeriod": 250,
-        "lossKes": 5944936960
+        "lossKes": 6471403008
       }
     ],
     "aep": [
       {
         "returnPeriod": 10,
-        "lossKes": 380371008
+        "lossKes": 591737984
       },
       {
         "returnPeriod": 25,
-        "lossKes": 739143040
+        "lossKes": 1061915456
       },
       {
         "returnPeriod": 50,
-        "lossKes": 1952820864
+        "lossKes": 2400825856
       },
       {
         "returnPeriod": 100,
-        "lossKes": 3581434368
+        "lossKes": 4043869184
       },
       {
         "returnPeriod": 250,
-        "lossKes": 5944936960
+        "lossKes": 6471403008
       }
     ]
   },
   "aal": {
-    "oasisKes": 102401680,
-    "ourTrapezoidKes": 140544567,
-    "ourDiscreteKes": 102412156
+    "oasisKes": 130899672,
+    "ourTrapezoidKes": 173918884,
+    "ourDiscreteKes": 130934171
   },
-  "maxEventDiffPct": 0.0411,
+  "maxEventDiffPct": 0.0836,
   "notes": [
     "Oasis LMF 2.5.8 ran the five tier events on 600 buildings (total TIV KES 63,635.1m, file TIV basis) with 10 samples per event over 1,000 periods, ground-up loss only.",
-    "View checked: Terrain only, Depth only, reference assumptions, result fingerprint bdc87191. The rows of the app's building-level export reproduce the event losses in that view to within 0.000000%.",
+    "View checked: Terrain + drainage, Depth only, reference assumptions, result fingerprint b6cc5322. The rows of the app's building-level export reproduce the event losses in that view to within 0.000000%.",
     "The depth of water at every building and return period comes from the app's building-level export. The damage function was applied to those depths twice: as Oasis vulnerability files, and by a Python copy of the app's damage function, which reproduces the app's own damage ratio at every building to within 2.2e-16.",
-    "Every event loss matches our engine to within 0.041%. The small gap comes from the Oasis model files being discrete: depth is stored in 1 mm bins and damage ratios in 0.1% steps. Our engine with the same rounding matches Oasis to 0.00001%.",
+    "Every event loss matches our engine to within 0.084%. The small gap comes from the Oasis model files being discrete: depth is stored in 1 mm bins and damage ratios in 0.1% steps. Our engine with the same rounding matches Oasis to 0.00003%.",
     "Each event occurs in a share of periods equal to its exceedance band (for example 60 of 1,000 periods for the 1-in-10 event, 4 for the 1-in-250), and no period holds more than one event. So Oasis OEP and AEP at each tier's return period equal that tier's event loss (largest gap 0.0000%), which confirms the loss to return period mapping the app uses.",
-    "Oasis AAL (KES 102.4m) is the average loss per period, which is each event's loss times its band probability, a step curve. The same banded sum from our losses is KES 102.4m (-0.010%).",
-    "The app's AAL (KES 140.5m) joins the five points with straight lines over annual exceedance probability (trapezoid), so it is 37.2% higher than the step value. Both treat events more frequent than 1-in-10 as no loss and hold the 1-in-250 loss for anything rarer; the difference is only the shape assumed between the five points.",
+    "Oasis AAL (KES 130.9m) is the average loss per period, which is each event's loss times its band probability, a step curve. The same banded sum from our losses is KES 130.9m (-0.026%).",
+    "The app's AAL (KES 173.9m) joins the five points with straight lines over annual exceedance probability (trapezoid), so it is 32.8% higher than the step value. Both treat events more frequent than 1-in-10 as no loss and hold the 1-in-250 loss for anything rarer; the difference is only the shape assumed between the five points.",
     "The vulnerability functions are deterministic (each depth bin maps to one damage value), so every sample equals the mean: analytical and sample-mean event losses agree to 0.00000%, and the mean-damage, full-uncertainty, per-sample and sample-mean EP curves agree to 0.00001%.",
     "This checks the damage function as Oasis applies it to the app's depths, the loss arithmetic, the event to period mapping and the OEP, AEP and AAL maths. It does not test how the depths were reached (the hazard scores, the depth scale, the drainage layer), nor the JRC curve's own figures or the class parameters, because both engines take those from the same inputs."
   ]

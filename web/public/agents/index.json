@@ -1,0 +1,29 @@
+{
+  "runs": [
+    {
+      "file": "portfolio-2026-10-08.json",
+      "kind": "portfolio",
+      "savedAt": "2026-10-08T20:46:03.575Z",
+      "model": "gpt-6-luna",
+      "inputs": {
+        "dataset": "team_a_nairobi",
+        "buildings": 600,
+        "totalTivKes": 63635075000,
+        "reference": "bdc87191"
+      }
+    },
+    {
+      "file": "offer-2026-10-08-d713ff1c.json",
+      "kind": "offer",
+      "savedAt": "2026-10-08T20:47:23.832Z",
+      "model": "gpt-6-luna",
+      "inputs": {
+        "dataset": "team_a_nairobi",
+        "buildings": 600,
+        "totalTivKes": 63635075000,
+        "reference": "bdc87191"
+      },
+      "offerKey": "d713ff1c64deefc9"
+    }
+  ]
+}

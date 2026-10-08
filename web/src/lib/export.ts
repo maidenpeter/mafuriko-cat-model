@@ -5,7 +5,7 @@ import type { Check } from "./checks";
 import { DECISION_LABELS, DEDUCTIBLE_LOSS_SHARE, EVIDENCE_LABELS, NEAR_WET_CELL_M, SEVERITY_LABELS, SUBLIMIT_LOSS_SHARE, type DecisionRecord } from "./decision";
 import { fmtInt, fmtKes, fmtNum, fmtPct } from "./format";
 import { DRAINAGE_DEFAULTS } from "./geo/drainage";
-import { kes1, LOSS_MODE_LABELS, PORTFOLIO_DRIVERS_LINE, rpLabel, rpWithChance, SETTER_ORDER, SETTER_WORDS } from "./labels";
+import { insuredValueFlag, isPlaceholder, kes1, LOSS_MODE_LABELS, PLACEHOLDER_BADGE, PLACEHOLDER_KEYS, PLACEHOLDER_RATE_LINE, PORTFOLIO_DRIVERS_LINE, rpLabel, rpWithChance, SETTER_ORDER, SETTER_WORDS } from "./labels";
 import type { LossMode } from "./model/drivers";
 import { hotspotHits } from "./model/hotspots";
 import { BOUNDS, flattenParams, REFERENCE_PARAMS } from "./model/params";
@@ -60,9 +60,9 @@ export const LIMITS = [
   "An offer has a ground-up and a gross loss only. Net loss is a portfolio figure and is not worked out for one offer.",
   `With ${LOSS_MODE_LABELS.all_drivers}, a building takes the highest map depth within the buffer around it (${fmtNum(REFERENCE_JUDGEMENT.bufferRadiusM, 0)} m unless changed), not an average. One deep cell nearby sets the depth for the whole building, so this reading is high.`,
   `Drain overload is an assumption applied to every building alike: once the event is rarer than the drain design return period (${rpLabel(REFERENCE_JUDGEMENT.drainDesignRp)} unless the offer states one), the site is taken to hold ${fmtNum(REFERENCE_JUDGEMENT.drainOverloadDepthM)} m of water, whether or not its own drains would cope.`,
-  "The basement damage ratios, the outage days, the value below ground and a year's rent or revenue when the offer does not state them, the uncertainty loading, the cost of capital and the minimum rate are assumptions, not measurements. Sump pumps, backup power, flood barriers and non-return valves are recorded and asked about, and change no figure.",
+  "The basement damage ratios, the outage days, the value below ground and a year's rent or revenue when the offer does not state them, the uncertainty loading, the cost of capital and the minimum rate are assumptions, not measurements. The cost of capital and the minimum rate are placeholders to be set by Kenya Re underwriting, not market figures. Sump pumps, backup power, flood barriers and non-return valves are recorded and asked about, and change no figure.",
   PORTFOLIO_DRIVERS_LINE,
-  `The comparison with Oasis LMF refers to ${LOSS_MODE_LABELS.depth_only} on reference assumptions. The loss drivers beyond depth are not in the Oasis run.`,
+  `Oasis LMF checks three settings on reference assumptions: Terrain only and Terrain + drainage with ${LOSS_MODE_LABELS.depth_only}, and Terrain + drainage with ${LOSS_MODE_LABELS.all_drivers} (the financial engine and the loss arithmetic only). Any other setting is not checked by Oasis.`,
   `With ${LOSS_MODE_LABELS.depth_only} selected, a point the maps show as dry gives a loss of zero. That is a statement about the maps at those coordinates, not a finding that the building cannot flood.`,
 ];
 
@@ -194,6 +194,8 @@ export interface BeyondDepthRow {
   usedFor: string;
   /** True for the figures the agents may argue. */
   agentsArgue: boolean;
+  /** True for the cost of capital and the minimum rate: placeholders to be set by Kenya Re underwriting. */
+  placeholder: boolean;
 }
 
 /**
@@ -252,6 +254,7 @@ export function beyondDepthAssumptions(judgement: FocusJudgement | null | undefi
       portfolio,
       usedFor: portfolio ? "Offer and portfolio" : "Offer only",
       agentsArgue,
+      placeholder: isPlaceholder(key),
     };
   });
 }
@@ -463,6 +466,8 @@ export function buildAudit(session: Session, active: Active, deliberation: Delib
     // Every assumption beyond flood depth: its value in force, its allowed range, its source and who set it.
     assumptionsBeyondFloodDepth: {
       inUse: mode === "all_drivers",
+      // The cost of capital and the minimum rate: editable placeholders, never market figures.
+      placeholders: { keys: PLACEHOLDER_KEYS, badge: PLACEHOLDER_BADGE, note: PLACEHOLDER_RATE_LINE },
       rows: beyondDepthAssumptions(judgement, deliberation, active.result),
       // What the portfolio's buildings were run on. null with Depth only, where none of these is read.
       portfolioRunOn: active.result.judgement ?? null,
@@ -473,6 +478,8 @@ export function buildAudit(session: Session, active: Active, deliberation: Delib
     },
     results: {
       totalInsuredValueKes: active.result.totalTivKes,
+      // Present when the exposure file's insured values are not what their own documented formula gives.
+      insuredValueFlag: insuredValueFlag(session.report.tivRatio?.median)?.full ?? null,
       averageAnnualLossKes: active.result.aalKes,
       // Per event, drivers 1 to 3 for the portfolio. null with Depth only. Basement ingress and business interruption are not modelled for it.
       lossByDriver: portfolioDriverRows(active.result),
@@ -554,7 +561,7 @@ function offerSection(offer: OfferFocus, decision: DecisionRecord | null | undef
   lines.push(`| ${rpWithChance(100)} gross loss${total.loss100Extrapolated ? ", held flat beyond the rarest flood modelled" : ""} | ${orNa(total.loss100GrossKes)} |`);
   lines.push(`| Average annual loss, gross | ${kes1(total.aalGrossKes)} |`);
   lines.push(`| Pure flood rate, gross | ${fmtNum(total.ratePerMilleGross, 3)} per mille of sum insured: average annual loss over sum insured, before the capital load, expenses and profit |`);
-  if (all) lines.push(`| Flood premium | ${kes1(premium.floodPremiumKes)}, ${fmtNum(premium.floodRatePerMille, 3)} per mille of sum insured, set by ${premium.setBy === "modelled" ? "the modelled figures" : "the minimum rate"} (built up below) |`);
+  if (all) lines.push(`| Flood premium | ${kes1(premium.floodPremiumKes)}, ${fmtNum(premium.floodRatePerMille, 3)} per mille of sum insured, set by ${premium.setBy === "modelled" ? "the modelled figures" : "the minimum rate"} (built up below). ${PLACEHOLDER_RATE_LINE} |`);
   if (premium.stated)
     lines.push(
       `| The offer's own premium, all risks | ${kes1(premium.stated.premiumKes)}, ${fmtNum(premium.stated.ratePerMille, 3)} per mille of ${premium.stated.partlyPriced ? `the whole offer's sum insured of ${kes1(premium.stated.onTivKes)}` : "sum insured"}${premium.stated.quote ? `: "${cell(premium.stated.quote)}"` : " (typed by the underwriter)"} |`,
@@ -619,7 +626,8 @@ function offerSection(offer: OfferFocus, decision: DecisionRecord | null | undef
     lines.push(`### Premium build-up`, ``, premium.caption, ``, `| Line | KES a year | Per mille of sum insured | How |`, `|---|---|---|---|`);
     for (const line of premium.lines) {
       const how = isDriver(line.id) ? cell(line.text) : `${cell(line.text)} ${line.sources.map((s) => cell(driverSourceText(s))).join("; ")}`;
-      lines.push(`| ${line.id === "flood_premium" || line.id === "technical" ? `**${line.label}**` : line.label} | ${kes1(line.kes)} | ${fmtNum(line.ratePerMille, 3)} | ${how.trim()} |`);
+      const marked = line.id === "capital_load" || line.id === "minimum" ? `${line.label} (${PLACEHOLDER_BADGE})` : line.label;
+      lines.push(`| ${line.id === "flood_premium" || line.id === "technical" ? `**${line.label}**` : marked} | ${kes1(line.kes)} | ${fmtNum(line.ratePerMille, 3)} | ${how.trim()} |`);
     }
     lines.push(``);
     lines.push(
@@ -693,6 +701,7 @@ export function buildNote(session: Session, active: Active, deliberation: Delibe
   const counts = { pass: allChecks.filter((c) => c.status === "pass").length, warn: allChecks.filter((c) => c.status === "warn").length, fail: allChecks.filter((c) => c.status === "fail").length };
   const rarest = r.scenarios[r.scenarios.length - 1];
   const fromAgents = active.source === "ai";
+  const tivFlag = insuredValueFlag(report.tivRatio?.median);
   let n = 0;
   const heading = (title: string) => `## ${++n}. ${title}`;
 
@@ -748,8 +757,8 @@ export function buildNote(session: Session, active: Active, deliberation: Delibe
   lines.push(`- Return periods: ${r.scenarios.map((s) => `${s.id} = ${s.returnPeriod} years`).join(", ")}${isScore ? " (assumed)" : " (from the data)"}.`);
   lines.push(`- Ground-up loss = damage ratio × insured value. Insured values are used as they appear in the file.${allDrivers ? ` With ${LOSS_MODE_LABELS.all_drivers} the damage ratio is read at the deepest water the drivers put at the building; the assumptions behind that are in the next table.` : ""}`);
   lines.push(`- Losses at 10, 25, 50, 100 and 250 years are read off the curve by interpolating against the logarithm of the return period. Average annual loss is the area under loss against annual chance, with no loss from events more frequent than the shortest return period and a flat loss beyond the longest.`);
-  if (report.tivRatio && Math.abs(report.tivRatio.median - 1) >= 0.05) {
-    lines.push(`- **Data discrepancy:** insured values are ${fmtNum(report.tivRatio.median, 1)}× floor area × cost per m². The portfolio totals ${fmtKes(r.totalTivKes)}; the documented formula would give ${fmtKes(r.totalTivKes / report.tivRatio.median)}.`);
+  if (tivFlag && report.tivRatio) {
+    lines.push(`- **Data discrepancy:** ${tivFlag.full} Every value is ${fmtNum(report.tivRatio.median, 1)}× floor area × cost per m². The portfolio totals ${fmtKes(r.totalTivKes)}; the documented formula would give ${fmtKes(r.totalTivKes / report.tivRatio.median)}.`);
   }
   lines.push(``, `### Assumptions beyond flood depth`, ``);
   lines.push(
@@ -760,7 +769,7 @@ export function buildNote(session: Session, active: Active, deliberation: Delibe
     `| Assumption | Value in force | Reference value | Allowed range | Who set it | Source | Used for |`,
     `|---|---|---|---|---|---|---|`,
   );
-  for (const row of beyond) lines.push(`| ${row.label} | ${row.value} | ${row.referenceText} | ${row.rangeText} | ${row.setByText} | ${cell(row.source)}${row.quote ? ` "${cell(row.quote)}"` : ""} | ${row.usedFor} |`);
+  for (const row of beyond) lines.push(`| ${row.label}${row.placeholder ? ` (${PLACEHOLDER_BADGE})` : ""} | ${row.value} | ${row.referenceText} | ${row.rangeText} | ${row.setByText} | ${cell(row.source)}${row.quote ? ` "${cell(row.quote)}"` : ""} | ${row.usedFor} |`);
   lines.push(``, `Thresholds behind the points raised on an offer (all assumptions of this app):`, ``);
   lines.push(
     `- Water at the building in a flood of ${rpLabel(FREQUENT_FLOOD_RP)} or more frequent is marked high; rarer water is medium.`,
@@ -796,7 +805,7 @@ export function buildNote(session: Session, active: Active, deliberation: Delibe
   // --- Portfolio results ----------------------------------------------------------------------
   lines.push(heading("Portfolio results"), ``, `| Return period | Scenario | Buildings affected | Ground-up loss | Share of insured value |`, `|---|---|---|---|---|`);
   for (const s of r.scenarios) lines.push(`| ${rpWithChance(s.returnPeriod)} | ${s.id} | ${fmtInt(s.affected)} of ${fmtInt(r.buildingCount)} | ${fmtKes(s.lossKes, 2)} | ${fmtPct(s.lossKes / r.totalTivKes, 2)} |`);
-  lines.push(``, `Total insured value ${fmtKes(r.totalTivKes)} · average annual loss ${fmtKes(r.aalKes, 2)}, ground-up. Losses from: ${LOSS_MODE_LABELS[mode]}.`, ``);
+  lines.push(``, `Total insured value ${fmtKes(r.totalTivKes)}${tivFlag ? ` (${tivFlag.full.replace(/\.$/, "")}; see Data discrepancy under Assumptions)` : ""} · average annual loss ${fmtKes(r.aalKes, 2)}, ground-up. Losses from: ${LOSS_MODE_LABELS[mode]}.`, ``);
   const byDriver = portfolioDriverRows(r);
   if (byDriver && byDriver.length > 0) {
     const ran = r.judgement ?? REFERENCE_JUDGEMENT;
@@ -921,7 +930,10 @@ export function buildNote(session: Session, active: Active, deliberation: Delibe
 
   // --- Oasis ----------------------------------------------------------------------------------
   lines.push(heading("Independent check with Oasis LMF"), ``);
-  lines.push(`The comparison refers to ${LOSS_MODE_LABELS.depth_only} on reference assumptions. The loss drivers beyond depth are not in the Oasis run${allDrivers ? ", so its figures are not the ones in the portfolio results above" : ""}.`, ``);
+  lines.push(
+    `Oasis LMF checks three settings on reference assumptions: Terrain only and Terrain + drainage with ${LOSS_MODE_LABELS.depth_only}, and Terrain + drainage with ${LOSS_MODE_LABELS.all_drivers}, where it checks the financial engine and the loss arithmetic only. The table below is the first of the three, Terrain only with ${LOSS_MODE_LABELS.depth_only}${allDrivers || dataset.drainage ? ", so its figures are not the ones in the portfolio results above" : ""}. The Results step shows the run for the settings in force, and says when there is none.`,
+    ``,
+  );
   if (oasis && oasis.dataset === dataset.name) {
     lines.push(
       `The portfolio and the reference assumptions were written as Oasis model files and run through the open-source Oasis engine (oasislmf ${oasis.oasislmfVersion}, run saved ${oasis.generatedAt.slice(0, 10)}). Ground-up, terrain maps only, no insurance terms.`,

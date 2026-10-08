@@ -3,6 +3,7 @@
 import { motion } from "motion/react";
 import { useEffect, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { summarise, type Check, type CheckStatus } from "@/lib/checks";
+import { insuredValueFlag, PLACEHOLDER_BADGE } from "@/lib/labels";
 import type { OfferFocus } from "@/lib/offer/focus";
 import { STEP_NAMES, type StepId } from "@/lib/steps";
 
@@ -72,6 +73,36 @@ export function Tag({ kind, children }: { kind: TagKind; children?: ReactNode })
       <span aria-hidden className="shrink-0">{TAGS[kind].glyph}</span>
       {children ?? TAGS[kind].label}
     </span>
+  );
+}
+
+/** The badge on the cost of capital and the minimum flood rate: the Assumption badge's look, with the words that say who sets them. */
+export function PlaceholderBadge() {
+  return <Tag kind="assumption">{PLACEHOLDER_BADGE}</Tag>;
+}
+
+/**
+ * The flag beside a total of insured values when the file's values are not what their own formula gives.
+ * `ratio` is session.report.tivRatio?.median. Draws nothing when the values agree with the formula.
+ * `inline` draws the short form beside a figure, with the full sentence on hover; otherwise the full sentence and where it is explained.
+ */
+export function InsuredValueFlag({ ratio, inline = false, className = "" }: { ratio: number | null | undefined; inline?: boolean; className?: string }) {
+  const flag = insuredValueFlag(ratio);
+  if (!flag) return null;
+  if (inline) {
+    return (
+      <span title={`${flag.full} ${flag.where}`} className={`inline-flex items-center gap-1 text-xs font-medium text-ink-2 ${className}`}>
+        <span aria-hidden>△</span>
+        <span aria-hidden>{flag.short}</span>
+        <span className="sr-only">{`${flag.full} ${flag.where}`}</span>
+      </span>
+    );
+  }
+  return (
+    <p className={`flex items-start gap-1.5 text-xs leading-relaxed text-ink-2 ${className}`}>
+      <span aria-hidden className="shrink-0">△</span>
+      <span className="min-w-0"><strong className="font-semibold text-ink">{flag.full}</strong> {flag.where}</span>
+    </p>
   );
 }
 

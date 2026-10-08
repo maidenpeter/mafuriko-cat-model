@@ -69,7 +69,7 @@ import { PARAM_LABELS, unusedForDepth } from "@/lib/export";
 import { fmtInt, fmtNum } from "@/lib/format";
 import { loadGeo, type GeoLayers } from "@/lib/geo/layers";
 import { assignPoints, wardAccumulation } from "@/lib/geo/spatial";
-import { annualChance, kes1, LOSS_MODE_LABELS, pct1, perMille, rpLabel, rpWithChance, type SourceKind } from "@/lib/labels";
+import { annualChance, kes1, LOSS_MODE_LABELS, pct1, perMille, PLACEHOLDER_RATE_LINE, rpLabel, rpWithChance, type SourceKind } from "@/lib/labels";
 import { STANDARD_RETURN_PERIODS } from "@/lib/model/financial";
 import type { TermsResult } from "@/lib/model/terms";
 import type { DriverId } from "@/lib/offer/drivers";
@@ -85,7 +85,7 @@ import { driverSeries, StackStrip } from "../charts/StackedBars";
 import { Waterfall } from "../charts/Waterfall";
 import { askForUpload } from "../steps/OfferStep";
 import { pointsOf } from "../steps/ResultsStep";
-import { Button, Card, Note, Segmented, StatusIcon, StepHeader } from "../ui";
+import { Button, Card, InsuredValueFlag, Note, PlaceholderBadge, Segmented, StatusIcon, StepHeader } from "../ui";
 import { WardMap } from "./WardMap";
 
 /** The steps the dashboard can send the reader to. dashboardStepId() in lib/dashboard gives each one's place in the walkthrough. */
@@ -277,7 +277,7 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
 
       {/* Six figures in one even row: three across where six do not fit, then two, then one. */}
       <div className="grid gap-4 @md:grid-cols-2 @3xl:grid-cols-3 @7xl:grid-cols-6">
-        <Figure className={SIX_ACROSS} label="Total insured value" value={kes1(result.totalTivKes)} sub="As written in the exposure file" source="synthetic" sourceText="Synthetic portfolio" />
+        <Figure className={SIX_ACROSS} label="Total insured value" value={kes1(result.totalTivKes)} sub={<>As written in the exposure file<InsuredValueFlag ratio={session.report.tivRatio?.median} className="mt-1.5" /></>} source="synthetic" sourceText="Synthetic portfolio" />
         <Figure
           className={SIX_ACROSS}
           label="Buildings insured"
@@ -665,7 +665,13 @@ function PricedOffer({ focus, decision, lossSource, assumptions }: { focus: Pric
             className={FOUR_ACROSS}
             label={premium.setBy === "minimum rate" ? "Flood rate, the minimum rate" : "Flood rate"}
             value={perMille(premium.floodRatePerMille)}
-            sub={`Flood premium ${kes1(premium.floodPremiumKes)} a year${premium.stated ? `. The offer's all-risks rate: ${perMille(premium.stated.ratePerMille)}` : ""}`}
+            sub={
+              <>
+                {`Flood premium ${kes1(premium.floodPremiumKes)} a year${premium.stated ? `. The offer's all-risks rate: ${perMille(premium.stated.ratePerMille)}` : ""}.`}
+                <span className="mt-1.5 block">{PLACEHOLDER_RATE_LINE}</span>
+                <span className="mt-1.5 block"><PlaceholderBadge /></span>
+              </>
+            }
             source="assumption"
             sourceText="Modelled loss by code, loadings assumed"
           />

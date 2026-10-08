@@ -1,0 +1,727 @@
+{
+ "startedAt": "2026-10-08T20:46:03.575Z",
+ "datasetName": "team_a_nairobi",
+ "profile": {
+  "dataset": "team_a_nairobi",
+  "hazard": {
+   "kind": "score",
+   "meaning": "0 to 1 relative flood susceptibility built from terrain and river proximity. Not a measured depth. The five tiers are nested cuts of one score: 'common' keeps the top 40% of cells, 'extreme' the top 5%, each rescaled to 0 to 1. The widest footprint ('common') stands for the rarest event.",
+   "scenarios": [
+    {
+     "id": "extreme",
+     "fixedReturnPeriodYears": null,
+     "tierSlope": 0.626,
+     "buildingsAffected": 32,
+     "shareOfInsuredValueAffected": 0.026,
+     "medianValueWhereAffected": 0.199,
+     "p90ValueWhereAffected": 0.49,
+     "highestValue": 0.497
+    },
+    {
+     "id": "severe",
+     "fixedReturnPeriodYears": null,
+     "tierSlope": 0.72,
+     "buildingsAffected": 51,
+     "shareOfInsuredValueAffected": 0.083,
+     "medianValueWhereAffected": 0.165,
+     "p90ValueWhereAffected": 0.488,
+     "highestValue": 0.563
+    },
+    {
+     "id": "moderate",
+     "fixedReturnPeriodYears": null,
+     "tierSlope": 0.827,
+     "buildingsAffected": 110,
+     "shareOfInsuredValueAffected": 0.188,
+     "medianValueWhereAffected": 0.117,
+     "p90ValueWhereAffected": 0.46,
+     "highestValue": 0.62
+    },
+    {
+     "id": "occasional",
+     "fixedReturnPeriodYears": null,
+     "tierSlope": 0.914,
+     "buildingsAffected": 174,
+     "shareOfInsuredValueAffected": 0.31,
+     "medianValueWhereAffected": 0.137,
+     "p90ValueWhereAffected": 0.434,
+     "highestValue": 0.656
+    },
+    {
+     "id": "common",
+     "fixedReturnPeriodYears": null,
+     "tierSlope": 1,
+     "buildingsAffected": 259,
+     "shareOfInsuredValueAffected": 0.493,
+     "medianValueWhereAffected": 0.144,
+     "p90ValueWhereAffected": 0.399,
+     "highestValue": 0.685
+    }
+   ],
+   "hotspotValidation": {
+    "namedFloodAreas": 24,
+    "flagged": 12,
+    "missed": [
+     "Donholm",
+     "Fedha",
+     "Madaraka",
+     "Lang'ata",
+     "Kawangware",
+     "Kangemi",
+     "Lavington",
+     "Westlands",
+     "Parklands",
+     "Kitisuru",
+     "Kileleshwa",
+     "Kibera"
+    ]
+   }
+  },
+  "portfolio": {
+   "synthetic": true,
+   "buildings": 600,
+   "totalInsuredValueKes": 63635075000,
+   "insuredValueOverDocumentedFormula": 10,
+   "byClass": [
+    {
+     "class": "informal_iron_sheet",
+     "buildings": 179,
+     "shareOfBuildings": 0.298,
+     "shareOfInsuredValue": 0.003,
+     "affectedInWidestScenario": 74
+    },
+    {
+     "class": "semi_permanent",
+     "buildings": 181,
+     "shareOfBuildings": 0.302,
+     "shareOfInsuredValue": 0.013,
+     "affectedInWidestScenario": 74
+    },
+    {
+     "class": "permanent_masonry",
+     "buildings": 156,
+     "shareOfBuildings": 0.26,
+     "shareOfInsuredValue": 0.133,
+     "affectedInWidestScenario": 66
+    },
+    {
+     "class": "concrete_rcc",
+     "buildings": 84,
+     "shareOfBuildings": 0.14,
+     "shareOfInsuredValue": 0.851,
+     "affectedInWidestScenario": 45
+    }
+   ]
+  },
+  "dataWarnings": [
+   {
+    "check": "Insured value equals floor area × cost per m²",
+    "status": "warn",
+    "detail": "Insured values are 10× floor area × cost per m² (range 9.97 to 10.05). The portfolio totals KES 63.6bn; the documented formula would give KES 6.4bn. Values are used as they are in the file."
+   },
+   {
+    "check": "Known flood areas flagged by the hazard layer",
+    "status": "warn",
+    "detail": "12 of 24 named flood areas are flagged. Missed: Donholm, Fedha, Madaraka, Lang'ata, Kawangware, Kangemi, Lavington, Westlands, Parklands, Kitisuru, Kileleshwa, Kibera."
+   }
+  ],
+  "model": {
+   "formulas": [
+    "depth_m = score × tier_slope × depthScaleM (score datasets only; tier_slope puts each tier's 0 to 1 score back on the widest tier's scale and is 1 for the widest)",
+    "damage_ratio = min( jrc_curve( depth_m × fragility[class] ), cap[class] )",
+    "building_loss = damage_ratio × insured_value",
+    "portfolio loss per scenario = sum of building losses; each scenario is placed at its return period to form the loss curve"
+   ],
+   "jrcCurve": {
+    "source": "Huizinga et al. (2017), JRC105688, Africa, residential buildings",
+    "depthsM": [
+     0,
+     0.5,
+     1,
+     1.5,
+     2,
+     3,
+     4,
+     5,
+     6
+    ],
+    "damage": [
+     0,
+     0.22,
+     0.38,
+     0.53,
+     0.64,
+     0.82,
+     0.9,
+     0.96,
+     1
+    ]
+   },
+   "allowedRanges": {
+    "depthScaleM": {
+     "min": 1,
+     "max": 6
+    },
+    "fragility": {
+     "min": 0.4,
+     "max": 2.5
+    },
+    "cap": {
+     "min": 0.6,
+     "max": 1
+    },
+    "returnPeriod": {
+     "min": 2,
+     "max": 1000
+    }
+   },
+   "referenceParameters": {
+    "depthScaleM": 4,
+    "fragility": {
+     "informal_iron_sheet": 1.5,
+     "semi_permanent": 1.2,
+     "permanent_masonry": 1,
+     "concrete_rcc": 0.7
+    },
+    "cap": {
+     "informal_iron_sheet": 0.95,
+     "semi_permanent": 0.9,
+     "permanent_masonry": 0.85,
+     "concrete_rcc": 0.8
+    },
+    "returnPeriods": {
+     "extreme": 10,
+     "severe": 25,
+     "moderate": 50,
+     "occasional": 100,
+     "common": 250
+    }
+   },
+   "referenceOutcome": {
+    "lossByScenario": [
+     {
+      "id": "extreme",
+      "returnPeriodYears": 10,
+      "lossShareOfInsuredValue": 0.006
+     },
+     {
+      "id": "severe",
+      "returnPeriodYears": 25,
+      "lossShareOfInsuredValue": 0.0116
+     },
+     {
+      "id": "moderate",
+      "returnPeriodYears": 50,
+      "lossShareOfInsuredValue": 0.0307
+     },
+     {
+      "id": "occasional",
+      "returnPeriodYears": 100,
+      "lossShareOfInsuredValue": 0.0563
+     },
+     {
+      "id": "common",
+      "returnPeriodYears": 250,
+      "lossShareOfInsuredValue": 0.0934
+     }
+    ],
+    "averageAnnualLossShareOfInsuredValue": 0.00221
+   }
+  }
+ },
+ "runs": {
+  "optimist": {
+   "role": "optimist",
+   "status": "done",
+   "model": "gpt-6-luna",
+   "ms": 13659,
+   "attempts": 1,
+   "usage": {
+    "promptTokens": 2773,
+    "outputTokens": 866,
+    "thinkingTokens": 309,
+    "finishReason": "stop"
+   },
+   "prompt": {
+    "system": "You are one member of a small panel setting the assumptions for a flood catastrophe model used by a reinsurer in Kenya.\n\nHow the work is divided:\n- You choose and justify assumptions. You never calculate or state a loss figure; code does all arithmetic.\n- Every value must sit inside the allowed range given in the input.\n- Every value needs its own reason: one or two plain sentences that point to something specific in the input (a number from the data profile, the JRC reference curve, or the hackathon brief). Do not give the same sentence for several parameters.\n- \"basis\" must be one of: \"jrc_reference\", \"data_profile\", \"brief\", \"judgement\". Use \"judgement\" when you have no evidence, and say so in the reason.\n- Be honest about what is unknown. The portfolio is synthetic. For score datasets the hazard is a proxy, not measured flooding.\n- Reply with one JSON object in exactly the shape requested. No markdown, no text outside the JSON.\n\nThe 14 parameters, by name:\n- depthScaleM\n- fragility.informal_iron_sheet\n- fragility.semi_permanent\n- fragility.permanent_masonry\n- fragility.concrete_rcc\n- cap.informal_iron_sheet\n- cap.semi_permanent\n- cap.permanent_masonry\n- cap.concrete_rcc\n- returnPeriods.extreme\n- returnPeriods.severe\n- returnPeriods.moderate\n- returnPeriods.occasional\n- returnPeriods.common\n\nWhat they mean:\n- depthScaleM: assumed flood depth in metres at the highest-scoring spot in the widest tier (the rarest event). Narrower tiers are scaled down by their tier slope, given in the data profile, so depth grows as the event gets rarer. Higher means deeper water everywhere.\n- fragility.<class>: multiplies depth before the JRC curve is read. Above 1 means the class is damaged as if the water were deeper.\n- cap.<class>: the highest share of a building's value that can be lost.\n- returnPeriods.<tier>: years assigned to each tier. They must rise strictly from \"extreme\" (narrowest footprint, most frequent) to \"common\" (widest footprint, rarest). Shorter return periods mean the same losses happen more often.\n\nYour role: the Optimist. Propose the least severe set of assumptions that a careful underwriter could still defend. You are not allowed to be careless: each lenient choice needs evidence. Where the evidence does not support leniency, stay near the reference value and say why.\n\nReply shape:\n{\n  \"stance\": one sentence summarising your position,\n  \"parameters\": [ exactly 14 entries, one for each parameter name above, in that order: { \"name\": string, \"reason\": string, \"basis\": string, \"value\": number } ]\n}",
+    "user": "Input:\n{\n \"dataProfile\": {\n  \"dataset\": \"team_a_nairobi\",\n  \"hazard\": {\n   \"kind\": \"score\",\n   \"meaning\": \"0 to 1 relative flood susceptibility built from terrain and river proximity. Not a measured depth. The five tiers are nested cuts of one score: 'common' keeps the top 40% of cells, 'extreme' the top 5%, each rescaled to 0 to 1. The widest footprint ('common') stands for the rarest event.\",\n   \"scenarios\": [\n    {\n     \"id\": \"extreme\",\n     \"fixedReturnPeriodYears\": null,\n     \"tierSlope\": 0.626,\n     \"buildingsAffected\": 32,\n     \"shareOfInsuredValueAffected\": 0.026,\n     \"medianValueWhereAffected\": 0.199,\n     \"p90ValueWhereAffected\": 0.49,\n     \"highestValue\": 0.497\n    },\n    {\n     \"id\": \"severe\",\n     \"fixedReturnPeriodYears\": null,\n     \"tierSlope\": 0.72,\n     \"buildingsAffected\": 51,\n     \"shareOfInsuredValueAffected\": 0.083,\n     \"medianValueWhereAffected\": 0.165,\n     \"p90ValueWhereAffected\": 0.488,\n     \"highestValue\": 0.563\n    },\n    {\n     \"id\": \"moderate\",\n     \"fixedReturnPeriodYears\": null,\n     \"tierSlope\": 0.827,\n     \"buildingsAffected\": 110,\n     \"shareOfInsuredValueAffected\": 0.188,\n     \"medianValueWhereAffected\": 0.117,\n     \"p90ValueWhereAffected\": 0.46,\n     \"highestValue\": 0.62\n    },\n    {\n     \"id\": \"occasional\",\n     \"fixedReturnPeriodYears\": null,\n     \"tierSlope\": 0.914,\n     \"buildingsAffected\": 174,\n     \"shareOfInsuredValueAffected\": 0.31,\n     \"medianValueWhereAffected\": 0.137,\n     \"p90ValueWhereAffected\": 0.434,\n     \"highestValue\": 0.656\n    },\n    {\n     \"id\": \"common\",\n     \"fixedReturnPeriodYears\": null,\n     \"tierSlope\": 1,\n     \"buildingsAffected\": 259,\n     \"shareOfInsuredValueAffected\": 0.493,\n     \"medianValueWhereAffected\": 0.144,\n     \"p90ValueWhereAffected\": 0.399,\n     \"highestValue\": 0.685\n    }\n   ],\n   \"hotspotValidation\": {\n    \"namedFloodAreas\": 24,\n    \"flagged\": 12,\n    \"missed\": [\n     \"Donholm\",\n     \"Fedha\",\n     \"Madaraka\",\n     \"Lang'ata\",\n     \"Kawangware\",\n     \"Kangemi\",\n     \"Lavington\",\n     \"Westlands\",\n     \"Parklands\",\n     \"Kitisuru\",\n     \"Kileleshwa\",\n     \"Kibera\"\n    ]\n   }\n  },\n  \"portfolio\": {\n   \"synthetic\": true,\n   \"buildings\": 600,\n   \"totalInsuredValueKes\": 63635075000,\n   \"insuredValueOverDocumentedFormula\": 10,\n   \"byClass\": [\n    {\n     \"class\": \"informal_iron_sheet\",\n     \"buildings\": 179,\n     \"shareOfBuildings\": 0.298,\n     \"shareOfInsuredValue\": 0.003,\n     \"affectedInWidestScenario\": 74\n    },\n    {\n     \"class\": \"semi_permanent\",\n     \"buildings\": 181,\n     \"shareOfBuildings\": 0.302,\n     \"shareOfInsuredValue\": 0.013,\n     \"affectedInWidestScenario\": 74\n    },\n    {\n     \"class\": \"permanent_masonry\",\n     \"buildings\": 156,\n     \"shareOfBuildings\": 0.26,\n     \"shareOfInsuredValue\": 0.133,\n     \"affectedInWidestScenario\": 66\n    },\n    {\n     \"class\": \"concrete_rcc\",\n     \"buildings\": 84,\n     \"shareOfBuildings\": 0.14,\n     \"shareOfInsuredValue\": 0.851,\n     \"affectedInWidestScenario\": 45\n    }\n   ]\n  },\n  \"dataWarnings\": [\n   {\n    \"check\": \"Insured value equals floor area × cost per m²\",\n    \"status\": \"warn\",\n    \"detail\": \"Insured values are 10× floor area × cost per m² (range 9.97 to 10.05). The portfolio totals KES 63.6bn; the documented formula would give KES 6.4bn. Values are used as they are in the file.\"\n   },\n   {\n    \"check\": \"Known flood areas flagged by the hazard layer\",\n    \"status\": \"warn\",\n    \"detail\": \"12 of 24 named flood areas are flagged. Missed: Donholm, Fedha, Madaraka, Lang'ata, Kawangware, Kangemi, Lavington, Westlands, Parklands, Kitisuru, Kileleshwa, Kibera.\"\n   }\n  ],\n  \"model\": {\n   \"formulas\": [\n    \"depth_m = score × tier_slope × depthScaleM (score datasets only; tier_slope puts each tier's 0 to 1 score back on the widest tier's scale and is 1 for the widest)\",\n    \"damage_ratio = min( jrc_curve( depth_m × fragility[class] ), cap[class] )\",\n    \"building_loss = damage_ratio × insured_value\",\n    \"portfolio loss per scenario = sum of building losses; each scenario is placed at its return period to form the loss curve\"\n   ],\n   \"jrcCurve\": {\n    \"source\": \"Huizinga et al. (2017), JRC105688, Africa, residential buildings\",\n    \"depthsM\": [\n     0,\n     0.5,\n     1,\n     1.5,\n     2,\n     3,\n     4,\n     5,\n     6\n    ],\n    \"damage\": [\n     0,\n     0.22,\n     0.38,\n     0.53,\n     0.64,\n     0.82,\n     0.9,\n     0.96,\n     1\n    ]\n   },\n   \"allowedRanges\": {\n    \"depthScaleM\": {\n     \"min\": 1,\n     \"max\": 6\n    },\n    \"fragility\": {\n     \"min\": 0.4,\n     \"max\": 2.5\n    },\n    \"cap\": {\n     \"min\": 0.6,\n     \"max\": 1\n    },\n    \"returnPeriod\": {\n     \"min\": 2,\n     \"max\": 1000\n    }\n   },\n   \"referenceParameters\": {\n    \"depthScaleM\": 4,\n    \"fragility\": {\n     \"informal_iron_sheet\": 1.5,\n     \"semi_permanent\": 1.2,\n     \"permanent_masonry\": 1,\n     \"concrete_rcc\": 0.7\n    },\n    \"cap\": {\n     \"informal_iron_sheet\": 0.95,\n     \"semi_permanent\": 0.9,\n     \"permanent_masonry\": 0.85,\n     \"concrete_rcc\": 0.8\n    },\n    \"returnPeriods\": {\n     \"extreme\": 10,\n     \"severe\": 25,\n     \"moderate\": 50,\n     \"occasional\": 100,\n     \"common\": 250\n    }\n   },\n   \"referenceOutcome\": {\n    \"lossByScenario\": [\n     {\n      \"id\": \"extreme\",\n      \"returnPeriodYears\": 10,\n      \"lossShareOfInsuredValue\": 0.006\n     },\n     {\n      \"id\": \"severe\",\n      \"returnPeriodYears\": 25,\n      \"lossShareOfInsuredValue\": 0.0116\n     },\n     {\n      \"id\": \"moderate\",\n      \"returnPeriodYears\": 50,\n      \"lossShareOfInsuredValue\": 0.0307\n     },\n     {\n      \"id\": \"occasional\",\n      \"returnPeriodYears\": 100,\n      \"lossShareOfInsuredValue\": 0.0563\n     },\n     {\n      \"id\": \"common\",\n      \"returnPeriodYears\": 250,\n      \"lossShareOfInsuredValue\": 0.0934\n     }\n    ],\n    \"averageAnnualLossShareOfInsuredValue\": 0.00221\n   }\n  }\n },\n \"lossBasis\": \"The portfolio's losses in this run count three loss drivers at every building, not only the depth at its point: surrounding flooding (the highest map depth within a buffer around the building), drainage ponding, and drain overload (a shallow depth once the event is rarer than the drains were designed for, so the return periods of the tiers decide which events overload them). The portfolio has no basement data, so basement ingress and business interruption are not counted for it. Each side's outcome shown to the Chair is on this basis.\"\n}"
+   },
+   "raw": "{\"stance\":\"I take a restrained optimistic position: the susceptibility score is not measured flood depth, so I use a lower depth assumption, but retain near-reference vulnerability and return-period assumptions because the profile does not calibrate either.\",\"parameters\":[{\"name\":\"depthScaleM\",\"reason\":\"The hazard is a 0–1 susceptibility proxy rather than measured depth, so the reference 4 m is not directly supported; 2 m is a cautious lower assumption, though 12 of 24 named flood areas were missed, so the score is not treated as proof of negligible risk.\",\"basis\":\"data_profile\",\"value\":2},{\"name\":\"fragility.informal_iron_sheet\",\"reason\":\"The reference multiplier is 1.5, and 179 buildings are informal iron-sheet construction; I reduce it only modestly to 1.3 because the profile gives no observed damage evidence to support a larger reduction.\",\"basis\":\"data_profile\",\"value\":1.3},{\"name\":\"fragility.semi_permanent\",\"reason\":\"The reference multiplier is 1.2 and semi-permanent buildings make up 181 of 600 buildings; I use 1.1 as a limited reduction, since no class-specific flood performance is reported.\",\"basis\":\"data_profile\",\"value\":1.1},{\"name\":\"fragility.permanent_masonry\",\"reason\":\"The JRC reference multiplier is 1.0 for this class, and the profile provides no observed class damage to justify a lower value; I therefore retain the reference.\",\"basis\":\"jrc_reference\",\"value\":1},{\"name\":\"fragility.concrete_rcc\",\"reason\":\"The JRC reference multiplier is already 0.7 for concrete RCC, the least vulnerable reference class; with no portfolio damage observations, I keep it unchanged.\",\"basis\":\"jrc_reference\",\"value\":0.7},{\"name\":\"cap.informal_iron_sheet\",\"reason\":\"The reference cap is 0.95, and the profile supplies no evidence that losses to informal iron-sheet buildings are bounded at a lower share; retain the reference rather than assume extra protection.\",\"basis\":\"jrc_reference\",\"value\":0.95},{\"name\":\"cap.semi_permanent\",\"reason\":\"The JRC reference cap is 0.9, and there is no observed loss information by construction class to defend lowering it further.\",\"basis\":\"jrc_reference\",\"value\":0.9},{\"name\":\"cap.permanent_masonry\",\"reason\":\"The reference cap is 0.85; the portfolio identifies 156 masonry buildings but provides no evidence about their maximum flood loss, so I retain that assumption.\",\"basis\":\"jrc_reference\",\"value\":0.85},{\"name\":\"cap.concrete_rcc\",\"reason\":\"The JRC reference cap is 0.8, and although concrete RCC represents 85.1% of insured value, the profile contains no loss evidence supporting a lower cap.\",\"basis\":\"data_profile\",\"value\":0.8},{\"name\":\"returnPeriods.extreme\",\"reason\":\"The reference assigns the narrowest tier 10 years. The score tiers are nested but have no measured event-frequency calibration, so I retain that reference rather than claim a less frequent event.\",\"basis\":\"jrc_reference\",\"value\":10},{\"name\":\"returnPeriods.severe\",\"reason\":\"The reference assigns the severe tier 25 years, while the profile provides no fixed return period for it; retaining 25 years avoids inventing a more favorable frequency.\",\"basis\":\"jrc_reference\",\"value\":25},{\"name\":\"returnPeriods.moderate\",\"reason\":\"The reference assigns the moderate tier 50 years and the score profile gives no independent frequency evidence, so I keep the reference assignment.\",\"basis\":\"jrc_reference\",\"value\":50},{\"name\":\"returnPeriods.occasional\",\"reason\":\"The reference value is 100 years; the profile specifies this as a nested score cut, not a calibrated flood event, so a longer period would lack evidence.\",\"basis\":\"jrc_reference\",\"value\":100},{\"name\":\"returnPeriods.common\",\"reason\":\"The widest tier keeps the top 40% of cells and is described as the rarest event, but its return period is not empirically calibrated; I retain the 250-year reference rather than extend it without evidence.\",\"basis\":\"data_profile\",\"value\":250}]}",
+   "output": {
+    "depthScaleM": {
+     "value": 2,
+     "reason": "The hazard is a 0–1 susceptibility proxy rather than measured depth, so the reference 4 m is not directly supported; 2 m is a cautious lower assumption, though 12 of 24 named flood areas were missed, so the score is not treated as proof of negligible risk.",
+     "basis": "data_profile"
+    },
+    "fragility": {
+     "informal_iron_sheet": {
+      "value": 1.3,
+      "reason": "The reference multiplier is 1.5, and 179 buildings are informal iron-sheet construction; I reduce it only modestly to 1.3 because the profile gives no observed damage evidence to support a larger reduction.",
+      "basis": "data_profile"
+     },
+     "semi_permanent": {
+      "value": 1.1,
+      "reason": "The reference multiplier is 1.2 and semi-permanent buildings make up 181 of 600 buildings; I use 1.1 as a limited reduction, since no class-specific flood performance is reported.",
+      "basis": "data_profile"
+     },
+     "permanent_masonry": {
+      "value": 1,
+      "reason": "The JRC reference multiplier is 1.0 for this class, and the profile provides no observed class damage to justify a lower value; I therefore retain the reference.",
+      "basis": "jrc_reference"
+     },
+     "concrete_rcc": {
+      "value": 0.7,
+      "reason": "The JRC reference multiplier is already 0.7 for concrete RCC, the least vulnerable reference class; with no portfolio damage observations, I keep it unchanged.",
+      "basis": "jrc_reference"
+     }
+    },
+    "cap": {
+     "informal_iron_sheet": {
+      "value": 0.95,
+      "reason": "The reference cap is 0.95, and the profile supplies no evidence that losses to informal iron-sheet buildings are bounded at a lower share; retain the reference rather than assume extra protection.",
+      "basis": "jrc_reference"
+     },
+     "semi_permanent": {
+      "value": 0.9,
+      "reason": "The JRC reference cap is 0.9, and there is no observed loss information by construction class to defend lowering it further.",
+      "basis": "jrc_reference"
+     },
+     "permanent_masonry": {
+      "value": 0.85,
+      "reason": "The reference cap is 0.85; the portfolio identifies 156 masonry buildings but provides no evidence about their maximum flood loss, so I retain that assumption.",
+      "basis": "jrc_reference"
+     },
+     "concrete_rcc": {
+      "value": 0.8,
+      "reason": "The JRC reference cap is 0.8, and although concrete RCC represents 85.1% of insured value, the profile contains no loss evidence supporting a lower cap.",
+      "basis": "data_profile"
+     }
+    },
+    "returnPeriods": {
+     "extreme": {
+      "value": 10,
+      "reason": "The reference assigns the narrowest tier 10 years. The score tiers are nested but have no measured event-frequency calibration, so I retain that reference rather than claim a less frequent event.",
+      "basis": "jrc_reference"
+     },
+     "severe": {
+      "value": 25,
+      "reason": "The reference assigns the severe tier 25 years, while the profile provides no fixed return period for it; retaining 25 years avoids inventing a more favorable frequency.",
+      "basis": "jrc_reference"
+     },
+     "moderate": {
+      "value": 50,
+      "reason": "The reference assigns the moderate tier 50 years and the score profile gives no independent frequency evidence, so I keep the reference assignment.",
+      "basis": "jrc_reference"
+     },
+     "occasional": {
+      "value": 100,
+      "reason": "The reference value is 100 years; the profile specifies this as a nested score cut, not a calibrated flood event, so a longer period would lack evidence.",
+      "basis": "jrc_reference"
+     },
+     "common": {
+      "value": 250,
+      "reason": "The widest tier keeps the top 40% of cells and is described as the rarest event, but its return period is not empirically calibrated; I retain the 250-year reference rather than extend it without evidence.",
+      "basis": "data_profile"
+     }
+    },
+    "stance": "I take a restrained optimistic position: the susceptibility score is not measured flood depth, so I use a lower depth assumption, but retain near-reference vulnerability and return-period assumptions because the profile does not calibrate either."
+   }
+  },
+  "cautious": {
+   "role": "cautious",
+   "status": "done",
+   "model": "gpt-6-luna",
+   "ms": 9372,
+   "attempts": 1,
+   "usage": {
+    "promptTokens": 2784,
+    "outputTokens": 870,
+    "thinkingTokens": 0,
+    "finishReason": "stop"
+   },
+   "prompt": {
+    "system": "You are one member of a small panel setting the assumptions for a flood catastrophe model used by a reinsurer in Kenya.\n\nHow the work is divided:\n- You choose and justify assumptions. You never calculate or state a loss figure; code does all arithmetic.\n- Every value must sit inside the allowed range given in the input.\n- Every value needs its own reason: one or two plain sentences that point to something specific in the input (a number from the data profile, the JRC reference curve, or the hackathon brief). Do not give the same sentence for several parameters.\n- \"basis\" must be one of: \"jrc_reference\", \"data_profile\", \"brief\", \"judgement\". Use \"judgement\" when you have no evidence, and say so in the reason.\n- Be honest about what is unknown. The portfolio is synthetic. For score datasets the hazard is a proxy, not measured flooding.\n- Reply with one JSON object in exactly the shape requested. No markdown, no text outside the JSON.\n\nThe 14 parameters, by name:\n- depthScaleM\n- fragility.informal_iron_sheet\n- fragility.semi_permanent\n- fragility.permanent_masonry\n- fragility.concrete_rcc\n- cap.informal_iron_sheet\n- cap.semi_permanent\n- cap.permanent_masonry\n- cap.concrete_rcc\n- returnPeriods.extreme\n- returnPeriods.severe\n- returnPeriods.moderate\n- returnPeriods.occasional\n- returnPeriods.common\n\nWhat they mean:\n- depthScaleM: assumed flood depth in metres at the highest-scoring spot in the widest tier (the rarest event). Narrower tiers are scaled down by their tier slope, given in the data profile, so depth grows as the event gets rarer. Higher means deeper water everywhere.\n- fragility.<class>: multiplies depth before the JRC curve is read. Above 1 means the class is damaged as if the water were deeper.\n- cap.<class>: the highest share of a building's value that can be lost.\n- returnPeriods.<tier>: years assigned to each tier. They must rise strictly from \"extreme\" (narrowest footprint, most frequent) to \"common\" (widest footprint, rarest). Shorter return periods mean the same losses happen more often.\n\nYour role: the Cautious voice. Propose the most severe set of assumptions that is still credible, the view of someone who must not be surprised by a bad year. You are not allowed to be alarmist: each severe choice needs evidence. Where the evidence does not support severity, stay near the reference value and say why.\n\nReply shape:\n{\n  \"stance\": one sentence summarising your position,\n  \"parameters\": [ exactly 14 entries, one for each parameter name above, in that order: { \"name\": string, \"reason\": string, \"basis\": string, \"value\": number } ]\n}",
+    "user": "Input:\n{\n \"dataProfile\": {\n  \"dataset\": \"team_a_nairobi\",\n  \"hazard\": {\n   \"kind\": \"score\",\n   \"meaning\": \"0 to 1 relative flood susceptibility built from terrain and river proximity. Not a measured depth. The five tiers are nested cuts of one score: 'common' keeps the top 40% of cells, 'extreme' the top 5%, each rescaled to 0 to 1. The widest footprint ('common') stands for the rarest event.\",\n   \"scenarios\": [\n    {\n     \"id\": \"extreme\",\n     \"fixedReturnPeriodYears\": null,\n     \"tierSlope\": 0.626,\n     \"buildingsAffected\": 32,\n     \"shareOfInsuredValueAffected\": 0.026,\n     \"medianValueWhereAffected\": 0.199,\n     \"p90ValueWhereAffected\": 0.49,\n     \"highestValue\": 0.497\n    },\n    {\n     \"id\": \"severe\",\n     \"fixedReturnPeriodYears\": null,\n     \"tierSlope\": 0.72,\n     \"buildingsAffected\": 51,\n     \"shareOfInsuredValueAffected\": 0.083,\n     \"medianValueWhereAffected\": 0.165,\n     \"p90ValueWhereAffected\": 0.488,\n     \"highestValue\": 0.563\n    },\n    {\n     \"id\": \"moderate\",\n     \"fixedReturnPeriodYears\": null,\n     \"tierSlope\": 0.827,\n     \"buildingsAffected\": 110,\n     \"shareOfInsuredValueAffected\": 0.188,\n     \"medianValueWhereAffected\": 0.117,\n     \"p90ValueWhereAffected\": 0.46,\n     \"highestValue\": 0.62\n    },\n    {\n     \"id\": \"occasional\",\n     \"fixedReturnPeriodYears\": null,\n     \"tierSlope\": 0.914,\n     \"buildingsAffected\": 174,\n     \"shareOfInsuredValueAffected\": 0.31,\n     \"medianValueWhereAffected\": 0.137,\n     \"p90ValueWhereAffected\": 0.434,\n     \"highestValue\": 0.656\n    },\n    {\n     \"id\": \"common\",\n     \"fixedReturnPeriodYears\": null,\n     \"tierSlope\": 1,\n     \"buildingsAffected\": 259,\n     \"shareOfInsuredValueAffected\": 0.493,\n     \"medianValueWhereAffected\": 0.144,\n     \"p90ValueWhereAffected\": 0.399,\n     \"highestValue\": 0.685\n    }\n   ],\n   \"hotspotValidation\": {\n    \"namedFloodAreas\": 24,\n    \"flagged\": 12,\n    \"missed\": [\n     \"Donholm\",\n     \"Fedha\",\n     \"Madaraka\",\n     \"Lang'ata\",\n     \"Kawangware\",\n     \"Kangemi\",\n     \"Lavington\",\n     \"Westlands\",\n     \"Parklands\",\n     \"Kitisuru\",\n     \"Kileleshwa\",\n     \"Kibera\"\n    ]\n   }\n  },\n  \"portfolio\": {\n   \"synthetic\": true,\n   \"buildings\": 600,\n   \"totalInsuredValueKes\": 63635075000,\n   \"insuredValueOverDocumentedFormula\": 10,\n   \"byClass\": [\n    {\n     \"class\": \"informal_iron_sheet\",\n     \"buildings\": 179,\n     \"shareOfBuildings\": 0.298,\n     \"shareOfInsuredValue\": 0.003,\n     \"affectedInWidestScenario\": 74\n    },\n    {\n     \"class\": \"semi_permanent\",\n     \"buildings\": 181,\n     \"shareOfBuildings\": 0.302,\n     \"shareOfInsuredValue\": 0.013,\n     \"affectedInWidestScenario\": 74\n    },\n    {\n     \"class\": \"permanent_masonry\",\n     \"buildings\": 156,\n     \"shareOfBuildings\": 0.26,\n     \"shareOfInsuredValue\": 0.133,\n     \"affectedInWidestScenario\": 66\n    },\n    {\n     \"class\": \"concrete_rcc\",\n     \"buildings\": 84,\n     \"shareOfBuildings\": 0.14,\n     \"shareOfInsuredValue\": 0.851,\n     \"affectedInWidestScenario\": 45\n    }\n   ]\n  },\n  \"dataWarnings\": [\n   {\n    \"check\": \"Insured value equals floor area × cost per m²\",\n    \"status\": \"warn\",\n    \"detail\": \"Insured values are 10× floor area × cost per m² (range 9.97 to 10.05). The portfolio totals KES 63.6bn; the documented formula would give KES 6.4bn. Values are used as they are in the file.\"\n   },\n   {\n    \"check\": \"Known flood areas flagged by the hazard layer\",\n    \"status\": \"warn\",\n    \"detail\": \"12 of 24 named flood areas are flagged. Missed: Donholm, Fedha, Madaraka, Lang'ata, Kawangware, Kangemi, Lavington, Westlands, Parklands, Kitisuru, Kileleshwa, Kibera.\"\n   }\n  ],\n  \"model\": {\n   \"formulas\": [\n    \"depth_m = score × tier_slope × depthScaleM (score datasets only; tier_slope puts each tier's 0 to 1 score back on the widest tier's scale and is 1 for the widest)\",\n    \"damage_ratio = min( jrc_curve( depth_m × fragility[class] ), cap[class] )\",\n    \"building_loss = damage_ratio × insured_value\",\n    \"portfolio loss per scenario = sum of building losses; each scenario is placed at its return period to form the loss curve\"\n   ],\n   \"jrcCurve\": {\n    \"source\": \"Huizinga et al. (2017), JRC105688, Africa, residential buildings\",\n    \"depthsM\": [\n     0,\n     0.5,\n     1,\n     1.5,\n     2,\n     3,\n     4,\n     5,\n     6\n    ],\n    \"damage\": [\n     0,\n     0.22,\n     0.38,\n     0.53,\n     0.64,\n     0.82,\n     0.9,\n     0.96,\n     1\n    ]\n   },\n   \"allowedRanges\": {\n    \"depthScaleM\": {\n     \"min\": 1,\n     \"max\": 6\n    },\n    \"fragility\": {\n     \"min\": 0.4,\n     \"max\": 2.5\n    },\n    \"cap\": {\n     \"min\": 0.6,\n     \"max\": 1\n    },\n    \"returnPeriod\": {\n     \"min\": 2,\n     \"max\": 1000\n    }\n   },\n   \"referenceParameters\": {\n    \"depthScaleM\": 4,\n    \"fragility\": {\n     \"informal_iron_sheet\": 1.5,\n     \"semi_permanent\": 1.2,\n     \"permanent_masonry\": 1,\n     \"concrete_rcc\": 0.7\n    },\n    \"cap\": {\n     \"informal_iron_sheet\": 0.95,\n     \"semi_permanent\": 0.9,\n     \"permanent_masonry\": 0.85,\n     \"concrete_rcc\": 0.8\n    },\n    \"returnPeriods\": {\n     \"extreme\": 10,\n     \"severe\": 25,\n     \"moderate\": 50,\n     \"occasional\": 100,\n     \"common\": 250\n    }\n   },\n   \"referenceOutcome\": {\n    \"lossByScenario\": [\n     {\n      \"id\": \"extreme\",\n      \"returnPeriodYears\": 10,\n      \"lossShareOfInsuredValue\": 0.006\n     },\n     {\n      \"id\": \"severe\",\n      \"returnPeriodYears\": 25,\n      \"lossShareOfInsuredValue\": 0.0116\n     },\n     {\n      \"id\": \"moderate\",\n      \"returnPeriodYears\": 50,\n      \"lossShareOfInsuredValue\": 0.0307\n     },\n     {\n      \"id\": \"occasional\",\n      \"returnPeriodYears\": 100,\n      \"lossShareOfInsuredValue\": 0.0563\n     },\n     {\n      \"id\": \"common\",\n      \"returnPeriodYears\": 250,\n      \"lossShareOfInsuredValue\": 0.0934\n     }\n    ],\n    \"averageAnnualLossShareOfInsuredValue\": 0.00221\n   }\n  }\n },\n \"lossBasis\": \"The portfolio's losses in this run count three loss drivers at every building, not only the depth at its point: surrounding flooding (the highest map depth within a buffer around the building), drainage ponding, and drain overload (a shallow depth once the event is rarer than the drains were designed for, so the return periods of the tiers decide which events overload them). The portfolio has no basement data, so basement ingress and business interruption are not counted for it. Each side's outcome shown to the Chair is on this basis.\"\n}"
+   },
+   "raw": "{\"stance\":\"I take a cautious but evidence-bounded view: use the high end of the depth range given the missed flood-area flags, retain the JRC class ordering, and avoid treating the synthetic susceptibility scores as measured flood depths.\",\"parameters\":[{\"name\":\"depthScaleM\",\"reason\":\"The hazard is a relative susceptibility score, not measured depth, so its conversion is uncertain; the layer flags only 12 of 24 named flood areas, supporting a high-end depth assumption without exceeding the allowed range.\",\"basis\":\"data_profile\",\"value\":6},{\"name\":\"fragility.informal_iron_sheet\",\"reason\":\"The reference fragility is already 1.5 for iron-sheet construction, reflecting greater vulnerability; the profile shows 179 such buildings, but gives no evidence to justify moving further from the reference.\",\"basis\":\"jrc_reference\",\"value\":1.5},{\"name\":\"fragility.semi_permanent\",\"reason\":\"The reference assigns semi-permanent buildings fragility 1.2, between iron-sheet and masonry; the profile identifies 181 buildings but provides no class-specific flood-damage evidence for increasing it.\",\"basis\":\"jrc_reference\",\"value\":1.2},{\"name\":\"fragility.permanent_masonry\",\"reason\":\"The JRC-based reference uses 1.0 for permanent masonry, and the profile gives no evidence that this class warrants a higher multiplier.\",\"basis\":\"jrc_reference\",\"value\":1},{\"name\":\"fragility.concrete_rcc\",\"reason\":\"The reference uses 0.7 for RCC, consistent with lower fragility than the other classes; although RCC accounts for 85.1% of insured value, the profile supplies no evidence to override that class ordering.\",\"basis\":\"jrc_reference\",\"value\":0.7},{\"name\":\"cap.informal_iron_sheet\",\"reason\":\"The reference cap is 0.95, already allowing nearly all value to be lost; the profile's 0.3% insured-value share gives no support for raising it to total loss.\",\"basis\":\"jrc_reference\",\"value\":0.95},{\"name\":\"cap.semi_permanent\",\"reason\":\"The reference cap of 0.9 allows severe damage while stopping short of total loss; the portfolio profile contains no evidence to support a more severe cap.\",\"basis\":\"jrc_reference\",\"value\":0.9},{\"name\":\"cap.permanent_masonry\",\"reason\":\"The reference cap is 0.85, and the profile's 13.3% insured-value share for masonry does not establish a basis for increasing the assumed maximum damage.\",\"basis\":\"jrc_reference\",\"value\":0.85},{\"name\":\"cap.concrete_rcc\",\"reason\":\"The reference cap of 0.8 reflects a lower maximum loss for RCC; its 85.1% share of insured value makes this material, but does not itself show that a higher cap is credible.\",\"basis\":\"jrc_reference\",\"value\":0.8},{\"name\":\"returnPeriods.extreme\",\"reason\":\"The 5%-of-cells extreme tier is the narrowest footprint, but the score data have no calibrated recurrence; retain the reference 10-year assignment rather than infer a shorter interval.\",\"basis\":\"jrc_reference\",\"value\":10},{\"name\":\"returnPeriods.severe\",\"reason\":\"The severe tier affects 51 buildings and 8.3% of insured value, but these are nested susceptibility cuts without measured event frequencies; retain the reference 25 years.\",\"basis\":\"jrc_reference\",\"value\":25},{\"name\":\"returnPeriods.moderate\",\"reason\":\"The moderate tier affects 110 buildings and 18.8% of insured value, yet no return-period calibration is supplied; retain the reference 50 years.\",\"basis\":\"jrc_reference\",\"value\":50},{\"name\":\"returnPeriods.occasional\",\"reason\":\"The occasional tier affects 174 buildings and 31.0% of insured value, but tier size does not establish annual frequency; retain the reference 100 years.\",\"basis\":\"jrc_reference\",\"value\":100},{\"name\":\"returnPeriods.common\",\"reason\":\"The widest common tier keeps the top 40% of cells and is defined as the rarest event; its frequency remains uncalibrated, so retain the reference 250 years rather than assign a shorter interval.\",\"basis\":\"data_profile\",\"value\":250}]}",
+   "output": {
+    "depthScaleM": {
+     "value": 6,
+     "reason": "The hazard is a relative susceptibility score, not measured depth, so its conversion is uncertain; the layer flags only 12 of 24 named flood areas, supporting a high-end depth assumption without exceeding the allowed range.",
+     "basis": "data_profile"
+    },
+    "fragility": {
+     "informal_iron_sheet": {
+      "value": 1.5,
+      "reason": "The reference fragility is already 1.5 for iron-sheet construction, reflecting greater vulnerability; the profile shows 179 such buildings, but gives no evidence to justify moving further from the reference.",
+      "basis": "jrc_reference"
+     },
+     "semi_permanent": {
+      "value": 1.2,
+      "reason": "The reference assigns semi-permanent buildings fragility 1.2, between iron-sheet and masonry; the profile identifies 181 buildings but provides no class-specific flood-damage evidence for increasing it.",
+      "basis": "jrc_reference"
+     },
+     "permanent_masonry": {
+      "value": 1,
+      "reason": "The JRC-based reference uses 1.0 for permanent masonry, and the profile gives no evidence that this class warrants a higher multiplier.",
+      "basis": "jrc_reference"
+     },
+     "concrete_rcc": {
+      "value": 0.7,
+      "reason": "The reference uses 0.7 for RCC, consistent with lower fragility than the other classes; although RCC accounts for 85.1% of insured value, the profile supplies no evidence to override that class ordering.",
+      "basis": "jrc_reference"
+     }
+    },
+    "cap": {
+     "informal_iron_sheet": {
+      "value": 0.95,
+      "reason": "The reference cap is 0.95, already allowing nearly all value to be lost; the profile's 0.3% insured-value share gives no support for raising it to total loss.",
+      "basis": "jrc_reference"
+     },
+     "semi_permanent": {
+      "value": 0.9,
+      "reason": "The reference cap of 0.9 allows severe damage while stopping short of total loss; the portfolio profile contains no evidence to support a more severe cap.",
+      "basis": "jrc_reference"
+     },
+     "permanent_masonry": {
+      "value": 0.85,
+      "reason": "The reference cap is 0.85, and the profile's 13.3% insured-value share for masonry does not establish a basis for increasing the assumed maximum damage.",
+      "basis": "jrc_reference"
+     },
+     "concrete_rcc": {
+      "value": 0.8,
+      "reason": "The reference cap of 0.8 reflects a lower maximum loss for RCC; its 85.1% share of insured value makes this material, but does not itself show that a higher cap is credible.",
+      "basis": "jrc_reference"
+     }
+    },
+    "returnPeriods": {
+     "extreme": {
+      "value": 10,
+      "reason": "The 5%-of-cells extreme tier is the narrowest footprint, but the score data have no calibrated recurrence; retain the reference 10-year assignment rather than infer a shorter interval.",
+      "basis": "jrc_reference"
+     },
+     "severe": {
+      "value": 25,
+      "reason": "The severe tier affects 51 buildings and 8.3% of insured value, but these are nested susceptibility cuts without measured event frequencies; retain the reference 25 years.",
+      "basis": "jrc_reference"
+     },
+     "moderate": {
+      "value": 50,
+      "reason": "The moderate tier affects 110 buildings and 18.8% of insured value, yet no return-period calibration is supplied; retain the reference 50 years.",
+      "basis": "jrc_reference"
+     },
+     "occasional": {
+      "value": 100,
+      "reason": "The occasional tier affects 174 buildings and 31.0% of insured value, but tier size does not establish annual frequency; retain the reference 100 years.",
+      "basis": "jrc_reference"
+     },
+     "common": {
+      "value": 250,
+      "reason": "The widest common tier keeps the top 40% of cells and is defined as the rarest event; its frequency remains uncalibrated, so retain the reference 250 years rather than assign a shorter interval.",
+      "basis": "data_profile"
+     }
+    },
+    "stance": "I take a cautious but evidence-bounded view: use the high end of the depth range given the missed flood-area flags, retain the JRC class ordering, and avoid treating the synthetic susceptibility scores as measured flood depths."
+   }
+  },
+  "critic": {
+   "role": "critic",
+   "status": "done",
+   "model": "gpt-6-luna",
+   "ms": 13580,
+   "attempts": 1,
+   "usage": {
+    "promptTokens": 2805,
+    "outputTokens": 1129,
+    "thinkingTokens": 0,
+    "finishReason": "stop"
+   },
+   "prompt": {
+    "system": "You are one member of a small panel setting the assumptions for a flood catastrophe model used by a reinsurer in Kenya.\n\nHow the work is divided:\n- You choose and justify assumptions. You never calculate or state a loss figure; code does all arithmetic.\n- Every value must sit inside the allowed range given in the input.\n- Every value needs its own reason: one or two plain sentences that point to something specific in the input (a number from the data profile, the JRC reference curve, or the hackathon brief). Do not give the same sentence for several parameters.\n- \"basis\" must be one of: \"jrc_reference\", \"data_profile\", \"brief\", \"judgement\". Use \"judgement\" when you have no evidence, and say so in the reason.\n- Be honest about what is unknown. The portfolio is synthetic. For score datasets the hazard is a proxy, not measured flooding.\n- Reply with one JSON object in exactly the shape requested. No markdown, no text outside the JSON.\n\nThe 14 parameters, by name:\n- depthScaleM\n- fragility.informal_iron_sheet\n- fragility.semi_permanent\n- fragility.permanent_masonry\n- fragility.concrete_rcc\n- cap.informal_iron_sheet\n- cap.semi_permanent\n- cap.permanent_masonry\n- cap.concrete_rcc\n- returnPeriods.extreme\n- returnPeriods.severe\n- returnPeriods.moderate\n- returnPeriods.occasional\n- returnPeriods.common\n\nWhat they mean:\n- depthScaleM: assumed flood depth in metres at the highest-scoring spot in the widest tier (the rarest event). Narrower tiers are scaled down by their tier slope, given in the data profile, so depth grows as the event gets rarer. Higher means deeper water everywhere.\n- fragility.<class>: multiplies depth before the JRC curve is read. Above 1 means the class is damaged as if the water were deeper.\n- cap.<class>: the highest share of a building's value that can be lost.\n- returnPeriods.<tier>: years assigned to each tier. They must rise strictly from \"extreme\" (narrowest footprint, most frequent) to \"common\" (widest footprint, rarest). Shorter return periods mean the same losses happen more often.\n\nYour role: the Critic. You do not propose parameters. You audit the data and the reference assumptions and raise the challenges a sceptical reviewer would raise before trusting any result. Look at the data warnings, how concentrated the insured value is, how much of the score range is actually used, what the hotspot validation says about the hazard layer, and whether the reference parameters are justified by anything.\n\nRaise between 3 and 6 challenges, most important first. Each must be specific to this data, and each recommendation must be something the panel can act on by choosing parameters or by stating a limitation.\n\nReply shape:\n{\n  \"summary\": two sentences on how far this model's output can be trusted,\n  \"challenges\": [\n    { \"id\": \"C1\", \"title\": short title, \"detail\": what is wrong or uncertain and the evidence, \"severity\": \"high\" | \"medium\" | \"low\", \"affects\": [parameter names, or \"data\", \"hazard\"], \"recommendation\": what to do about it }\n  ]\n}",
+    "user": "Input:\n{\n \"dataProfile\": {\n  \"dataset\": \"team_a_nairobi\",\n  \"hazard\": {\n   \"kind\": \"score\",\n   \"meaning\": \"0 to 1 relative flood susceptibility built from terrain and river proximity. Not a measured depth. The five tiers are nested cuts of one score: 'common' keeps the top 40% of cells, 'extreme' the top 5%, each rescaled to 0 to 1. The widest footprint ('common') stands for the rarest event.\",\n   \"scenarios\": [\n    {\n     \"id\": \"extreme\",\n     \"fixedReturnPeriodYears\": null,\n     \"tierSlope\": 0.626,\n     \"buildingsAffected\": 32,\n     \"shareOfInsuredValueAffected\": 0.026,\n     \"medianValueWhereAffected\": 0.199,\n     \"p90ValueWhereAffected\": 0.49,\n     \"highestValue\": 0.497\n    },\n    {\n     \"id\": \"severe\",\n     \"fixedReturnPeriodYears\": null,\n     \"tierSlope\": 0.72,\n     \"buildingsAffected\": 51,\n     \"shareOfInsuredValueAffected\": 0.083,\n     \"medianValueWhereAffected\": 0.165,\n     \"p90ValueWhereAffected\": 0.488,\n     \"highestValue\": 0.563\n    },\n    {\n     \"id\": \"moderate\",\n     \"fixedReturnPeriodYears\": null,\n     \"tierSlope\": 0.827,\n     \"buildingsAffected\": 110,\n     \"shareOfInsuredValueAffected\": 0.188,\n     \"medianValueWhereAffected\": 0.117,\n     \"p90ValueWhereAffected\": 0.46,\n     \"highestValue\": 0.62\n    },\n    {\n     \"id\": \"occasional\",\n     \"fixedReturnPeriodYears\": null,\n     \"tierSlope\": 0.914,\n     \"buildingsAffected\": 174,\n     \"shareOfInsuredValueAffected\": 0.31,\n     \"medianValueWhereAffected\": 0.137,\n     \"p90ValueWhereAffected\": 0.434,\n     \"highestValue\": 0.656\n    },\n    {\n     \"id\": \"common\",\n     \"fixedReturnPeriodYears\": null,\n     \"tierSlope\": 1,\n     \"buildingsAffected\": 259,\n     \"shareOfInsuredValueAffected\": 0.493,\n     \"medianValueWhereAffected\": 0.144,\n     \"p90ValueWhereAffected\": 0.399,\n     \"highestValue\": 0.685\n    }\n   ],\n   \"hotspotValidation\": {\n    \"namedFloodAreas\": 24,\n    \"flagged\": 12,\n    \"missed\": [\n     \"Donholm\",\n     \"Fedha\",\n     \"Madaraka\",\n     \"Lang'ata\",\n     \"Kawangware\",\n     \"Kangemi\",\n     \"Lavington\",\n     \"Westlands\",\n     \"Parklands\",\n     \"Kitisuru\",\n     \"Kileleshwa\",\n     \"Kibera\"\n    ]\n   }\n  },\n  \"portfolio\": {\n   \"synthetic\": true,\n   \"buildings\": 600,\n   \"totalInsuredValueKes\": 63635075000,\n   \"insuredValueOverDocumentedFormula\": 10,\n   \"byClass\": [\n    {\n     \"class\": \"informal_iron_sheet\",\n     \"buildings\": 179,\n     \"shareOfBuildings\": 0.298,\n     \"shareOfInsuredValue\": 0.003,\n     \"affectedInWidestScenario\": 74\n    },\n    {\n     \"class\": \"semi_permanent\",\n     \"buildings\": 181,\n     \"shareOfBuildings\": 0.302,\n     \"shareOfInsuredValue\": 0.013,\n     \"affectedInWidestScenario\": 74\n    },\n    {\n     \"class\": \"permanent_masonry\",\n     \"buildings\": 156,\n     \"shareOfBuildings\": 0.26,\n     \"shareOfInsuredValue\": 0.133,\n     \"affectedInWidestScenario\": 66\n    },\n    {\n     \"class\": \"concrete_rcc\",\n     \"buildings\": 84,\n     \"shareOfBuildings\": 0.14,\n     \"shareOfInsuredValue\": 0.851,\n     \"affectedInWidestScenario\": 45\n    }\n   ]\n  },\n  \"dataWarnings\": [\n   {\n    \"check\": \"Insured value equals floor area × cost per m²\",\n    \"status\": \"warn\",\n    \"detail\": \"Insured values are 10× floor area × cost per m² (range 9.97 to 10.05). The portfolio totals KES 63.6bn; the documented formula would give KES 6.4bn. Values are used as they are in the file.\"\n   },\n   {\n    \"check\": \"Known flood areas flagged by the hazard layer\",\n    \"status\": \"warn\",\n    \"detail\": \"12 of 24 named flood areas are flagged. Missed: Donholm, Fedha, Madaraka, Lang'ata, Kawangware, Kangemi, Lavington, Westlands, Parklands, Kitisuru, Kileleshwa, Kibera.\"\n   }\n  ],\n  \"model\": {\n   \"formulas\": [\n    \"depth_m = score × tier_slope × depthScaleM (score datasets only; tier_slope puts each tier's 0 to 1 score back on the widest tier's scale and is 1 for the widest)\",\n    \"damage_ratio = min( jrc_curve( depth_m × fragility[class] ), cap[class] )\",\n    \"building_loss = damage_ratio × insured_value\",\n    \"portfolio loss per scenario = sum of building losses; each scenario is placed at its return period to form the loss curve\"\n   ],\n   \"jrcCurve\": {\n    \"source\": \"Huizinga et al. (2017), JRC105688, Africa, residential buildings\",\n    \"depthsM\": [\n     0,\n     0.5,\n     1,\n     1.5,\n     2,\n     3,\n     4,\n     5,\n     6\n    ],\n    \"damage\": [\n     0,\n     0.22,\n     0.38,\n     0.53,\n     0.64,\n     0.82,\n     0.9,\n     0.96,\n     1\n    ]\n   },\n   \"allowedRanges\": {\n    \"depthScaleM\": {\n     \"min\": 1,\n     \"max\": 6\n    },\n    \"fragility\": {\n     \"min\": 0.4,\n     \"max\": 2.5\n    },\n    \"cap\": {\n     \"min\": 0.6,\n     \"max\": 1\n    },\n    \"returnPeriod\": {\n     \"min\": 2,\n     \"max\": 1000\n    }\n   },\n   \"referenceParameters\": {\n    \"depthScaleM\": 4,\n    \"fragility\": {\n     \"informal_iron_sheet\": 1.5,\n     \"semi_permanent\": 1.2,\n     \"permanent_masonry\": 1,\n     \"concrete_rcc\": 0.7\n    },\n    \"cap\": {\n     \"informal_iron_sheet\": 0.95,\n     \"semi_permanent\": 0.9,\n     \"permanent_masonry\": 0.85,\n     \"concrete_rcc\": 0.8\n    },\n    \"returnPeriods\": {\n     \"extreme\": 10,\n     \"severe\": 25,\n     \"moderate\": 50,\n     \"occasional\": 100,\n     \"common\": 250\n    }\n   },\n   \"referenceOutcome\": {\n    \"lossByScenario\": [\n     {\n      \"id\": \"extreme\",\n      \"returnPeriodYears\": 10,\n      \"lossShareOfInsuredValue\": 0.006\n     },\n     {\n      \"id\": \"severe\",\n      \"returnPeriodYears\": 25,\n      \"lossShareOfInsuredValue\": 0.0116\n     },\n     {\n      \"id\": \"moderate\",\n      \"returnPeriodYears\": 50,\n      \"lossShareOfInsuredValue\": 0.0307\n     },\n     {\n      \"id\": \"occasional\",\n      \"returnPeriodYears\": 100,\n      \"lossShareOfInsuredValue\": 0.0563\n     },\n     {\n      \"id\": \"common\",\n      \"returnPeriodYears\": 250,\n      \"lossShareOfInsuredValue\": 0.0934\n     }\n    ],\n    \"averageAnnualLossShareOfInsuredValue\": 0.00221\n   }\n  }\n },\n \"lossBasis\": \"The portfolio's losses in this run count three loss drivers at every building, not only the depth at its point: surrounding flooding (the highest map depth within a buffer around the building), drainage ponding, and drain overload (a shallow depth once the event is rarer than the drains were designed for, so the return periods of the tiers decide which events overload them). The portfolio has no basement data, so basement ingress and business interruption are not counted for it. Each side's outcome shown to the Chair is on this basis.\"\n}"
+   },
+   "raw": "{\n  \"summary\": \"Treat these results as a highly conditional stress test, not a reliable estimate of Nairobi flood losses: the hazard is a relative susceptibility proxy, and it misses half of the named flood areas. The reference assumptions do not resolve key uncertainties in flood depth, event frequency, vulnerability, or insured values, so outputs should not be presented without explicit limitations and sensitivity testing.\",\n  \"challenges\": [\n    {\n      \"id\": \"C1\",\n      \"title\": \"Hazard layer misses half of validation locations\",\n      \"detail\": \"Only 12 of 24 named flood areas are flagged; the missed list includes Donholm, Kibera, Westlands, and Lang'ata. This is a substantial warning that the score may omit known flood hotspots, while the score itself is relative susceptibility rather than measured flooding.\",\n      \"severity\": \"high\",\n      \"affects\": [\"hazard\", \"depthScaleM\"],\n      \"recommendation\": \"Treat the hazard as an unvalidated proxy and state that losses may be understated or spatially misplaced; test a wider depthScaleM range within the allowed bounds, but do not imply parameter tuning can repair the missing spatial coverage.\"\n    },\n    {\n      \"id\": \"C2\",\n      \"title\": \"Insured values are ten times the documented formula\",\n      \"detail\": \"The warning reports values 9.97 to 10.05 times floor area × cost per m²; the portfolio total is KES 63.6bn versus KES 6.4bn under the documented formula. Since losses use insured value directly, the absolute monetary results inherit this unresolved data discrepancy.\",\n      \"severity\": \"high\",\n      \"affects\": [\"data\"],\n      \"recommendation\": \"Resolve the valuation discrepancy before relying on monetary outputs; until then, state clearly that the portfolio values are used as supplied and report the valuation uncertainty as a limitation rather than compensating through vulnerability parameters.\"\n    },\n    {\n      \"id\": \"C3\",\n      \"title\": \"Exposure is dominated by concrete RCC value\",\n      \"detail\": \"Concrete RCC is 14% of buildings but 85.1% of insured value; the three other classes together account for 86% of buildings but only 14.9% of value. Consequently, assumptions for concrete RCC fragility and cap can dominate portfolio results, despite the smaller building count.\",\n      \"severity\": \"high\",\n      \"affects\": [\"fragility.concrete_rcc\", \"cap.concrete_rcc\"],\n      \"recommendation\": \"Show sensitivity to the concrete RCC assumptions and explain that the synthetic portfolio's unusual value concentration may not represent a real Kenyan book; avoid treating the other classes' building counts as a guide to their contribution to insured loss.\"\n    },\n    {\n      \"id\": \"C4\",\n      \"title\": \"Reference depth and vulnerability parameters lack local calibration\",\n      \"detail\": \"The JRC curve is identified as an Africa-wide residential curve, but the input provides no Nairobi depth observations or construction-specific loss evidence to support depthScaleM 4, the class fragilities, or the caps. The hazard score is not a measured depth, so translating it into metres is especially uncertain.\",\n      \"severity\": \"high\",\n      \"affects\": [\"depthScaleM\", \"fragility.informal_iron_sheet\", \"fragility.semi_permanent\", \"fragility.permanent_masonry\", \"fragility.concrete_rcc\", \"cap.informal_iron_sheet\", \"cap.semi_permanent\", \"cap.permanent_masonry\", \"cap.concrete_rcc\"],\n      \"recommendation\": \"Label these as uncalibrated reference assumptions and test alternative allowed values, prioritising depthScaleM and concrete RCC parameters; do not describe the JRC curve as local validation.\"\n    },\n    {\n      \"id\": \"C5\",\n      \"title\": \"Return periods are assigned, not evidenced by event frequencies\",\n      \"detail\": \"All five fixedReturnPeriodYears entries are null, and the tiers are nested cuts of one score rather than observed flood events. The reference sequence of 10, 25, 50, 100, and 250 years is strictly ordered, but the input gives no recurrence data to substantiate those intervals.\",\n      \"severity\": \"high\",\n      \"affects\": [\"returnPeriods.extreme\", \"returnPeriods.severe\", \"returnPeriods.moderate\", \"returnPeriods.occasional\", \"returnPeriods.common\"],\n      \"recommendation\": \"Present return periods as scenario labels based on judgement, not empirical frequencies, and test the loss curve under alternative strictly increasing return-period assignments within the allowed range.\"\n    },\n    {\n      \"id\": \"C6\",\n      \"title\": \"Reported score range is not an observed depth distribution\",\n      \"detail\": \"The highest score rises from 0.497 in extreme to 0.685 in common, while the score is rescaled to 0 to 1 within each tier and tier slopes range from 0.626 to 1. Those figures describe relative ranking and scaling, not flood depths, so the reference depthScaleM converts them into physical depths by assumption.\",\n      \"severity\": \"medium\",\n      \"affects\": [\"hazard\", \"depthScaleM\"],\n      \"recommendation\": \"State explicitly that the depth mapping is assumed; use score-range and tier-slope information for sensitivity checks, but do not interpret the resulting depth as a mapped or observed water level.\"\n    }\n  ]\n}",
+   "output": {
+    "summary": "Treat these results as a highly conditional stress test, not a reliable estimate of Nairobi flood losses: the hazard is a relative susceptibility proxy, and it misses half of the named flood areas. The reference assumptions do not resolve key uncertainties in flood depth, event frequency, vulnerability, or insured values, so outputs should not be presented without explicit limitations and sensitivity testing.",
+    "challenges": [
+     {
+      "id": "C1",
+      "title": "Hazard layer misses half of validation locations",
+      "detail": "Only 12 of 24 named flood areas are flagged; the missed list includes Donholm, Kibera, Westlands, and Lang'ata. This is a substantial warning that the score may omit known flood hotspots, while the score itself is relative susceptibility rather than measured flooding.",
+      "severity": "high",
+      "affects": [
+       "hazard",
+       "depthScaleM"
+      ],
+      "recommendation": "Treat the hazard as an unvalidated proxy and state that losses may be understated or spatially misplaced; test a wider depthScaleM range within the allowed bounds, but do not imply parameter tuning can repair the missing spatial coverage."
+     },
+     {
+      "id": "C2",
+      "title": "Insured values are ten times the documented formula",
+      "detail": "The warning reports values 9.97 to 10.05 times floor area × cost per m²; the portfolio total is KES 63.6bn versus KES 6.4bn under the documented formula. Since losses use insured value directly, the absolute monetary results inherit this unresolved data discrepancy.",
+      "severity": "high",
+      "affects": [
+       "data"
+      ],
+      "recommendation": "Resolve the valuation discrepancy before relying on monetary outputs; until then, state clearly that the portfolio values are used as supplied and report the valuation uncertainty as a limitation rather than compensating through vulnerability parameters."
+     },
+     {
+      "id": "C3",
+      "title": "Exposure is dominated by concrete RCC value",
+      "detail": "Concrete RCC is 14% of buildings but 85.1% of insured value; the three other classes together account for 86% of buildings but only 14.9% of value. Consequently, assumptions for concrete RCC fragility and cap can dominate portfolio results, despite the smaller building count.",
+      "severity": "high",
+      "affects": [
+       "fragility.concrete_rcc",
+       "cap.concrete_rcc"
+      ],
+      "recommendation": "Show sensitivity to the concrete RCC assumptions and explain that the synthetic portfolio's unusual value concentration may not represent a real Kenyan book; avoid treating the other classes' building counts as a guide to their contribution to insured loss."
+     },
+     {
+      "id": "C4",
+      "title": "Reference depth and vulnerability parameters lack local calibration",
+      "detail": "The JRC curve is identified as an Africa-wide residential curve, but the input provides no Nairobi depth observations or construction-specific loss evidence to support depthScaleM 4, the class fragilities, or the caps. The hazard score is not a measured depth, so translating it into metres is especially uncertain.",
+      "severity": "high",
+      "affects": [
+       "depthScaleM",
+       "fragility.informal_iron_sheet",
+       "fragility.semi_permanent",
+       "fragility.permanent_masonry",
+       "fragility.concrete_rcc",
+       "cap.informal_iron_sheet",
+       "cap.semi_permanent",
+       "cap.permanent_masonry",
+       "cap.concrete_rcc"
+      ],
+      "recommendation": "Label these as uncalibrated reference assumptions and test alternative allowed values, prioritising depthScaleM and concrete RCC parameters; do not describe the JRC curve as local validation."
+     },
+     {
+      "id": "C5",
+      "title": "Return periods are assigned, not evidenced by event frequencies",
+      "detail": "All five fixedReturnPeriodYears entries are null, and the tiers are nested cuts of one score rather than observed flood events. The reference sequence of 10, 25, 50, 100, and 250 years is strictly ordered, but the input gives no recurrence data to substantiate those intervals.",
+      "severity": "high",
+      "affects": [
+       "returnPeriods.extreme",
+       "returnPeriods.severe",
+       "returnPeriods.moderate",
+       "returnPeriods.occasional",
+       "returnPeriods.common"
+      ],
+      "recommendation": "Present return periods as scenario labels based on judgement, not empirical frequencies, and test the loss curve under alternative strictly increasing return-period assignments within the allowed range."
+     },
+     {
+      "id": "C6",
+      "title": "Reported score range is not an observed depth distribution",
+      "detail": "The highest score rises from 0.497 in extreme to 0.685 in common, while the score is rescaled to 0 to 1 within each tier and tier slopes range from 0.626 to 1. Those figures describe relative ranking and scaling, not flood depths, so the reference depthScaleM converts them into physical depths by assumption.",
+      "severity": "medium",
+      "affects": [
+       "hazard",
+       "depthScaleM"
+      ],
+      "recommendation": "State explicitly that the depth mapping is assumed; use score-range and tier-slope information for sensitivity checks, but do not interpret the resulting depth as a mapped or observed water level."
+     }
+    ]
+   }
+  },
+  "chair": {
+   "role": "chair",
+   "status": "done",
+   "model": "gpt-6-luna",
+   "ms": 11180,
+   "attempts": 1,
+   "usage": {
+    "promptTokens": 6998,
+    "outputTokens": 1723,
+    "thinkingTokens": 0,
+    "finishReason": "stop"
+   },
+   "prompt": {
+    "system": "You are one member of a small panel setting the assumptions for a flood catastrophe model used by a reinsurer in Kenya.\n\nHow the work is divided:\n- You choose and justify assumptions. You never calculate or state a loss figure; code does all arithmetic.\n- Every value must sit inside the allowed range given in the input.\n- Every value needs its own reason: one or two plain sentences that point to something specific in the input (a number from the data profile, the JRC reference curve, or the hackathon brief). Do not give the same sentence for several parameters.\n- \"basis\" must be one of: \"jrc_reference\", \"data_profile\", \"brief\", \"judgement\". Use \"judgement\" when you have no evidence, and say so in the reason.\n- Be honest about what is unknown. The portfolio is synthetic. For score datasets the hazard is a proxy, not measured flooding.\n- Reply with one JSON object in exactly the shape requested. No markdown, no text outside the JSON.\n\nThe 14 parameters, by name:\n- depthScaleM\n- fragility.informal_iron_sheet\n- fragility.semi_permanent\n- fragility.permanent_masonry\n- fragility.concrete_rcc\n- cap.informal_iron_sheet\n- cap.semi_permanent\n- cap.permanent_masonry\n- cap.concrete_rcc\n- returnPeriods.extreme\n- returnPeriods.severe\n- returnPeriods.moderate\n- returnPeriods.occasional\n- returnPeriods.common\n\nWhat they mean:\n- depthScaleM: assumed flood depth in metres at the highest-scoring spot in the widest tier (the rarest event). Narrower tiers are scaled down by their tier slope, given in the data profile, so depth grows as the event gets rarer. Higher means deeper water everywhere.\n- fragility.<class>: multiplies depth before the JRC curve is read. Above 1 means the class is damaged as if the water were deeper.\n- cap.<class>: the highest share of a building's value that can be lost.\n- returnPeriods.<tier>: years assigned to each tier. They must rise strictly from \"extreme\" (narrowest footprint, most frequent) to \"common\" (widest footprint, rarest). Shorter return periods mean the same losses happen more often.\n\nYour role: the Chair. You have the Optimist's proposal, the Cautious proposal, the share of insured value each one loses in every scenario (computed by code), and the Critic's challenges. Settle on one final set of assumptions.\n\nRules:\n- For each parameter choose a value and say why, naming which side you leaned towards. \"leans\" is \"optimist\", \"cautious\", \"between\", or \"outside\" (outside both proposals, which needs a strong reason).\n- Do not simply average. Decide parameter by parameter on the evidence.\n- Answer every challenge from the Critic by its id: \"accepted\", \"partly\" or \"rejected\", with what you did about it.\n\nReply shape:\n{\n  \"summary\": two or three sentences an underwriter could read, describing the agreed view and its main uncertainty,\n  \"parameters\": [ exactly 14 entries, one for each parameter name above, in that order: { \"name\": string, \"reason\": string, \"basis\": string, \"leans\": string, \"value\": number } ],\n  \"responses\": [ { \"challengeId\": \"C1\", \"verdict\": \"accepted\" | \"partly\" | \"rejected\", \"response\": string } ]\n}",
+    "user": "Input:\n{\n \"dataProfile\": {\n  \"dataset\": \"team_a_nairobi\",\n  \"hazard\": {\n   \"kind\": \"score\",\n   \"meaning\": \"0 to 1 relative flood susceptibility built from terrain and river proximity. Not a measured depth. The five tiers are nested cuts of one score: 'common' keeps the top 40% of cells, 'extreme' the top 5%, each rescaled to 0 to 1. The widest footprint ('common') stands for the rarest event.\",\n   \"scenarios\": [\n    {\n     \"id\": \"extreme\",\n     \"fixedReturnPeriodYears\": null,\n     \"tierSlope\": 0.626,\n     \"buildingsAffected\": 32,\n     \"shareOfInsuredValueAffected\": 0.026,\n     \"medianValueWhereAffected\": 0.199,\n     \"p90ValueWhereAffected\": 0.49,\n     \"highestValue\": 0.497\n    },\n    {\n     \"id\": \"severe\",\n     \"fixedReturnPeriodYears\": null,\n     \"tierSlope\": 0.72,\n     \"buildingsAffected\": 51,\n     \"shareOfInsuredValueAffected\": 0.083,\n     \"medianValueWhereAffected\": 0.165,\n     \"p90ValueWhereAffected\": 0.488,\n     \"highestValue\": 0.563\n    },\n    {\n     \"id\": \"moderate\",\n     \"fixedReturnPeriodYears\": null,\n     \"tierSlope\": 0.827,\n     \"buildingsAffected\": 110,\n     \"shareOfInsuredValueAffected\": 0.188,\n     \"medianValueWhereAffected\": 0.117,\n     \"p90ValueWhereAffected\": 0.46,\n     \"highestValue\": 0.62\n    },\n    {\n     \"id\": \"occasional\",\n     \"fixedReturnPeriodYears\": null,\n     \"tierSlope\": 0.914,\n     \"buildingsAffected\": 174,\n     \"shareOfInsuredValueAffected\": 0.31,\n     \"medianValueWhereAffected\": 0.137,\n     \"p90ValueWhereAffected\": 0.434,\n     \"highestValue\": 0.656\n    },\n    {\n     \"id\": \"common\",\n     \"fixedReturnPeriodYears\": null,\n     \"tierSlope\": 1,\n     \"buildingsAffected\": 259,\n     \"shareOfInsuredValueAffected\": 0.493,\n     \"medianValueWhereAffected\": 0.144,\n     \"p90ValueWhereAffected\": 0.399,\n     \"highestValue\": 0.685\n    }\n   ],\n   \"hotspotValidation\": {\n    \"namedFloodAreas\": 24,\n    \"flagged\": 12,\n    \"missed\": [\n     \"Donholm\",\n     \"Fedha\",\n     \"Madaraka\",\n     \"Lang'ata\",\n     \"Kawangware\",\n     \"Kangemi\",\n     \"Lavington\",\n     \"Westlands\",\n     \"Parklands\",\n     \"Kitisuru\",\n     \"Kileleshwa\",\n     \"Kibera\"\n    ]\n   }\n  },\n  \"portfolio\": {\n   \"synthetic\": true,\n   \"buildings\": 600,\n   \"totalInsuredValueKes\": 63635075000,\n   \"insuredValueOverDocumentedFormula\": 10,\n   \"byClass\": [\n    {\n     \"class\": \"informal_iron_sheet\",\n     \"buildings\": 179,\n     \"shareOfBuildings\": 0.298,\n     \"shareOfInsuredValue\": 0.003,\n     \"affectedInWidestScenario\": 74\n    },\n    {\n     \"class\": \"semi_permanent\",\n     \"buildings\": 181,\n     \"shareOfBuildings\": 0.302,\n     \"shareOfInsuredValue\": 0.013,\n     \"affectedInWidestScenario\": 74\n    },\n    {\n     \"class\": \"permanent_masonry\",\n     \"buildings\": 156,\n     \"shareOfBuildings\": 0.26,\n     \"shareOfInsuredValue\": 0.133,\n     \"affectedInWidestScenario\": 66\n    },\n    {\n     \"class\": \"concrete_rcc\",\n     \"buildings\": 84,\n     \"shareOfBuildings\": 0.14,\n     \"shareOfInsuredValue\": 0.851,\n     \"affectedInWidestScenario\": 45\n    }\n   ]\n  },\n  \"dataWarnings\": [\n   {\n    \"check\": \"Insured value equals floor area × cost per m²\",\n    \"status\": \"warn\",\n    \"detail\": \"Insured values are 10× floor area × cost per m² (range 9.97 to 10.05). The portfolio totals KES 63.6bn; the documented formula would give KES 6.4bn. Values are used as they are in the file.\"\n   },\n   {\n    \"check\": \"Known flood areas flagged by the hazard layer\",\n    \"status\": \"warn\",\n    \"detail\": \"12 of 24 named flood areas are flagged. Missed: Donholm, Fedha, Madaraka, Lang'ata, Kawangware, Kangemi, Lavington, Westlands, Parklands, Kitisuru, Kileleshwa, Kibera.\"\n   }\n  ],\n  \"model\": {\n   \"formulas\": [\n    \"depth_m = score × tier_slope × depthScaleM (score datasets only; tier_slope puts each tier's 0 to 1 score back on the widest tier's scale and is 1 for the widest)\",\n    \"damage_ratio = min( jrc_curve( depth_m × fragility[class] ), cap[class] )\",\n    \"building_loss = damage_ratio × insured_value\",\n    \"portfolio loss per scenario = sum of building losses; each scenario is placed at its return period to form the loss curve\"\n   ],\n   \"jrcCurve\": {\n    \"source\": \"Huizinga et al. (2017), JRC105688, Africa, residential buildings\",\n    \"depthsM\": [\n     0,\n     0.5,\n     1,\n     1.5,\n     2,\n     3,\n     4,\n     5,\n     6\n    ],\n    \"damage\": [\n     0,\n     0.22,\n     0.38,\n     0.53,\n     0.64,\n     0.82,\n     0.9,\n     0.96,\n     1\n    ]\n   },\n   \"allowedRanges\": {\n    \"depthScaleM\": {\n     \"min\": 1,\n     \"max\": 6\n    },\n    \"fragility\": {\n     \"min\": 0.4,\n     \"max\": 2.5\n    },\n    \"cap\": {\n     \"min\": 0.6,\n     \"max\": 1\n    },\n    \"returnPeriod\": {\n     \"min\": 2,\n     \"max\": 1000\n    }\n   },\n   \"referenceParameters\": {\n    \"depthScaleM\": 4,\n    \"fragility\": {\n     \"informal_iron_sheet\": 1.5,\n     \"semi_permanent\": 1.2,\n     \"permanent_masonry\": 1,\n     \"concrete_rcc\": 0.7\n    },\n    \"cap\": {\n     \"informal_iron_sheet\": 0.95,\n     \"semi_permanent\": 0.9,\n     \"permanent_masonry\": 0.85,\n     \"concrete_rcc\": 0.8\n    },\n    \"returnPeriods\": {\n     \"extreme\": 10,\n     \"severe\": 25,\n     \"moderate\": 50,\n     \"occasional\": 100,\n     \"common\": 250\n    }\n   },\n   \"referenceOutcome\": {\n    \"lossByScenario\": [\n     {\n      \"id\": \"extreme\",\n      \"returnPeriodYears\": 10,\n      \"lossShareOfInsuredValue\": 0.006\n     },\n     {\n      \"id\": \"severe\",\n      \"returnPeriodYears\": 25,\n      \"lossShareOfInsuredValue\": 0.0116\n     },\n     {\n      \"id\": \"moderate\",\n      \"returnPeriodYears\": 50,\n      \"lossShareOfInsuredValue\": 0.0307\n     },\n     {\n      \"id\": \"occasional\",\n      \"returnPeriodYears\": 100,\n      \"lossShareOfInsuredValue\": 0.0563\n     },\n     {\n      \"id\": \"common\",\n      \"returnPeriodYears\": 250,\n      \"lossShareOfInsuredValue\": 0.0934\n     }\n    ],\n    \"averageAnnualLossShareOfInsuredValue\": 0.00221\n   }\n  }\n },\n \"lossBasis\": \"The portfolio's losses in this run count three loss drivers at every building, not only the depth at its point: surrounding flooding (the highest map depth within a buffer around the building), drainage ponding, and drain overload (a shallow depth once the event is rarer than the drains were designed for, so the return periods of the tiers decide which events overload them). The portfolio has no basement data, so basement ingress and business interruption are not counted for it. Each side's outcome shown to the Chair is on this basis.\",\n \"optimist\": {\n  \"proposal\": {\n   \"depthScaleM\": {\n    \"value\": 2,\n    \"reason\": \"The hazard is a 0–1 susceptibility proxy rather than measured depth, so the reference 4 m is not directly supported; 2 m is a cautious lower assumption, though 12 of 24 named flood areas were missed, so the score is not treated as proof of negligible risk.\",\n    \"basis\": \"data_profile\"\n   },\n   \"fragility\": {\n    \"informal_iron_sheet\": {\n     \"value\": 1.3,\n     \"reason\": \"The reference multiplier is 1.5, and 179 buildings are informal iron-sheet construction; I reduce it only modestly to 1.3 because the profile gives no observed damage evidence to support a larger reduction.\",\n     \"basis\": \"data_profile\"\n    },\n    \"semi_permanent\": {\n     \"value\": 1.1,\n     \"reason\": \"The reference multiplier is 1.2 and semi-permanent buildings make up 181 of 600 buildings; I use 1.1 as a limited reduction, since no class-specific flood performance is reported.\",\n     \"basis\": \"data_profile\"\n    },\n    \"permanent_masonry\": {\n     \"value\": 1,\n     \"reason\": \"The JRC reference multiplier is 1.0 for this class, and the profile provides no observed class damage to justify a lower value; I therefore retain the reference.\",\n     \"basis\": \"jrc_reference\"\n    },\n    \"concrete_rcc\": {\n     \"value\": 0.7,\n     \"reason\": \"The JRC reference multiplier is already 0.7 for concrete RCC, the least vulnerable reference class; with no portfolio damage observations, I keep it unchanged.\",\n     \"basis\": \"jrc_reference\"\n    }\n   },\n   \"cap\": {\n    \"informal_iron_sheet\": {\n     \"value\": 0.95,\n     \"reason\": \"The reference cap is 0.95, and the profile supplies no evidence that losses to informal iron-sheet buildings are bounded at a lower share; retain the reference rather than assume extra protection.\",\n     \"basis\": \"jrc_reference\"\n    },\n    \"semi_permanent\": {\n     \"value\": 0.9,\n     \"reason\": \"The JRC reference cap is 0.9, and there is no observed loss information by construction class to defend lowering it further.\",\n     \"basis\": \"jrc_reference\"\n    },\n    \"permanent_masonry\": {\n     \"value\": 0.85,\n     \"reason\": \"The reference cap is 0.85; the portfolio identifies 156 masonry buildings but provides no evidence about their maximum flood loss, so I retain that assumption.\",\n     \"basis\": \"jrc_reference\"\n    },\n    \"concrete_rcc\": {\n     \"value\": 0.8,\n     \"reason\": \"The JRC reference cap is 0.8, and although concrete RCC represents 85.1% of insured value, the profile contains no loss evidence supporting a lower cap.\",\n     \"basis\": \"data_profile\"\n    }\n   },\n   \"returnPeriods\": {\n    \"extreme\": {\n     \"value\": 10,\n     \"reason\": \"The reference assigns the narrowest tier 10 years. The score tiers are nested but have no measured event-frequency calibration, so I retain that reference rather than claim a less frequent event.\",\n     \"basis\": \"jrc_reference\"\n    },\n    \"severe\": {\n     \"value\": 25,\n     \"reason\": \"The reference assigns the severe tier 25 years, while the profile provides no fixed return period for it; retaining 25 years avoids inventing a more favorable frequency.\",\n     \"basis\": \"jrc_reference\"\n    },\n    \"moderate\": {\n     \"value\": 50,\n     \"reason\": \"The reference assigns the moderate tier 50 years and the score profile gives no independent frequency evidence, so I keep the reference assignment.\",\n     \"basis\": \"jrc_reference\"\n    },\n    \"occasional\": {\n     \"value\": 100,\n     \"reason\": \"The reference value is 100 years; the profile specifies this as a nested score cut, not a calibrated flood event, so a longer period would lack evidence.\",\n     \"basis\": \"jrc_reference\"\n    },\n    \"common\": {\n     \"value\": 250,\n     \"reason\": \"The widest tier keeps the top 40% of cells and is described as the rarest event, but its return period is not empirically calibrated; I retain the 250-year reference rather than extend it without evidence.\",\n     \"basis\": \"data_profile\"\n    }\n   },\n   \"stance\": \"I take a restrained optimistic position: the susceptibility score is not measured flood depth, so I use a lower depth assumption, but retain near-reference vulnerability and return-period assumptions because the profile does not calibrate either.\"\n  },\n  \"applied\": {\n   \"depthScaleM\": 2,\n   \"fragility\": {\n    \"informal_iron_sheet\": 1.3,\n    \"semi_permanent\": 1.1,\n    \"permanent_masonry\": 1,\n    \"concrete_rcc\": 0.7\n   },\n   \"cap\": {\n    \"informal_iron_sheet\": 0.95,\n    \"semi_permanent\": 0.9,\n    \"permanent_masonry\": 0.85,\n    \"concrete_rcc\": 0.8\n   },\n   \"returnPeriods\": {\n    \"extreme\": 10,\n    \"severe\": 25,\n    \"moderate\": 50,\n    \"occasional\": 100,\n    \"common\": 250\n   }\n  },\n  \"outcome\": {\n   \"lossByScenario\": [\n    {\n     \"id\": \"extreme\",\n     \"returnPeriodYears\": 10,\n     \"lossShareOfInsuredValue\": 0.022\n    },\n    {\n     \"id\": \"severe\",\n     \"returnPeriodYears\": 25,\n     \"lossShareOfInsuredValue\": 0.0395\n    },\n    {\n     \"id\": \"moderate\",\n     \"returnPeriodYears\": 50,\n     \"lossShareOfInsuredValue\": 0.0862\n    },\n    {\n     \"id\": \"occasional\",\n     \"returnPeriodYears\": 100,\n     \"lossShareOfInsuredValue\": 0.111\n    },\n    {\n     \"id\": \"common\",\n     \"returnPeriodYears\": 250,\n     \"lossShareOfInsuredValue\": 0.1413\n    }\n   ],\n   \"averageAnnualLossShareOfInsuredValue\": 0.00541\n  }\n },\n \"cautious\": {\n  \"proposal\": {\n   \"depthScaleM\": {\n    \"value\": 6,\n    \"reason\": \"The hazard is a relative susceptibility score, not measured depth, so its conversion is uncertain; the layer flags only 12 of 24 named flood areas, supporting a high-end depth assumption without exceeding the allowed range.\",\n    \"basis\": \"data_profile\"\n   },\n   \"fragility\": {\n    \"informal_iron_sheet\": {\n     \"value\": 1.5,\n     \"reason\": \"The reference fragility is already 1.5 for iron-sheet construction, reflecting greater vulnerability; the profile shows 179 such buildings, but gives no evidence to justify moving further from the reference.\",\n     \"basis\": \"jrc_reference\"\n    },\n    \"semi_permanent\": {\n     \"value\": 1.2,\n     \"reason\": \"The reference assigns semi-permanent buildings fragility 1.2, between iron-sheet and masonry; the profile identifies 181 buildings but provides no class-specific flood-damage evidence for increasing it.\",\n     \"basis\": \"jrc_reference\"\n    },\n    \"permanent_masonry\": {\n     \"value\": 1,\n     \"reason\": \"The JRC-based reference uses 1.0 for permanent masonry, and the profile gives no evidence that this class warrants a higher multiplier.\",\n     \"basis\": \"jrc_reference\"\n    },\n    \"concrete_rcc\": {\n     \"value\": 0.7,\n     \"reason\": \"The reference uses 0.7 for RCC, consistent with lower fragility than the other classes; although RCC accounts for 85.1% of insured value, the profile supplies no evidence to override that class ordering.\",\n     \"basis\": \"jrc_reference\"\n    }\n   },\n   \"cap\": {\n    \"informal_iron_sheet\": {\n     \"value\": 0.95,\n     \"reason\": \"The reference cap is 0.95, already allowing nearly all value to be lost; the profile's 0.3% insured-value share gives no support for raising it to total loss.\",\n     \"basis\": \"jrc_reference\"\n    },\n    \"semi_permanent\": {\n     \"value\": 0.9,\n     \"reason\": \"The reference cap of 0.9 allows severe damage while stopping short of total loss; the portfolio profile contains no evidence to support a more severe cap.\",\n     \"basis\": \"jrc_reference\"\n    },\n    \"permanent_masonry\": {\n     \"value\": 0.85,\n     \"reason\": \"The reference cap is 0.85, and the profile's 13.3% insured-value share for masonry does not establish a basis for increasing the assumed maximum damage.\",\n     \"basis\": \"jrc_reference\"\n    },\n    \"concrete_rcc\": {\n     \"value\": 0.8,\n     \"reason\": \"The reference cap of 0.8 reflects a lower maximum loss for RCC; its 85.1% share of insured value makes this material, but does not itself show that a higher cap is credible.\",\n     \"basis\": \"jrc_reference\"\n    }\n   },\n   \"returnPeriods\": {\n    \"extreme\": {\n     \"value\": 10,\n     \"reason\": \"The 5%-of-cells extreme tier is the narrowest footprint, but the score data have no calibrated recurrence; retain the reference 10-year assignment rather than infer a shorter interval.\",\n     \"basis\": \"jrc_reference\"\n    },\n    \"severe\": {\n     \"value\": 25,\n     \"reason\": \"The severe tier affects 51 buildings and 8.3% of insured value, but these are nested susceptibility cuts without measured event frequencies; retain the reference 25 years.\",\n     \"basis\": \"jrc_reference\"\n    },\n    \"moderate\": {\n     \"value\": 50,\n     \"reason\": \"The moderate tier affects 110 buildings and 18.8% of insured value, yet no return-period calibration is supplied; retain the reference 50 years.\",\n     \"basis\": \"jrc_reference\"\n    },\n    \"occasional\": {\n     \"value\": 100,\n     \"reason\": \"The occasional tier affects 174 buildings and 31.0% of insured value, but tier size does not establish annual frequency; retain the reference 100 years.\",\n     \"basis\": \"jrc_reference\"\n    },\n    \"common\": {\n     \"value\": 250,\n     \"reason\": \"The widest common tier keeps the top 40% of cells and is defined as the rarest event; its frequency remains uncalibrated, so retain the reference 250 years rather than assign a shorter interval.\",\n     \"basis\": \"data_profile\"\n    }\n   },\n   \"stance\": \"I take a cautious but evidence-bounded view: use the high end of the depth range given the missed flood-area flags, retain the JRC class ordering, and avoid treating the synthetic susceptibility scores as measured flood depths.\"\n  },\n  \"applied\": {\n   \"depthScaleM\": 6,\n   \"fragility\": {\n    \"informal_iron_sheet\": 1.5,\n    \"semi_permanent\": 1.2,\n    \"permanent_masonry\": 1,\n    \"concrete_rcc\": 0.7\n   },\n   \"cap\": {\n    \"informal_iron_sheet\": 0.95,\n    \"semi_permanent\": 0.9,\n    \"permanent_masonry\": 0.85,\n    \"concrete_rcc\": 0.8\n   },\n   \"returnPeriods\": {\n    \"extreme\": 10,\n    \"severe\": 25,\n    \"moderate\": 50,\n    \"occasional\": 100,\n    \"common\": 250\n   }\n  },\n  \"outcome\": {\n   \"lossByScenario\": [\n    {\n     \"id\": \"extreme\",\n     \"returnPeriodYears\": 10,\n     \"lossShareOfInsuredValue\": 0.0581\n    },\n    {\n     \"id\": \"severe\",\n     \"returnPeriodYears\": 25,\n     \"lossShareOfInsuredValue\": 0.1019\n    },\n    {\n     \"id\": \"moderate\",\n     \"returnPeriodYears\": 50,\n     \"lossShareOfInsuredValue\": 0.1874\n    },\n    {\n     \"id\": \"occasional\",\n     \"returnPeriodYears\": 100,\n     \"lossShareOfInsuredValue\": 0.2492\n    },\n    {\n     \"id\": \"common\",\n     \"returnPeriodYears\": 250,\n     \"lossShareOfInsuredValue\": 0.3225\n    }\n   ],\n   \"averageAnnualLossShareOfInsuredValue\": 0.01288\n  }\n },\n \"critic\": {\n  \"summary\": \"Treat these results as a highly conditional stress test, not a reliable estimate of Nairobi flood losses: the hazard is a relative susceptibility proxy, and it misses half of the named flood areas. The reference assumptions do not resolve key uncertainties in flood depth, event frequency, vulnerability, or insured values, so outputs should not be presented without explicit limitations and sensitivity testing.\",\n  \"challenges\": [\n   {\n    \"id\": \"C1\",\n    \"title\": \"Hazard layer misses half of validation locations\",\n    \"detail\": \"Only 12 of 24 named flood areas are flagged; the missed list includes Donholm, Kibera, Westlands, and Lang'ata. This is a substantial warning that the score may omit known flood hotspots, while the score itself is relative susceptibility rather than measured flooding.\",\n    \"severity\": \"high\",\n    \"affects\": [\n     \"hazard\",\n     \"depthScaleM\"\n    ],\n    \"recommendation\": \"Treat the hazard as an unvalidated proxy and state that losses may be understated or spatially misplaced; test a wider depthScaleM range within the allowed bounds, but do not imply parameter tuning can repair the missing spatial coverage.\"\n   },\n   {\n    \"id\": \"C2\",\n    \"title\": \"Insured values are ten times the documented formula\",\n    \"detail\": \"The warning reports values 9.97 to 10.05 times floor area × cost per m²; the portfolio total is KES 63.6bn versus KES 6.4bn under the documented formula. Since losses use insured value directly, the absolute monetary results inherit this unresolved data discrepancy.\",\n    \"severity\": \"high\",\n    \"affects\": [\n     \"data\"\n    ],\n    \"recommendation\": \"Resolve the valuation discrepancy before relying on monetary outputs; until then, state clearly that the portfolio values are used as supplied and report the valuation uncertainty as a limitation rather than compensating through vulnerability parameters.\"\n   },\n   {\n    \"id\": \"C3\",\n    \"title\": \"Exposure is dominated by concrete RCC value\",\n    \"detail\": \"Concrete RCC is 14% of buildings but 85.1% of insured value; the three other classes together account for 86% of buildings but only 14.9% of value. Consequently, assumptions for concrete RCC fragility and cap can dominate portfolio results, despite the smaller building count.\",\n    \"severity\": \"high\",\n    \"affects\": [\n     \"fragility.concrete_rcc\",\n     \"cap.concrete_rcc\"\n    ],\n    \"recommendation\": \"Show sensitivity to the concrete RCC assumptions and explain that the synthetic portfolio's unusual value concentration may not represent a real Kenyan book; avoid treating the other classes' building counts as a guide to their contribution to insured loss.\"\n   },\n   {\n    \"id\": \"C4\",\n    \"title\": \"Reference depth and vulnerability parameters lack local calibration\",\n    \"detail\": \"The JRC curve is identified as an Africa-wide residential curve, but the input provides no Nairobi depth observations or construction-specific loss evidence to support depthScaleM 4, the class fragilities, or the caps. The hazard score is not a measured depth, so translating it into metres is especially uncertain.\",\n    \"severity\": \"high\",\n    \"affects\": [\n     \"depthScaleM\",\n     \"fragility.informal_iron_sheet\",\n     \"fragility.semi_permanent\",\n     \"fragility.permanent_masonry\",\n     \"fragility.concrete_rcc\",\n     \"cap.informal_iron_sheet\",\n     \"cap.semi_permanent\",\n     \"cap.permanent_masonry\",\n     \"cap.concrete_rcc\"\n    ],\n    \"recommendation\": \"Label these as uncalibrated reference assumptions and test alternative allowed values, prioritising depthScaleM and concrete RCC parameters; do not describe the JRC curve as local validation.\"\n   },\n   {\n    \"id\": \"C5\",\n    \"title\": \"Return periods are assigned, not evidenced by event frequencies\",\n    \"detail\": \"All five fixedReturnPeriodYears entries are null, and the tiers are nested cuts of one score rather than observed flood events. The reference sequence of 10, 25, 50, 100, and 250 years is strictly ordered, but the input gives no recurrence data to substantiate those intervals.\",\n    \"severity\": \"high\",\n    \"affects\": [\n     \"returnPeriods.extreme\",\n     \"returnPeriods.severe\",\n     \"returnPeriods.moderate\",\n     \"returnPeriods.occasional\",\n     \"returnPeriods.common\"\n    ],\n    \"recommendation\": \"Present return periods as scenario labels based on judgement, not empirical frequencies, and test the loss curve under alternative strictly increasing return-period assignments within the allowed range.\"\n   },\n   {\n    \"id\": \"C6\",\n    \"title\": \"Reported score range is not an observed depth distribution\",\n    \"detail\": \"The highest score rises from 0.497 in extreme to 0.685 in common, while the score is rescaled to 0 to 1 within each tier and tier slopes range from 0.626 to 1. Those figures describe relative ranking and scaling, not flood depths, so the reference depthScaleM converts them into physical depths by assumption.\",\n    \"severity\": \"medium\",\n    \"affects\": [\n     \"hazard\",\n     \"depthScaleM\"\n    ],\n    \"recommendation\": \"State explicitly that the depth mapping is assumed; use score-range and tier-slope information for sensitivity checks, but do not interpret the resulting depth as a mapped or observed water level.\"\n   }\n  ]\n }\n}"
+   },
+   "raw": "{\n  \"summary\": \"We use the JRC Africa residential curve and its class assumptions as an uncalibrated starting point, with an intermediate depth assumption reflecting the uncertain susceptibility proxy and missed flood areas. The synthetic portfolio, its tenfold insured-value discrepancy, the proxy hazard and unobserved event frequencies make results conditional; sensitivity testing and data validation are essential, especially for RCC exposure.\",\n  \"parameters\": [\n    {\n      \"name\": \"depthScaleM\",\n      \"reason\": \"I lean between the proposals at 4 m, the JRC reference value: the score is not measured depth, but only 12 of 24 named flood areas are flagged, so neither 2 m nor the 6 m upper bound is well established.\",\n      \"basis\": \"data_profile\",\n      \"leans\": \"between\",\n      \"value\": 4\n    },\n    {\n      \"name\": \"fragility.informal_iron_sheet\",\n      \"reason\": \"I lean cautious at the JRC value of 1.5; the portfolio has 179 iron-sheet buildings, but provides no observed class-specific damage to support a lower multiplier.\",\n      \"basis\": \"jrc_reference\",\n      \"leans\": \"cautious\",\n      \"value\": 1.5\n    },\n    {\n      \"name\": \"fragility.semi_permanent\",\n      \"reason\": \"I lean cautious at the JRC value of 1.2; 181 semi-permanent buildings are identified, but their count is not evidence of flood performance.\",\n      \"basis\": \"jrc_reference\",\n      \"leans\": \"cautious\",\n      \"value\": 1.2\n    },\n    {\n      \"name\": \"fragility.permanent_masonry\",\n      \"reason\": \"I lean between because both proposals retain the JRC value of 1.0, and the profile gives no masonry damage observations to justify shifting it.\",\n      \"basis\": \"jrc_reference\",\n      \"leans\": \"between\",\n      \"value\": 1\n    },\n    {\n      \"name\": \"fragility.concrete_rcc\",\n      \"reason\": \"I lean between at the JRC value of 0.7; RCC is only 14% of buildings but holds 85.1% of insured value, so this uncalibrated assumption warrants sensitivity testing rather than an unsupported adjustment.\",\n      \"basis\": \"jrc_reference\",\n      \"leans\": \"between\",\n      \"value\": 0.7\n    },\n    {\n      \"name\": \"cap.informal_iron_sheet\",\n      \"reason\": \"I lean between at the JRC cap of 0.95, which both proposals use; the class holds only 0.3% of insured value, and the profile provides no evidence for a different maximum loss.\",\n      \"basis\": \"jrc_reference\",\n      \"leans\": \"between\",\n      \"value\": 0.95\n    },\n    {\n      \"name\": \"cap.semi_permanent\",\n      \"reason\": \"I lean between at the JRC cap of 0.9, retained by both proposals; the 1.3% insured-value share is exposure information, not evidence of a class-specific damage ceiling.\",\n      \"basis\": \"jrc_reference\",\n      \"leans\": \"between\",\n      \"value\": 0.9\n    },\n    {\n      \"name\": \"cap.permanent_masonry\",\n      \"reason\": \"I lean between at the JRC cap of 0.85; although masonry represents 13.3% of insured value, there are no observed losses to calibrate its cap.\",\n      \"basis\": \"jrc_reference\",\n      \"leans\": \"between\",\n      \"value\": 0.85\n    },\n    {\n      \"name\": \"cap.concrete_rcc\",\n      \"reason\": \"I lean between at the JRC cap of 0.8, as both proposals do, but 85.1% of insured value is RCC, making this uncertain assumption a priority for sensitivity testing.\",\n      \"basis\": \"jrc_reference\",\n      \"leans\": \"between\",\n      \"value\": 0.8\n    },\n    {\n      \"name\": \"returnPeriods.extreme\",\n      \"reason\": \"I lean between at the JRC reference of 10 years; the extreme tier retains the top 5% of cells, but the profile has no measured recurrence evidence.\",\n      \"basis\": \"jrc_reference\",\n      \"leans\": \"between\",\n      \"value\": 10\n    },\n    {\n      \"name\": \"returnPeriods.severe\",\n      \"reason\": \"I lean between at the JRC reference of 25 years; 51 buildings are affected in this tier, but that count does not establish an event frequency.\",\n      \"basis\": \"jrc_reference\",\n      \"leans\": \"between\",\n      \"value\": 25\n    },\n    {\n      \"name\": \"returnPeriods.moderate\",\n      \"reason\": \"I lean between at the JRC reference of 50 years; the tier affects 110 buildings, while its fixed return-period entry is null and no recurrence data are supplied.\",\n      \"basis\": \"jrc_reference\",\n      \"leans\": \"between\",\n      \"value\": 50\n    },\n    {\n      \"name\": \"returnPeriods.occasional\",\n      \"reason\": \"I lean between at the JRC reference of 100 years; this tier affects 174 buildings, but the profile explicitly defines tiers as nested score cuts rather than observed events.\",\n      \"basis\": \"jrc_reference\",\n      \"leans\": \"between\",\n      \"value\": 100\n    },\n    {\n      \"name\": \"returnPeriods.common\",\n      \"reason\": \"I lean between at the JRC reference of 250 years; common is the widest tier, retaining the top 40% of cells and standing for the rarest event, but its recurrence is not calibrated.\",\n      \"basis\": \"data_profile\",\n      \"leans\": \"between\",\n      \"value\": 250\n    }\n  ],\n  \"responses\": [\n    {\n      \"challengeId\": \"C1\",\n      \"verdict\": \"accepted\",\n      \"response\": \"Treat the hazard as an unvalidated susceptibility proxy, not a measured flood map. The 12 of 24 flagged named areas and the missed locations mean losses may be understated or spatially misplaced; the intermediate depth assumption cannot repair missing spatial coverage.\"\n    },\n    {\n      \"challengeId\": \"C2\",\n      \"verdict\": \"accepted\",\n      \"response\": \"The tenfold difference between supplied values and the documented floor-area formula remains unresolved. Values are used as supplied, so monetary outputs inherit this discrepancy; we do not compensate by changing vulnerability assumptions.\"\n    },\n    {\n      \"challengeId\": \"C3\",\n      \"verdict\": \"accepted\",\n      \"response\": \"RCC's 85.1% share of insured value makes its fragility and cap assumptions important despite its 14% building share. We retain the uncalibrated JRC values and require sensitivity testing; the synthetic concentration should not be assumed representative of a Kenyan book.\"\n    },\n    {\n      \"challengeId\": \"C4\",\n      \"verdict\": \"accepted\",\n      \"response\": \"Depth, class fragilities and caps are uncalibrated assumptions, and the JRC curve is an Africa-wide reference rather than Nairobi validation. We retain reference class parameters while using an intermediate depth assumption and flag depth and RCC sensitivity for testing.\"\n    },\n    {\n      \"challengeId\": \"C5\",\n      \"verdict\": \"accepted\",\n      \"response\": \"The 10, 25, 50, 100 and 250 year periods are scenario labels, not empirically evidenced frequencies: all fixed return periods are null and tiers are nested score cuts. Keep the strictly increasing reference sequence provisionally and test alternative ordered assignments.\"\n    },\n    {\n      \"challengeId\": \"C6\",\n      \"verdict\": \"accepted\",\n      \"response\": \"The score maxima of 0.497 to 0.685, rescaling to 0–1 within tiers, and slopes from 0.626 to 1 describe relative ranking and scaling, not water levels. The 4 m depth scale is an assumed conversion, not a mapped or observed depth.\"\n    }\n  ]\n}",
+   "output": {
+    "summary": "We use the JRC Africa residential curve and its class assumptions as an uncalibrated starting point, with an intermediate depth assumption reflecting the uncertain susceptibility proxy and missed flood areas. The synthetic portfolio, its tenfold insured-value discrepancy, the proxy hazard and unobserved event frequencies make results conditional; sensitivity testing and data validation are essential, especially for RCC exposure.",
+    "decision": {
+     "depthScaleM": {
+      "value": 4,
+      "reason": "I lean between the proposals at 4 m, the JRC reference value: the score is not measured depth, but only 12 of 24 named flood areas are flagged, so neither 2 m nor the 6 m upper bound is well established.",
+      "basis": "data_profile",
+      "leans": "between"
+     },
+     "fragility": {
+      "informal_iron_sheet": {
+       "value": 1.5,
+       "reason": "I lean cautious at the JRC value of 1.5; the portfolio has 179 iron-sheet buildings, but provides no observed class-specific damage to support a lower multiplier.",
+       "basis": "jrc_reference",
+       "leans": "cautious"
+      },
+      "semi_permanent": {
+       "value": 1.2,
+       "reason": "I lean cautious at the JRC value of 1.2; 181 semi-permanent buildings are identified, but their count is not evidence of flood performance.",
+       "basis": "jrc_reference",
+       "leans": "cautious"
+      },
+      "permanent_masonry": {
+       "value": 1,
+       "reason": "I lean between because both proposals retain the JRC value of 1.0, and the profile gives no masonry damage observations to justify shifting it.",
+       "basis": "jrc_reference",
+       "leans": "between"
+      },
+      "concrete_rcc": {
+       "value": 0.7,
+       "reason": "I lean between at the JRC value of 0.7; RCC is only 14% of buildings but holds 85.1% of insured value, so this uncalibrated assumption warrants sensitivity testing rather than an unsupported adjustment.",
+       "basis": "jrc_reference",
+       "leans": "between"
+      }
+     },
+     "cap": {
+      "informal_iron_sheet": {
+       "value": 0.95,
+       "reason": "I lean between at the JRC cap of 0.95, which both proposals use; the class holds only 0.3% of insured value, and the profile provides no evidence for a different maximum loss.",
+       "basis": "jrc_reference",
+       "leans": "between"
+      },
+      "semi_permanent": {
+       "value": 0.9,
+       "reason": "I lean between at the JRC cap of 0.9, retained by both proposals; the 1.3% insured-value share is exposure information, not evidence of a class-specific damage ceiling.",
+       "basis": "jrc_reference",
+       "leans": "between"
+      },
+      "permanent_masonry": {
+       "value": 0.85,
+       "reason": "I lean between at the JRC cap of 0.85; although masonry represents 13.3% of insured value, there are no observed losses to calibrate its cap.",
+       "basis": "jrc_reference",
+       "leans": "between"
+      },
+      "concrete_rcc": {
+       "value": 0.8,
+       "reason": "I lean between at the JRC cap of 0.8, as both proposals do, but 85.1% of insured value is RCC, making this uncertain assumption a priority for sensitivity testing.",
+       "basis": "jrc_reference",
+       "leans": "between"
+      }
+     },
+     "returnPeriods": {
+      "extreme": {
+       "value": 10,
+       "reason": "I lean between at the JRC reference of 10 years; the extreme tier retains the top 5% of cells, but the profile has no measured recurrence evidence.",
+       "basis": "jrc_reference",
+       "leans": "between"
+      },
+      "severe": {
+       "value": 25,
+       "reason": "I lean between at the JRC reference of 25 years; 51 buildings are affected in this tier, but that count does not establish an event frequency.",
+       "basis": "jrc_reference",
+       "leans": "between"
+      },
+      "moderate": {
+       "value": 50,
+       "reason": "I lean between at the JRC reference of 50 years; the tier affects 110 buildings, while its fixed return-period entry is null and no recurrence data are supplied.",
+       "basis": "jrc_reference",
+       "leans": "between"
+      },
+      "occasional": {
+       "value": 100,
+       "reason": "I lean between at the JRC reference of 100 years; this tier affects 174 buildings, but the profile explicitly defines tiers as nested score cuts rather than observed events.",
+       "basis": "jrc_reference",
+       "leans": "between"
+      },
+      "common": {
+       "value": 250,
+       "reason": "I lean between at the JRC reference of 250 years; common is the widest tier, retaining the top 40% of cells and standing for the rarest event, but its recurrence is not calibrated.",
+       "basis": "data_profile",
+       "leans": "between"
+      }
+     }
+    },
+    "responses": [
+     {
+      "challengeId": "C1",
+      "verdict": "accepted",
+      "response": "Treat the hazard as an unvalidated susceptibility proxy, not a measured flood map. The 12 of 24 flagged named areas and the missed locations mean losses may be understated or spatially misplaced; the intermediate depth assumption cannot repair missing spatial coverage."
+     },
+     {
+      "challengeId": "C2",
+      "verdict": "accepted",
+      "response": "The tenfold difference between supplied values and the documented floor-area formula remains unresolved. Values are used as supplied, so monetary outputs inherit this discrepancy; we do not compensate by changing vulnerability assumptions."
+     },
+     {
+      "challengeId": "C3",
+      "verdict": "accepted",
+      "response": "RCC's 85.1% share of insured value makes its fragility and cap assumptions important despite its 14% building share. We retain the uncalibrated JRC values and require sensitivity testing; the synthetic concentration should not be assumed representative of a Kenyan book."
+     },
+     {
+      "challengeId": "C4",
+      "verdict": "accepted",
+      "response": "Depth, class fragilities and caps are uncalibrated assumptions, and the JRC curve is an Africa-wide reference rather than Nairobi validation. We retain reference class parameters while using an intermediate depth assumption and flag depth and RCC sensitivity for testing."
+     },
+     {
+      "challengeId": "C5",
+      "verdict": "accepted",
+      "response": "The 10, 25, 50, 100 and 250 year periods are scenario labels, not empirically evidenced frequencies: all fixed return periods are null and tiers are nested score cuts. Keep the strictly increasing reference sequence provisionally and test alternative ordered assignments."
+     },
+     {
+      "challengeId": "C6",
+      "verdict": "accepted",
+      "response": "The score maxima of 0.497 to 0.685, rescaling to 0–1 within tiers, and slopes from 0.626 to 1 describe relative ranking and scaling, not water levels. The 4 m depth scale is an assumed conversion, not a mapped or observed depth."
+     }
+    ]
+   }
+  }
+ },
+ "optimist": null,
+ "cautious": null,
+ "final": null,
+ "fingerprint": "bdc87191",
+ "basis": {
+  "mode": "all_drivers",
+  "judgement": {
+   "bufferRadiusM": 250,
+   "ingressThresholdM": 0.1,
+   "basementDamageExtreme": 0.15,
+   "basementDamageSevere": 0.25,
+   "basementDamageModerate": 0.4,
+   "basementDamageOccasional": 0.55,
+   "basementDamageCommon": 0.7,
+   "belowGroundShare": 0.08,
+   "outageDaysExtreme": 2,
+   "outageDaysSevere": 5,
+   "outageDaysModerate": 10,
+   "outageDaysOccasional": 20,
+   "outageDaysCommon": 40,
+   "uncertaintyLoading": 0.1,
+   "drainDesignRp": 25,
+   "drainOverloadDepthM": 0.1,
+   "annualRentShare": 0.08,
+   "costOfCapital": 0.08,
+   "minimumRatePerMille": 0.1
+  }
+ },
+ "finalParams": {
+  "depthScaleM": 4,
+  "fragility": {
+   "informal_iron_sheet": 1.5,
+   "semi_permanent": 1.2,
+   "permanent_masonry": 1,
+   "concrete_rcc": 0.7
+  },
+  "cap": {
+   "informal_iron_sheet": 0.95,
+   "semi_permanent": 0.9,
+   "permanent_masonry": 0.85,
+   "concrete_rcc": 0.8
+  },
+  "returnPeriods": {
+   "extreme": 10,
+   "severe": 25,
+   "moderate": 50,
+   "occasional": 100,
+   "common": 250
+  }
+ },
+ "inputs": {
+  "dataset": "team_a_nairobi",
+  "buildings": 600,
+  "totalTivKes": 63635075000,
+  "reference": "bdc87191"
+ }
+}

@@ -133,7 +133,7 @@ export function Waterfall({
   // The left margin holds the widest y label, so a long figure is not clipped at the edge.
   const yLabelWidth = Math.max(...yTicks.map((t) => tickFormat(t).length)) * charWidth;
   const left = yLabelWidth + 14 * scale;
-  const right = 8 * scale;
+  const right = 28 * scale;
 
   // A bar needs room for its value label above and its name below. Past that the plot scrolls inside its own box.
   const minBand = Math.max(64 * scale, Math.max(...bars.map((b) => b.text.length)) * charWidth + 8 * scale);

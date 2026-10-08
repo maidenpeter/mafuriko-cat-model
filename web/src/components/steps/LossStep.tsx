@@ -8,6 +8,7 @@ import { annualChance, kes1, rpLabel, rpWithChance } from "@/lib/labels";
 import type { InsuranceTerms, TermsResult } from "@/lib/model/terms";
 import { HOUSING_LABELS } from "@/lib/model/types";
 import type { Active, Session } from "@/lib/session";
+import { STEP_NAMES, stepKicker } from "@/lib/steps";
 import { ChartFrame, SourceLine, type ChartSource } from "../charts/ChartFrame";
 import { Waterfall, type WaterfallStep } from "../charts/Waterfall";
 import { TermsPanel } from "../TermsPanel";
@@ -61,6 +62,15 @@ export function LossStep({ session, active, checks, terms, onTermsChange }: Prop
       ]
     : [];
   const waterfallTitle = layer ? `From ground-up loss to net loss in a ${rpLabel(layer.returnPeriod)} event` : "";
+  // Where the ground-up figures come from. The hazard maps are real data; a hazard score read from them is a proxy.
+  const usingAi = active.source === "ai";
+  const groundUpSources: ChartSource[] = [
+    { kind: "synthetic", text: "Portfolio of insured buildings and their insured values" },
+    { kind: "real", text: isScore ? "Hazard maps (the hazard score read from them is a derived proxy, not a measured depth) and the JRC depth-damage curve" : "Flood depth maps and the JRC depth-damage curve" },
+    { kind: "assumption", text: isScore ? "Return periods of the hazard tiers, depth scale, fragility and damage caps" : "Fragility and damage caps" },
+    ...(dataset.drainage ? [{ kind: "assumption" as const, text: "Drainage ponding depths" }] : []),
+    ...(usingAi ? [{ kind: "ai" as const, text: "Hazard and damage assumptions agreed by the agents" }] : []),
+  ];
   const termsSources: ChartSource[] = [
     { kind: "synthetic", text: "Portfolio of insured buildings and their insured values" },
     { kind: "assumption", text: "Insurance terms: example terms, not from any real policy or treaty" },
@@ -69,7 +79,7 @@ export function LossStep({ session, active, checks, terms, onTermsChange }: Prop
 
   return (
     <div>
-      <StepHeader kicker="Step 5" title="Loss engine">
+      <StepHeader kicker={stepKicker("loss")} title={STEP_NAMES.loss}>
         For every building and every scenario: hazard value, to depth, to damage ratio, times insured value. The scenario loss is the sum. The insurance terms then turn that ground-up loss into the gross loss the insurer pays and the net loss it keeps. Nothing here is estimated by a model; it is arithmetic you can follow by hand.
       </StepHeader>
 
@@ -78,22 +88,25 @@ export function LossStep({ session, active, checks, terms, onTermsChange }: Prop
           building becomes one row of stages and the checks run down two columns. */}
       <div className="grid gap-4">
         <Card title="Ground-up loss by scenario" aside={<Tag kind="synthetic">Synthetic portfolio</Tag>}>
+          <p className="-mt-2 mb-4 max-w-3xl text-sm leading-relaxed text-ink-2">
+            Each row is one flood scenario, from the most frequent to the rarest. The ground-up loss is the damage to the insured buildings before any insurance terms. The bar is that loss as a share of total insured value, drawn against the largest scenario.
+          </p>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-160 text-sm">
+            <table className="w-full min-w-176 text-sm">
               <thead className="text-xs text-muted">
                 <tr>
-                  <th className="pb-2 text-left font-medium">Return period</th>
+                  <th className="pb-2 text-left font-medium">Return period (chance in any year)</th>
                   <th className="pb-2 text-left font-medium">Scenario</th>
                   <th className="pb-2 text-right font-medium">Buildings affected</th>
-                  <th className="pb-2 text-right font-medium">Value in affected cells</th>
-                  <th className="pb-2 text-right font-medium">Ground-up loss</th>
-                  <th className="w-[26%] pb-2 pl-4 text-left font-medium">Share of total insured value</th>
+                  <th className="pb-2 pl-3 text-right font-medium">Insured value in affected cells (KES)</th>
+                  <th className="pb-2 pl-3 text-right font-medium">Ground-up loss (KES)</th>
+                  <th className="w-[26%] pb-2 pl-4 text-left font-medium">Ground-up loss as a share of total insured value (%)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
                 {r.scenarios.map((sc, i) => (
                   <tr key={sc.id}>
-                    <td className="tabular py-2.5 font-medium text-ink">{rpLabel(sc.returnPeriod)}</td>
+                    <td className="tabular py-2.5 pr-3 font-medium whitespace-nowrap text-ink">{rpWithChance(sc.returnPeriod)}</td>
                     <td className="py-2.5 text-ink-2">{sc.id}</td>
                     <td className="tabular py-2.5 text-right text-ink-2">{fmtInt(sc.affected)}</td>
                     <td className="tabular py-2.5 text-right text-ink-2">{fmtKes(sc.tivExposedKes)}</td>
@@ -111,6 +124,7 @@ export function LossStep({ session, active, checks, terms, onTermsChange }: Prop
               </tbody>
             </table>
           </div>
+          <SourceLine sources={groundUpSources} className="mt-4 border-t border-line pt-3" />
         </Card>
 
         <Card title="Follow one building" aside={<Segmented label="Scenario" value={String(k)} onChange={(v) => setScenario(Number(v))} options={r.scenarios.map((sc, i) => ({ value: String(i), label: rpLabel(sc.returnPeriod) }))} />}>
@@ -118,6 +132,9 @@ export function LossStep({ session, active, checks, terms, onTermsChange }: Prop
             <p className="text-sm text-ink-2">No building takes a loss in this scenario.</p>
           ) : (
             <>
+              <p className="-mt-2 mb-4 max-w-3xl text-sm leading-relaxed text-ink-2">
+                One building in a {rpWithChance(s.returnPeriod)} flood, read in order: each stage takes the figure before it and shows the sum that gives the next. The badge beside a figure says where it comes from. Depths are in metres and amounts in KES.
+              </p>
               <div className="mb-4 flex flex-wrap gap-1.5">
                 {ranked.map((x) => {
                   const id = dataset.buildings[x.i].locId;
@@ -135,8 +152,8 @@ export function LossStep({ session, active, checks, terms, onTermsChange }: Prop
                 {[
                   { label: "The building", value: `${b.locId} · ${HOUSING_LABELS[b.housingClass]}`, how: `Insured value ${fmtKes(b.tivKes, 2)}, at ${fmtNum(b.lat, 4)}, ${fmtNum(b.lon, 4)}`, tag: "synthetic" as const },
                   { label: isScore ? "Hazard score" : "Flood depth", value: isScore ? fmtNum(t.hazard, 3) : `${fmtNum(t.hazard)} m`, how: `Read from the "${s.id}" map at the building's coordinates`, tag: (isScore ? "proxy" : "real") as "proxy" | "real" },
-                  ...(isScore ? [{ label: "Assumed depth", value: `${fmtNum(t.depthM)} m`, how: t.drainageM > 0 && t.drainageM >= t.depthM ? `Drainage ponding near a drain or in a settlement; the terrain gives ${fmtNum(t.hazard > 0 ? t.hazard * s.tierSlope * active.params.depthScaleM : 0)} m` : `${fmtNum(t.hazard, 3)} × tier slope ${fmtNum(s.tierSlope, 3)} × ${fmtNum(active.params.depthScaleM)} m`, tag: (active.source === "ai" ? "ai" : "assumption") as "ai" | "assumption" }] : []),
-                  { label: "Depth on the curve", value: `${fmtNum(t.effectiveDepthM)} m`, how: `${fmtNum(t.depthM)} m × fragility ${fmtNum(active.params.fragility[b.housingClass])}`, tag: (active.source === "ai" ? "ai" : "assumption") as "ai" | "assumption" },
+                  ...(isScore ? [{ label: "Assumed depth", value: `${fmtNum(t.depthM)} m`, how: t.drainageM > 0 && t.drainageM >= t.depthM ? `Drainage ponding near a drain or in a settlement; the terrain gives ${fmtNum(t.hazard > 0 ? t.hazard * s.tierSlope * active.params.depthScaleM : 0)} m` : `${fmtNum(t.hazard, 3)} × tier slope ${fmtNum(s.tierSlope, 3)} × ${fmtNum(active.params.depthScaleM)} m`, tag: (usingAi ? "ai" : "assumption") as "ai" | "assumption" }] : []),
+                  { label: "Depth on the curve", value: `${fmtNum(t.effectiveDepthM)} m`, how: `${fmtNum(t.depthM)} m × fragility ${fmtNum(active.params.fragility[b.housingClass])}`, tag: (usingAi ? "ai" : "assumption") as "ai" | "assumption" },
                   { label: "Damage ratio", value: fmtPct(t.damageRatio, 1), how: t.capped ? `JRC curve gives ${fmtPct(t.curveDamage, 1)}, limited by the ${fmtPct(active.params.cap[b.housingClass], 0)} cap` : `JRC curve at ${fmtNum(t.effectiveDepthM)} m; under the ${fmtPct(active.params.cap[b.housingClass], 0)} cap`, tag: "real" as const },
                   { label: "Ground-up loss", value: fmtKes(t.lossKes, 2), how: `${fmtPct(t.damageRatio, 1)} × ${fmtKes(b.tivKes, 2)}`, tag: null },
                 ].map((row, i, all) => (
@@ -167,7 +184,7 @@ export function LossStep({ session, active, checks, terms, onTermsChange }: Prop
             <table className="w-full min-w-232 text-sm">
               <thead className="text-xs text-muted">
                 <tr>
-                  <th className="pb-2 text-left font-medium">Event (chance in any year)</th>
+                  <th className="pb-2 text-left font-medium">Event (chance in any year), amounts in KES</th>
                   <th className="pb-2 pl-3 text-right font-medium">Ground-up</th>
                   <th className="pb-2 pl-3 text-right font-medium">Deductibles</th>
                   {anyOverLimit && <th className="pb-2 pl-3 text-right font-medium">Over limit</th>}

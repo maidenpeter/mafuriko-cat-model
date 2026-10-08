@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { fmtKes, fmtPct } from "@/lib/format";
+import { rpLabel, rpWithChance } from "@/lib/labels";
 import { bandedAal } from "@/lib/model/financial";
 import { flattenParams, REFERENCE_PARAMS } from "@/lib/model/params";
 import type { ModelParams } from "@/lib/model/types";
 import type { Session } from "@/lib/session";
+import { SourceLine } from "./charts/ChartFrame";
 import { Card, Tag } from "./ui";
 
 /** The summary written by oasis/build_and_run.py after a run through the Oasis LMF engine. */
@@ -97,19 +99,22 @@ export function OasisCheck({ session }: { session: Session }) {
         </p>
         <div className="min-w-0 overflow-x-auto @6xl:col-start-2 @6xl:row-span-2 @6xl:row-start-1">
           <table className="w-full min-w-140 text-sm">
+            <caption className="pb-3 text-left text-sm leading-relaxed text-ink-2">
+              Each row is one flood event, with the ground-up loss (before deductibles and reinsurance) from each engine. The last column is how far Oasis sits from this app; under half a percent counts as agreement.
+            </caption>
             <thead className="text-xs text-muted">
               <tr>
-                <th className="pb-2 text-left font-medium">Event</th>
-                <th className="pb-2 text-right font-medium">This app</th>
-                <th className="pb-2 text-right font-medium">Oasis LMF</th>
-                <th className="pb-2 text-right font-medium">Difference</th>
+                <th scope="col" className="pb-2 text-left font-medium">Event (return period, annual chance)</th>
+                <th scope="col" className="pb-2 text-right font-medium">Ground-up loss, this app (KES)</th>
+                <th scope="col" className="pb-2 text-right font-medium">Ground-up loss, Oasis LMF (KES)</th>
+                <th scope="col" className="pb-2 text-right font-medium">Difference, Oasis against this app (%)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-line">
               {rows.map((x) => (
                 <tr key={x.tier}>
                   <td className="py-2 text-ink">
-                    1 in {x.returnPeriod} <span className="text-xs text-muted">({x.tier})</span>
+                    {rpWithChance(x.returnPeriod)} <span className="text-xs text-muted">({x.tier})</span>
                   </td>
                   <td className="tabular py-2 text-right text-ink">{fmtKes(x.live, 2)}</td>
                   <td className="tabular py-2 text-right text-ink">{fmtKes(x.oasisLossKes, 2)}</td>
@@ -124,9 +129,17 @@ export function OasisCheck({ session }: { session: Session }) {
               </tr>
             </tbody>
           </table>
+          <SourceLine
+            className="mt-3 border-t border-line pt-3"
+            sources={[
+              { kind: "synthetic", text: "Portfolio of insured buildings, the same file in both engines" },
+              { kind: "real", text: session.dataset.hazardKind === "score" ? "Hazard maps; the score on them is a derived proxy for flooding" : "Flood depth maps" },
+              { kind: "assumption", text: "Reference assumptions: return periods, depth scale, fragility and caps" },
+            ]}
+          />
         </div>
         <p className="max-w-3xl text-xs leading-relaxed text-muted @6xl:col-start-1 @6xl:row-start-2">
-          The small differences come from Oasis storing depth in 1 mm steps and damage in 0.1% steps. Oasis counts each event only for its own band of annual probability, which gives the step value above. The average annual loss shown elsewhere in this app ({fmtKes(ref.aalKes, 2)} on reference assumptions) draws a straight line between events instead, so it sits {fmtPct(ref.aalKes / liveBanded - 1, 0)} higher. Both treat events more frequent than 1 in {ref.scenarios[0]?.returnPeriod} as causing no loss. Run on {run.generatedAt.slice(0, 10)}, {run.samples} samples, {run.periods.toLocaleString("en-KE")} simulated years, insured values as in the file.
+          The small differences come from Oasis storing depth in 1 mm steps and damage in 0.1% steps. Oasis counts each event only for its own band of annual probability, which gives the step value above. The average annual loss shown elsewhere in this app ({fmtKes(ref.aalKes, 2)} on reference assumptions) draws a straight line between events instead, so it sits {fmtPct(ref.aalKes / liveBanded - 1, 0)} higher. Both treat events more frequent than {rpLabel(ref.scenarios[0]?.returnPeriod ?? NaN)} as causing no loss. Run on {run.generatedAt.slice(0, 10)}, {run.samples} samples, {run.periods.toLocaleString("en-KE")} simulated years, insured values as in the file.
         </p>
       </div>
     </Card>

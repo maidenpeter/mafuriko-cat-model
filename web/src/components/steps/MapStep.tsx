@@ -5,11 +5,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { fmtInt, fmtKes, fmtNum, fmtPct } from "@/lib/format";
 import { DEPTH_LABELS } from "@/lib/geo/hazardImage";
 import { loadGeo, type FacilityKind, type GeoLayers } from "@/lib/geo/layers";
+import { annualChance, kes1, rpLabel, rpWithChance } from "@/lib/labels";
 import { assignPoints, facilityDepths, geometryBBox, wardAccumulation, type AreaRow, type BBox } from "@/lib/geo/spatial";
 import { HOUSING_CLASSES, HOUSING_LABELS } from "@/lib/model/types";
 import type { Active, Session } from "@/lib/session";
+import { STEP_NAMES, stepKicker } from "@/lib/steps";
 import { useTheme } from "@/lib/useDisplay";
 import { DRAINAGE_COLOR, FACILITY_COLORS, SETTLEMENT_COLOR, WARD_COLOR, WARD_METRICS, WATER_COLORS, type BasemapStatus, type LayerKey, type LayerState, type MapView, type Selection, type WardMetric } from "../map/mapTheme";
+import { ChartFrame, SourceLine, type ChartSource } from "../charts/ChartFrame";
 import { Button, Card, Note, Segmented, StepHeader, Tag } from "../ui";
 import { CLASS_COLORS } from "./DataStep";
 
@@ -43,7 +46,19 @@ const SIDE_CARD = "flex-[1_1_18rem] @3xl:flex-none";
 const DEEP_M = 0.5;
 
 const metricValue = (row: AreaRow, m: WardMetric) => (m === "loss" ? row.lossKes : m === "tiv" ? row.tivKes : m === "flooded" ? row.flooded : row.tivKes > 0 ? row.lossKes / row.tivKes : 0);
-const metricText = (row: AreaRow, m: WardMetric) => (m === "loss" ? fmtKes(row.lossKes) : m === "tiv" ? fmtKes(row.tivKes) : m === "flooded" ? fmtInt(row.flooded) : fmtPct(metricValue(row, m), 1));
+const metricText = (row: AreaRow, m: WardMetric) => (m === "loss" ? kes1(row.lossKes) : m === "tiv" ? kes1(row.tivKes) : m === "flooded" ? `${fmtInt(row.flooded)} buildings` : fmtPct(metricValue(row, m), 1));
+
+/** What each ward measure is counted in, for column heads and the map key. */
+const METRIC_UNITS: Record<WardMetric, string> = { loss: "KES", tiv: "KES", flooded: "buildings", lossRatio: "% of insured value" };
+
+/** The facility dots on the map, named one by one so the key does not lean on colour alone. */
+const FACILITY_KEY: { label: string; kind: FacilityKind }[] = [
+  { label: "hospital", kind: "hospital" },
+  { label: "clinic", kind: "clinic" },
+  { label: "school", kind: "school" },
+  { label: "police", kind: "police" },
+  { label: "fire station", kind: "fire_station" },
+];
 
 function Swatch({ color, shape = "dot" }: { color: string; shape?: "dot" | "line" | "square" | "ring" }) {
   if (shape === "line") return <span aria-hidden className="inline-block h-[3px] w-4 shrink-0 rounded-full" style={{ background: color }} />;
@@ -132,11 +147,19 @@ export function MapStep({ session, active }: { session: Session; active: Active 
 
   const setLayer = (key: LayerKey, v: boolean) => setLayers((l) => ({ ...l, [key]: v }));
   const drainage = dataset.drainage;
-  const tierNote = `${isScore ? `the "${s.id}" map, assumed to be a 1 in ${s.returnPeriod} event` : `the published 1 in ${s.returnPeriod} depth map`}${drainage ? `, plus drainage ponding up to ${fmtNum(drainage.depthM[dataset.scenarios.findIndex((x) => x.id === s.id)] ?? 0)} m near drains and in informal settlements` : ""}`;
+  const event = rpLabel(s.returnPeriod);
+  const eventWithChance = rpWithChance(s.returnPeriod);
+  const metricLabel = WARD_METRICS.find((m) => m.value === wardMetric)?.label ?? "";
+  const pondingM = drainage ? (drainage.depthM[dataset.scenarios.findIndex((x) => x.id === s.id)] ?? 0) : 0;
+  // Where the numbers on this step come from, in the four shared badges.
+  const hazardSource: ChartSource = { kind: "real", text: isScore ? "Hazard maps from the starter kit. The score on them is a derived proxy for flooding, not a measured depth" : "Flood depth maps from the starter kit" };
+  const portfolioSource: ChartSource = { kind: "synthetic", text: "Portfolio of insured buildings, placed at random" };
+  const assumptionSource: ChartSource = { kind: "assumption", text: `${isScore ? "Return periods, the scale that turns the score into metres, " : "Damage curves, "}fragility and caps${drainage ? ", drainage ponding" : ""}` };
+  const tierNote = `${isScore ? `the "${s.id}" map, assumed to be a ${event} event` : `the published ${event} depth map`}${drainage ? `, plus drainage ponding up to ${fmtNum(drainage.depthM[dataset.scenarios.findIndex((x) => x.id === s.id)] ?? 0)} m near drains and in informal settlements` : ""}`;
 
   return (
     <div>
-      <StepHeader kicker="Step 6" title="Risk map">
+      <StepHeader kicker={stepKicker("map")} title={STEP_NAMES.map}>
         Every layer on one map of Nairobi: where water collects at each event, which insured buildings it reaches, how losses pile up by ward, and what else sits in the water&rsquo;s path. Pick an event or press play to watch the flood spread as events get rarer.
       </StepHeader>
 
@@ -181,11 +204,12 @@ export function MapStep({ session, active }: { session: Session; active: Active 
         <div className="flex min-w-0 flex-wrap gap-4 @3xl:col-start-2 @3xl:row-span-3 @3xl:row-start-1 @3xl:flex-col @3xl:flex-nowrap @6xl:col-start-3 @6xl:row-span-2">
           <Card className={SIDE_CARD} title="Event" aside={<Tag kind={isScore ? "assumption" : "real"}>{isScore ? "Return period assumed" : "From the data"}</Tag>}>
             <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-              <span className="font-display text-3xl font-semibold tracking-tight text-ink">1 in {s.returnPeriod}</span>
-              <span className="text-xs text-muted">{fmtPct(1 / s.returnPeriod, 1)} chance a year</span>
+              <span className="font-display text-3xl font-semibold tracking-tight text-ink">{event}</span>
+              <span className="text-xs text-muted">{annualChance(s.returnPeriod)} chance</span>
             </div>
             <input
-              aria-label="Event return period"
+              aria-label="Event return period, in years"
+              aria-valuetext={eventWithChance}
               type="range"
               min={0}
               max={last}
@@ -199,10 +223,13 @@ export function MapStep({ session, active }: { session: Session; active: Active 
             />
             <div className="mt-1 flex justify-between text-xs text-muted tabular">
               {r.scenarios.map((x, i) => (
-                <button key={x.id} onClick={() => setK(i)} className={i === ki ? "font-semibold text-ink" : "hover:text-ink"}>
+                <button key={x.id} onClick={() => setK(i)} aria-label={rpWithChance(x.returnPeriod)} title={rpWithChance(x.returnPeriod)} className={i === ki ? "font-semibold text-ink" : "hover:text-ink"}>
                   {x.returnPeriod}
                 </button>
               ))}
+            </div>
+            <div className="mt-0.5 text-center text-xs text-muted">
+              Return period in years, from {rpLabel(r.scenarios[0].returnPeriod)} (most frequent) to {rpLabel(r.scenarios[last].returnPeriod)} (rarest)
             </div>
             <p className="mt-2 text-xs leading-relaxed text-ink-2">Showing {tierNote}.</p>
             <div className="mt-3 flex flex-wrap gap-2">
@@ -221,7 +248,7 @@ export function MapStep({ session, active }: { session: Session; active: Active 
             </div>
           </Card>
 
-          <Card className={SIDE_CARD} title={`At the 1 in ${s.returnPeriod} event`}>
+          <Card className={SIDE_CARD} title={`At the ${event} event`}>
             <dl className="grid grid-cols-2 gap-x-3 gap-y-3 text-sm">
               <div>
                 <dt className="text-xs text-muted">Buildings flooded</dt>
@@ -230,18 +257,20 @@ export function MapStep({ session, active }: { session: Session; active: Active 
                 </dd>
               </div>
               <div>
-                <dt className="text-xs text-muted">Portfolio loss</dt>
-                <dd className="tabular text-lg font-semibold text-brand">{fmtKes(s.lossKes)}</dd>
+                <dt className="text-xs text-muted">Portfolio loss, ground-up</dt>
+                <dd className="tabular text-lg font-semibold text-brand">{kes1(s.lossKes)}</dd>
               </div>
               <div>
                 <dt className="text-xs text-muted">Value in the flood area</dt>
-                <dd className="tabular font-semibold text-ink">{fmtKes(s.tivExposedKes)}</dd>
+                <dd className="tabular font-semibold text-ink">{kes1(s.tivExposedKes)}</dd>
               </div>
               <div>
                 <dt className="text-xs text-muted">Loss as share of all value</dt>
                 <dd className="tabular font-semibold text-ink">{fmtPct(s.lossKes / r.totalTivKes, 2)}</dd>
               </div>
             </dl>
+            <p className="mt-2 text-xs leading-relaxed text-muted">All four figures are for the {eventWithChance} event picked above. Ground-up means before deductibles and reinsurance.</p>
+            <SourceLine sources={[portfolioSource, hazardSource, assumptionSource]} className="mt-3 border-t border-line pt-3" />
             {geo?.facilities && (
               <div className="mt-4 border-t border-line pt-3">
                 <div className="mb-1.5 flex items-baseline justify-between gap-2 text-xs">
@@ -262,7 +291,8 @@ export function MapStep({ session, active }: { session: Session; active: Active 
                     </li>
                   ))}
                 </ul>
-                <p className="mt-2 text-xs leading-relaxed text-muted">The proxy marks shallow water widely, so the second count is the one to quote.</p>
+                <p className="mt-2 text-xs leading-relaxed text-muted">Each row counts facilities: first those the water reaches out of all mapped, then those in water deeper than {fmtNum(DEEP_M, 1)} m. The proxy marks shallow water widely, so the second count is the one to quote.</p>
+                <SourceLine sources={[{ kind: "real", text: "Facilities from OpenStreetMap" }]} className="mt-2" />
               </div>
             )}
           </Card>
@@ -272,23 +302,30 @@ export function MapStep({ session, active }: { session: Session; active: Active 
         </div>
 
         {/* The layers double as the map's legend, so they sit right under it, in as many columns as fit. */}
-        <Card title="Layers" className="@3xl:col-start-1 @3xl:row-start-2">
+        <Card title="Layers and map key" className="@3xl:col-start-1 @3xl:row-start-2">
+          <p className="mb-3 max-w-3xl text-sm leading-relaxed text-ink-2">Tick a layer to show it. The marks beside each name are the ones drawn on the map, for the {eventWithChance} event. Point at anything on the map to read its figures.</p>
           <div className="-mx-2 grid grid-cols-[repeat(auto-fit,minmax(min(13rem,100%),1fr))] content-start gap-x-2 gap-y-0.5">
             <Toggle id="lyr-hazard" checked={layers.hazard} onChange={(v) => setLayer("hazard", v)}>
-              Flood depth {isScore && <span className="text-xs text-muted">(score converted to metres)</span>}
+              <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span>
+                  Flood depth, metres {isScore && <span className="text-xs text-muted">(score converted to metres)</span>}
+                </span>
+                <Tag kind={isScore ? "proxy" : "real"} />
+              </span>
               <span className="mt-1 flex flex-wrap gap-x-2 gap-y-1">
                 {DEPTH_LABELS.map((l, i) => (
                   <span key={l} className="inline-flex items-center gap-1 text-xs text-ink-2">
-                    <span className="inline-block h-2.5 w-3.5 shrink-0 rounded-sm" style={{ background: `var(--seq-${i + 1})` }} />
+                    <span aria-hidden className="inline-block h-2.5 w-3.5 shrink-0 rounded-sm" style={{ background: `var(--seq-${i + 1})` }} />
                     {l}
                   </span>
                 ))}
               </span>
+              <span className="mt-0.5 block text-xs text-ink-2">Five bands from shallowest to deepest, each with its depth range written beside it.</span>
             </Toggle>
             {drainage && (
               <Toggle id="lyr-drainage" checked={layers.drainage} onChange={(v) => setLayer("drainage", v)}>
                 <span className="inline-flex items-center gap-1.5"><Swatch shape="square" color={DRAINAGE_COLOR} /> Drainage zone</span>
-                <span className="mt-0.5 block text-xs text-ink-2">Within {fmtInt(drainage.reachM)} m of a mapped drain or inside an informal settlement; darker means closer.</span>
+                <span className="mt-0.5 block text-xs text-ink-2">Within {fmtInt(drainage.reachM)} m of a mapped drain or inside an informal settlement; darker means closer. Ponding of up to {fmtNum(pondingM)} m is assumed there at this event.</span>
               </Toggle>
             )}
             <Toggle id="lyr-buildings" checked={layers.buildings} onChange={(v) => setLayer("buildings", v)}>
@@ -304,6 +341,7 @@ export function MapStep({ session, active }: { session: Session; active: Active 
                   <Swatch color={WARD_COLOR} shape="ring" /> takes a loss
                 </span>
               </span>
+              <span className="mt-0.5 block text-xs text-ink-2">A larger dot is a larger insured value (KES); a faint dot is dry at this event. In the 3D view a taller column is a larger loss (KES).</span>
             </Toggle>
             <Toggle id="lyr-wards" checked={layers.wards} onChange={(v) => setLayer("wards", v)}>
               Wards shaded by
@@ -314,6 +352,15 @@ export function MapStep({ session, active }: { session: Session; active: Active 
                   </option>
                 ))}
               </select>
+              <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-2">
+                <span className="inline-flex items-center gap-1">
+                  <span aria-hidden className="inline-block h-3 w-3 shrink-0 rounded-[3px] border" style={{ borderColor: WARD_COLOR }} /> lowest
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <Swatch shape="square" color={WARD_COLOR} /> highest{topWards[0] ? `: ${topWards[0].name}, ${metricText(topWards[0], wardMetric)}` : ""}
+                </span>
+              </span>
+              <span className="mt-0.5 block text-xs text-ink-2">A deeper shade is a ward with more at this event, measured in {METRIC_UNITS[wardMetric]}.</span>
             </Toggle>
             <Toggle id="lyr-water" checked={layers.waterways} onChange={(v) => setLayer("waterways", v)}>
               Rivers, streams and drains
@@ -328,6 +375,15 @@ export function MapStep({ session, active }: { session: Session; active: Active 
             </Toggle>
             <Toggle id="lyr-facilities" checked={layers.facilities} onChange={(v) => setLayer("facilities", v)}>
               Schools, health and emergency services <span className="text-xs text-muted">(zoom in to see)</span>
+              <span className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-xs text-ink-2">
+                {FACILITY_KEY.map((f) => (
+                  <span key={f.kind} className="inline-flex items-center gap-1">
+                    <Swatch color={FACILITY_COLORS[f.kind]} />
+                    {f.label}
+                  </span>
+                ))}
+              </span>
+              <span className="mt-0.5 block text-xs text-ink-2">A larger dot with a dark outline stands in water at this event.</span>
             </Toggle>
             <Toggle id="lyr-hotspots" checked={layers.hotspots} onChange={(v) => setLayer("hotspots", v)}>
               County-named flood areas
@@ -337,11 +393,21 @@ export function MapStep({ session, active }: { session: Session; active: Active 
               </span>
             </Toggle>
           </div>
+          <SourceLine
+            className="mt-4 border-t border-line pt-3"
+            sources={[
+              { kind: "real", text: `${isScore ? "Hazard maps (the flood score on them is a derived proxy)" : "Flood depth maps"}, ward boundaries, OpenStreetMap rivers, drains, settlements and facilities, county-named flood areas` },
+              { kind: "synthetic", text: "Insured buildings" },
+              { kind: "assumption", text: `Return periods${isScore ? ", the scale that turns the score into metres" : ""}${drainage ? ", drainage ponding depths" : ""}` },
+            ]}
+          />
         </Card>
 
-        <Card
+        <ChartFrame
           className="@3xl:col-span-2 @3xl:row-start-4 @6xl:col-span-3 @6xl:row-start-3"
-          title={`Accumulation by ward at the 1 in ${s.returnPeriod} event`}
+          title={`Accumulation by ward at the ${eventWithChance} event`}
+          subtitle={`Each row is one ward: the insured buildings it holds, their value, and what the ${event} event does to them. The bar ranks the wards by ${metricLabel.toLowerCase()}, with the figure beside it. Losses are ground-up, before deductibles and reinsurance.`}
+          sources={[portfolioSource, { kind: "real", text: `Ward boundaries (Omare & Omare 2017); ${isScore ? "hazard maps, whose score is a derived proxy" : "flood depth maps"}` }, assumptionSource]}
           aside={<Segmented label="Rank wards by" value={wardMetric} onChange={setWardMetric} options={WARD_METRICS.map((m) => ({ value: m.value, label: m.label }))} />}
         >
           {!geo?.wards ? (
@@ -353,11 +419,11 @@ export function MapStep({ session, active }: { session: Session; active: Active 
                   <tr className="border-b border-line text-left text-xs text-muted">
                     <th className="py-2 pr-3 font-medium">Ward</th>
                     <th className="py-2 pr-3 font-medium">Sub-county</th>
-                    <th className="py-2 pr-3 text-right font-medium">Buildings</th>
-                    <th className="py-2 pr-3 text-right font-medium">Insured value</th>
-                    <th className="py-2 pr-3 text-right font-medium">Flooded</th>
-                    <th className="py-2 pr-3 text-right font-medium">Loss</th>
-                    <th className="w-[28%] py-2 font-medium">Ranked by {WARD_METRICS.find((m) => m.value === wardMetric)?.label.toLowerCase()}</th>
+                    <th className="py-2 pr-3 text-right font-medium">Insured buildings</th>
+                    <th className="py-2 pr-3 text-right font-medium">Insured value, KES</th>
+                    <th className="py-2 pr-3 text-right font-medium">Buildings flooded</th>
+                    <th className="py-2 pr-3 text-right font-medium">Ground-up loss, KES</th>
+                    <th className="w-[28%] py-2 font-medium">Ranked by {metricLabel.toLowerCase()} ({METRIC_UNITS[wardMetric]})</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -378,7 +444,7 @@ export function MapStep({ session, active }: { session: Session; active: Active 
                           <span className="h-1.5 flex-1 rounded-full bg-surface-2">
                             <span className="block h-1.5 rounded-full" style={{ width: `${(metricValue(w, wardMetric) / maxMetric) * 100}%`, background: WARD_COLOR }} />
                           </span>
-                          <span className="tabular w-20 text-right text-xs text-ink-2">{metricText(w, wardMetric)}</span>
+                          <span className="tabular w-28 shrink-0 text-right text-xs text-ink-2">{metricText(w, wardMetric)}</span>
                         </div>
                       </td>
                     </tr>
@@ -391,7 +457,7 @@ export function MapStep({ session, active }: { session: Session; active: Active 
               </p>
             </div>
           )}
-        </Card>
+        </ChartFrame>
 
         {/* A grid, so the note is as tall as the layers card when the two share a row. */}
         <div className="grid @3xl:col-start-1 @3xl:row-start-3 @6xl:col-start-2 @6xl:row-start-2">
@@ -427,6 +493,7 @@ function SelectionCard({
 }) {
   const r = active.result;
   const isScore = session.dataset.hazardKind === "score";
+  const event = rpWithChance(r.scenarios[k].returnPeriod);
   if (!selection) {
     return (
       <Card className={`flex flex-col ${className}`} title="Details">
@@ -464,16 +531,24 @@ function SelectionCard({
             </div>
           ))}
         </dl>
-        <div className="mt-3 border-t border-line pt-2 text-xs text-muted">Loss at every event</div>
+        <div className="mt-3 border-t border-line pt-2 text-xs text-muted">Ground-up loss at every event, KES. The figures above are for the {event} event.</div>
         {/* As many events to a row as the text size leaves room for, so no figure is squeezed out of its cell. */}
-        <div className="mt-1 grid grid-cols-[repeat(auto-fit,minmax(3.5rem,1fr))] gap-1 text-center text-xs">
+        <div className="mt-1 grid grid-cols-[repeat(auto-fit,minmax(4.5rem,1fr))] gap-1 text-center text-xs">
           {per.map((p, i) => (
             <div key={r.scenarios[i].id} className={`rounded-md px-1 py-1 ${i === k ? "bg-surface-2 font-semibold text-ink" : "text-ink-2"}`}>
-              <div className="text-muted">1:{r.scenarios[i].returnPeriod}</div>
-              <div className="tabular">{p.lossKes > 0 ? fmtKes(p.lossKes, 0).replace("KES ", "") : "0"}</div>
+              <div className="text-muted">{rpLabel(r.scenarios[i].returnPeriod)}</div>
+              <div className="tabular">{p.lossKes > 0 ? kes1(p.lossKes).replace("KES ", "") : "0"}</div>
             </div>
           ))}
         </div>
+        <SourceLine
+          className="mt-3 border-t border-line pt-3"
+          sources={[
+            { kind: "synthetic", text: "The building and its insured value" },
+            { kind: "real", text: isScore ? "Hazard map; the score read from it is a derived proxy" : "Flood depth map" },
+            { kind: "assumption", text: `${isScore ? "Depth scale, " : ""}fragility and caps${t.drainageM > 0 ? ", drainage ponding" : ""}` },
+          ]}
+        />
       </Card>
     );
   }
@@ -484,14 +559,14 @@ function SelectionCard({
   const portfolioLoss = r.scenarios[k].lossKes || 1;
   return (
     <Card className={className} title={`${row.name} ward`} aside={<button onClick={onClear} className="text-xs text-ink-2 underline-offset-2 hover:underline">Clear</button>}>
-      <div className="mb-2 text-sm text-ink-2">{row.subcounty} sub-county</div>
+      <div className="mb-2 text-sm text-ink-2">{row.subcounty} sub-county · {event} event</div>
       <dl className="space-y-1 text-sm">
         {(
           [
             ["Insured buildings", fmtInt(row.buildings)],
             ["Insured value", fmtKes(row.tivKes)],
-            ["Flooded at this event", fmtInt(row.flooded)],
-            ["Loss at this event", fmtKes(row.lossKes)],
+            ["Buildings flooded at this event", fmtInt(row.flooded)],
+            ["Ground-up loss at this event", fmtKes(row.lossKes)],
             ["Share of portfolio loss", fmtPct(row.lossKes / portfolioLoss, 1)],
           ] as [string, string][]
         ).map(([label, value]) => (
@@ -506,6 +581,13 @@ function SelectionCard({
           Largest losses here: {top.map((x) => `${x.b.locId} (${fmtKes(x.loss)})`).join(", ")}
         </div>
       )}
+      <SourceLine
+        className="mt-3 border-t border-line pt-3"
+        sources={[
+          { kind: "synthetic", text: "Insured buildings, placed at random" },
+          { kind: "real", text: `Ward boundary; ${isScore ? "hazard map, whose score is a derived proxy" : "flood depth map"}` },
+        ]}
+      />
     </Card>
   );
 }

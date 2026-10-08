@@ -6,9 +6,13 @@ import { buildLedger, type AgentRun, type Deliberation, type Scored } from "@/li
 import { BASIS_LABELS, reasonAt, ROLE_LABELS, type Basis, type Proposal, type Role } from "@/lib/agents/schema";
 import type { Check } from "@/lib/checks";
 import { PARAM_LABELS, unusedForDepth } from "@/lib/export";
-import { fmtKes, fmtNum, fmtPct } from "@/lib/format";
+import { fmtNum, fmtPct } from "@/lib/format";
+import { kes1, rpWithChance } from "@/lib/labels";
 import { flattenParams, REFERENCE_PARAMS } from "@/lib/model/params";
 import type { Session } from "@/lib/session";
+import { STEP_NAMES, stepKicker } from "@/lib/steps";
+import { SourceBadge, SourceLine } from "../charts/ChartFrame";
+import { Figure } from "../charts/Figure";
 import { Button, Card, CheckList, ChecksSummary, Note, StatusIcon, StepHeader, Tag } from "../ui";
 
 const ROLE_BLURB: Record<Role, string> = {
@@ -56,7 +60,6 @@ function BoxRow({ count, children }: { count: number; children: ReactNode }) {
 }
 
 const BOX = "min-w-0 grow basis-full rounded-xl bg-surface-2 p-3 @3xl:basis-[calc(100%/var(--per-row)_-_0.75rem)]";
-const TILE = "flex min-w-0 grow basis-44 flex-col justify-center rounded-xl bg-surface-2 p-3";
 
 function Thinking() {
   return (
@@ -122,11 +125,18 @@ function ProposalBody({ proposal, scored, session }: { proposal: Proposal; score
       <p className="text-sm leading-relaxed text-ink">{proposal.stance}</p>
       {scored && rarest && (
         <div className="mt-3 rounded-xl bg-surface-2 p-3">
-          <div className="text-xs text-muted">What these assumptions produce, computed by code</div>
+          <div className="text-xs text-muted">What these assumptions produce, computed by code. Ground-up loss, before insurance terms.</div>
           <div className="mt-1 flex flex-wrap gap-x-5 gap-y-1 text-sm text-ink-2">
-            <span>1 in {rarest.returnPeriod}: <strong className="tabular font-semibold text-ink">{fmtKes(rarest.lossKes, 2)}</strong></span>
-            <span>Average year: <strong className="tabular font-semibold text-ink">{fmtKes(scored.result.aalKes, 2)}</strong></span>
+            <span>{rpWithChance(rarest.returnPeriod)} event: <strong className="tabular font-semibold text-ink">{kes1(rarest.lossKes)}</strong></span>
+            <span>Average annual loss: <strong className="tabular font-semibold text-ink">{kes1(scored.result.aalKes)}</strong></span>
           </div>
+          <SourceLine
+            className="mt-2"
+            sources={[
+              { kind: "ai", text: "Assumptions proposed by this agent" },
+              { kind: "synthetic", text: "Portfolio of insured buildings" },
+            ]}
+          />
         </div>
       )}
       <details className="mt-3">
@@ -178,7 +188,7 @@ export function AgentsStep({ session, deliberation: d, busy, checks, status, has
 
   return (
     <div>
-      <StepHeader kicker="Step 3" title="Agents set the assumptions">
+      <StepHeader kicker={stepKicker("agents")} title="Agents set the assumptions">
         The model needs judgement calls that the data cannot settle: {isScore ? "how deep a score of 1.0 is, " : ""}how fragile each kind of building is, how much of its value can be lost{isScore ? ", and how rare each tier is" : ""}. Three agents argue those out in parallel, then a Chair decides. They read a profile of the data, never the rows, and they never produce a loss figure.
       </StepHeader>
 
@@ -234,38 +244,47 @@ export function AgentsStep({ session, deliberation: d, busy, checks, status, has
           <AgentCard run={d.runs.chair}>
             {chair && (
               <div>
-                {/* On a wide card the three figures sit beside the summary, which keeps its reading width. */}
-                <div className="grid gap-x-6 gap-y-4 @6xl:grid-cols-[minmax(0,65ch)_minmax(0,1fr)]">
+                {/* The three figures stay in view under the heading. The summary and the answers to the challenges
+                    scroll inside a box of limited height, taller on a large screen, so the page does not run long. */}
+                {finalRarest && (
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(min(15rem,100%),1fr))] gap-3">
+                    <Figure label={`Ground-up loss, ${rpWithChance(refRarest.returnPeriod)}, reference values`} value={kes1(refRarest.lossKes)} sub="Without the agents" source="assumption" sourceText="Reference assumptions" />
+                    <Figure strong label={`Ground-up loss, ${rpWithChance(finalRarest.returnPeriod)}, agreed values`} value={kes1(finalRarest.lossKes)} sub="With the assumptions the Chair settled" source="ai" sourceText="Agreed by the agents, computed by code" />
+                    <Figure label="Change in average annual loss" value={fmtPct(d.final!.result.aalKes / session.reference.aalKes - 1, 0).replace(/^(?!-)/, "+")} sub={`${kes1(session.reference.aalKes)} with reference values, ${kes1(d.final!.result.aalKes)} with agreed values`} source="ai" sourceText="Agreed against reference assumptions" />
+                  </div>
+                )}
+                <div
+                  role="region"
+                  aria-label="The Chair's decision in full"
+                  tabIndex={0}
+                  className="@container mt-4 max-h-96 overflow-y-auto overscroll-contain rounded-xl border border-line p-4 lg:max-h-120 2xl:max-h-160"
+                >
                   <p className="max-w-3xl text-base leading-relaxed text-ink">{chair.summary}</p>
-                  {finalRarest && (
-                    <div className="flex flex-wrap gap-3">
-                      <div className={TILE}><div className="text-xs text-muted">1 in {refRarest.returnPeriod}, reference values</div><div className="tabular mt-0.5 text-lg font-semibold text-ink">{fmtKes(refRarest.lossKes, 2)}</div></div>
-                      <div className={TILE}><div className="text-xs text-muted">1 in {finalRarest.returnPeriod}, agreed values</div><div className="tabular mt-0.5 text-lg font-semibold text-ink">{fmtKes(finalRarest.lossKes, 2)}</div></div>
-                      <div className={TILE}><div className="text-xs text-muted">Change in average annual loss</div><div className="tabular mt-0.5 text-lg font-semibold text-ink">{fmtPct(d.final!.result.aalKes / session.reference.aalKes - 1, 0).replace(/^(?!-)/, "+")}</div></div>
-                    </div>
+                  {/* One box per challenge, in the same columns as the Critic's card, so an answer sits under its challenge. */}
+                  {critic && (
+                    <BoxRow count={critic.challenges.length}>
+                      {critic.challenges.map((c) => {
+                        const a = chair.responses.find((r) => r.challengeId === c.id);
+                        return (
+                          <li key={c.id} className={`${BOX} text-sm leading-relaxed`}>
+                            <span className="font-semibold text-ink">{c.id} · {c.title}</span>
+                            <span className="ml-2 text-xs font-semibold uppercase tracking-wide text-muted">{a ? VERDICT[a.verdict] : "Not answered"}</span>
+                            {a && <div className="text-ink-2">{a.response}</div>}
+                          </li>
+                        );
+                      })}
+                    </BoxRow>
                   )}
                 </div>
-                {/* One box per challenge, in the same columns as the Critic's card, so an answer sits under its challenge. */}
-                {critic && (
-                  <BoxRow count={critic.challenges.length}>
-                    {critic.challenges.map((c) => {
-                      const a = chair.responses.find((r) => r.challengeId === c.id);
-                      return (
-                        <li key={c.id} className={`${BOX} text-sm leading-relaxed`}>
-                          <span className="font-semibold text-ink">{c.id} · {c.title}</span>
-                          <span className="ml-2 text-xs font-semibold uppercase tracking-wide text-muted">{a ? VERDICT[a.verdict] : "Not answered"}</span>
-                          {a && <div className="text-ink-2">{a.response}</div>}
-                        </li>
-                      );
-                    })}
-                  </BoxRow>
-                )}
               </div>
             )}
           </AgentCard>
 
           {ledger.length > 0 && (
-            <Card title="Assumption ledger" aside={<Tag kind="ai" />} className="mt-4">
+            <Card title="Assumption ledger" aside={<SourceBadge kind="ai" />} className="mt-4">
+              <p className="-mt-2 mb-4 max-w-3xl text-sm leading-relaxed text-ink-2">
+                Read along a row: the reference value the model would use by itself, what each agent proposed, the value the Chair agreed, and why. The agreed column is what the model uses from here on. Fragility is a multiplier on flood depth and a damage cap is a share of insured value (0.6 means 60%); other units are in the assumption&apos;s name.
+              </p>
               <div className="overflow-x-auto">
                 <table className="w-full min-w-176 text-left text-sm">
                   <thead className="text-xs text-muted">
@@ -293,6 +312,13 @@ export function AgentsStep({ session, deliberation: d, busy, checks, status, has
                 </table>
               </div>
               {ledger.some((r) => r.adjusted) && <p className="mt-2 text-xs text-muted">* Outside the allowed range as proposed; corrected by code.</p>}
+              <SourceLine
+                className="mt-4 border-t border-line pt-3"
+                sources={[
+                  { kind: "assumption", text: "Reference column: the model's starting assumptions" },
+                  { kind: "ai", text: "Optimist, Cautious and Agreed columns, and the reasons: written by the agents, range-checked by code" },
+                ]}
+              />
             </Card>
           )}
 
@@ -310,8 +336,8 @@ export function AgentsStep({ session, deliberation: d, busy, checks, status, has
 
       {!d && (
         <>
-          <Card title="Reference assumptions" aside={<Tag kind="assumption" />}>
-          <p className="mb-3 text-sm leading-relaxed text-ink-2">These are in force until the agents have run. They are also the &ldquo;without AI&rdquo; side of the comparison in the results.</p>
+          <Card title="Reference assumptions" aside={<SourceBadge kind="assumption" />}>
+          <p className="mb-3 text-sm leading-relaxed text-ink-2">These are in force until the agents have run. They are also the &ldquo;without AI&rdquo; side of the comparison in the {STEP_NAMES.results} step.</p>
           <div className="grid grid-cols-[repeat(auto-fit,minmax(min(20rem,100%),1fr))] gap-x-8 gap-y-1.5 text-sm">
             {flattenParams(REFERENCE_PARAMS).filter((p) => isScore || !unusedForDepth(p.path)).map((p) => (
               <div key={p.path} className="flex justify-between gap-3 border-b border-line py-1"><span className="text-ink-2">{PARAM_LABELS[p.path]}</span><span className="tabular font-medium text-ink">{fmtNum(p.value)}</span></div>

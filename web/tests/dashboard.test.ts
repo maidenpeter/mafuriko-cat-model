@@ -5,6 +5,8 @@ import {
   chainStatus,
   chainSummary,
   classLossRows,
+  dashboardStepId,
+  droppedFileKind,
   hotspotCount,
   layerSteps,
   nearestEventIndex,
@@ -16,6 +18,7 @@ import {
 } from "../src/lib/dashboard";
 import { applyTerms, DEFAULT_TERMS } from "../src/lib/model/terms";
 import type { Dataset, ModelResult, ScenarioResult } from "../src/lib/model/types";
+import { STEP_IDS } from "../src/lib/steps";
 
 describe("signed percentages", () => {
   it("puts a plus sign on a rise and a minus sign on a fall", () => {
@@ -276,5 +279,45 @@ describe("the model chain", () => {
     expect(chainSummary(stages[3])).toBe("2 of 3 passed, 1 failed");
     expect(chainSummary({ pass: 1, warn: 2, fail: 1, total: 4 })).toBe("1 of 4 passed, 1 failed, 2 warnings");
     expect(chainSummary({ pass: 0, warn: 0, fail: 0, total: 0 })).toBe("No checks yet");
+  });
+});
+
+describe("where the dashboard's links go", () => {
+  it("sends each stage of the model chain to a step that exists", () => {
+    const opened = chainStatus([]).map((s) => dashboardStepId(s.step));
+    expect(opened).toEqual(["hazard", "vulnerability", "data", "loss", "results"]);
+    for (const id of opened) expect(STEP_IDS).toContain(id);
+  });
+
+  it("sends the agents and the offer to their own steps", () => {
+    expect(dashboardStepId("agents")).toBe("agents");
+    expect(dashboardStepId("offer")).toBe("offer");
+  });
+});
+
+describe("a file given to the offer card", () => {
+  const offers = [".docx", ".txt"];
+
+  it("takes a Word or text file as an offer, whatever the case of its name", () => {
+    expect(droppedFileKind("memo.docx", offers)).toBe("offer");
+    expect(droppedFileKind("MEMO.TXT", offers)).toBe("offer");
+    expect(droppedFileKind(" offer.v2.Docx ", offers)).toBe("offer");
+  });
+
+  it("takes a zip as model data, even if zips were listed as offers", () => {
+    expect(droppedFileKind("starter-kit.zip", offers)).toBe("model-data");
+    expect(droppedFileKind("starter-kit.ZIP", [...offers, ".zip"])).toBe("model-data");
+  });
+
+  it("tells the old Word format apart from .docx", () => {
+    expect(droppedFileKind("memo.doc", offers)).toBe("old-word");
+    expect(droppedFileKind("memo.doc", [...offers, ".doc"])).toBe("old-word");
+  });
+
+  it("turns away anything else until its type is added to the list", () => {
+    expect(droppedFileKind("memo.pdf", offers)).toBe("unsupported");
+    expect(droppedFileKind("memo.pdf", [...offers, ".pdf"])).toBe("offer");
+    expect(droppedFileKind("docx", offers)).toBe("unsupported");
+    expect(droppedFileKind("", offers)).toBe("unsupported");
   });
 });

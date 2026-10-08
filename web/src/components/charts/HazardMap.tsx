@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fmtKes, fmtNum } from "@/lib/format";
+import { StatusIcon } from "@/components/ui";
+import { fmtInt, fmtNum } from "@/lib/format";
+import { kes1 } from "@/lib/labels";
 import type { HotspotHit } from "@/lib/model/hotspots";
 import { HOUSING_LABELS, type Dataset, type Raster } from "@/lib/model/types";
 import { useTheme } from "@/lib/useDisplay";
@@ -108,7 +110,8 @@ export function HazardMap({ dataset, scenarioIndex, hits }: { dataset: Dataset; 
 
   const px = (lon: number) => ((lon - bbox[0]) / (bbox[2] - bbox[0])) * width;
   const py = (lat: number) => ((bbox[3] - lat) / (bbox[3] - bbox[1])) * height;
-  const unit = isScore ? "" : " m";
+  // Every value is written with what it measures: a score on its 0 to 1 scale, or a depth in metres.
+  const reading = (v: number) => (isScore ? `Susceptibility score ${fmtNum(v, 3)} on a scale of 0 to 1` : `Flood depth ${fmtNum(v, 2)} m`);
 
   const dry = dataset.buildings.filter((b) => !(b.hazard[scenarioIndex] > 0));
   const wet = dataset.buildings.filter((b) => b.hazard[scenarioIndex] > 0);
@@ -117,7 +120,14 @@ export function HazardMap({ dataset, scenarioIndex, hits }: { dataset: Dataset; 
     <div>
       <div ref={wrap} className="relative w-full overflow-hidden rounded-xl border border-line bg-surface-2" style={{ height }}>
         <canvas ref={canvas} width={width} height={height} className="absolute inset-0" />
-        <svg width={width} height={height} className="absolute inset-0" onPointerLeave={() => setTip(null)}>
+        <svg
+          width={width}
+          height={height}
+          className="absolute inset-0"
+          role="img"
+          aria-label={`Map of the ${isScore ? "susceptibility score" : "flood depth"} in the ${scenario.label} scenario, with ${fmtInt(wet.length)} buildings affected, ${fmtInt(dry.length)} not affected${hits.length > 0 ? ` and ${hits.length} known flood areas` : ""}`}
+          onPointerLeave={() => setTip(null)}
+        >
           {dry.map((b) => (
             <circle key={b.locId} cx={px(b.lon)} cy={py(b.lat)} r={2} fill="var(--muted)" opacity={0.7} />
           ))}
@@ -135,7 +145,7 @@ export function HazardMap({ dataset, scenarioIndex, hits }: { dataset: Dataset; 
                   x: px(b.lon),
                   y: py(b.lat),
                   title: b.locId,
-                  lines: [HOUSING_LABELS[b.housingClass], `Insured value ${fmtKes(b.tivKes)}`, `${isScore ? "Score" : "Depth"} ${fmtNum(b.hazard[scenarioIndex], 3)}${unit}`],
+                  lines: [HOUSING_LABELS[b.housingClass], `Insured value ${kes1(b.tivKes)}`, reading(b.hazard[scenarioIndex])],
                 })
               }
             />
@@ -144,7 +154,7 @@ export function HazardMap({ dataset, scenarioIndex, hits }: { dataset: Dataset; 
             <g
               key={h.name}
               transform={`translate(${px(h.lon)},${py(h.lat)})`}
-              onPointerEnter={() => setTip({ x: px(h.lon), y: py(h.lat), title: h.name, lines: [h.hit ? `Flagged by the hazard layer (${fmtNum(h.value, 3)}${unit})` : "Not flagged by the hazard layer"] })}
+              onPointerEnter={() => setTip({ x: px(h.lon), y: py(h.lat), title: h.name, lines: ["Known flood area", h.hit ? "Flagged by the hazard layer" : "Not flagged by the hazard layer", ...(h.hit ? [reading(h.value)] : [])] })}
             >
               <circle r={8} fill={h.hit ? "var(--good)" : "var(--critical)"} stroke="var(--surface)" strokeWidth={2} />
               {h.hit ? (
@@ -171,23 +181,25 @@ export function HazardMap({ dataset, scenarioIndex, hits }: { dataset: Dataset; 
         )}
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-ink-2">
+      {/* The legend. Each mark differs by size or shape as well as colour: a large ringed dot, a small dot, a tick and a cross. */}
+      <ul aria-label="Legend" className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-ink-2">
         {raster && (
-          <span className="inline-flex items-center gap-2">
-            <span className="tabular">0</span>
+          <li className="inline-flex flex-wrap items-center gap-2">
+            <span>{isScore ? "Susceptibility score" : "Flood depth"}:</span>
+            <span className="tabular">{isScore ? "0" : "0 m"}</span>
             <span className="inline-block h-2.5 w-24 shrink-0 rounded-full" style={{ background: `linear-gradient(to right, ${RAMP_VARS.map((v) => `var(${v})`).join(",")})` }} />
-            <span className="tabular">{isScore ? "1.0 score" : `${fmtNum(scaleMax, 1)} m or deeper`}</span>
-          </span>
+            <span className="tabular">{isScore ? "1.0 (highest)" : `${fmtNum(scaleMax, 1)} m or deeper`}</span>
+          </li>
         )}
-        <span className="inline-flex items-center gap-2"><span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: "var(--series-2)" }} />Building affected ({wet.length})</span>
-        <span className="inline-flex items-center gap-2"><span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: "var(--muted)" }} />Not affected ({dry.length})</span>
+        <li className="inline-flex items-center gap-2"><span className="inline-block h-3 w-3 shrink-0 rounded-full border-2 border-surface ring-1 ring-line" style={{ background: "var(--series-2)" }} />Building affected ({fmtInt(wet.length)})</li>
+        <li className="inline-flex items-center gap-2"><span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: "var(--muted)" }} />Building not affected ({fmtInt(dry.length)})</li>
         {hits.length > 0 && (
           <>
-            <span className="inline-flex items-center gap-2"><span className="inline-block h-3 w-3 shrink-0 rounded-full" style={{ background: "var(--good)" }} />Known flood area, flagged ({hits.filter((h) => h.hit).length})</span>
-            <span className="inline-flex items-center gap-2"><span className="inline-block h-3 w-3 shrink-0 rounded-full" style={{ background: "var(--critical)" }} />Known flood area, missed ({hits.filter((h) => !h.hit).length})</span>
+            <li className="inline-flex items-center gap-2"><StatusIcon status="pass" size={14} />Known flood area, flagged ({hits.filter((h) => h.hit).length})</li>
+            <li className="inline-flex items-center gap-2"><StatusIcon status="fail" size={14} />Known flood area, missed ({hits.filter((h) => !h.hit).length})</li>
           </>
         )}
-      </div>
+      </ul>
     </div>
   );
 }

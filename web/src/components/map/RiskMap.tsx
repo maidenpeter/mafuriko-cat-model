@@ -10,6 +10,7 @@ import { cssColor, hazardImageUrl, rasterCorners, rgbCss, stressImageUrl, type R
 import { GEO_ATTRIBUTION, type GeoLayers } from "@/lib/geo/layers";
 import { geometryBBox, type AreaRow, type BBox } from "@/lib/geo/spatial";
 import { hazardToDepth } from "@/lib/model/pipeline";
+import { rpLabel } from "@/lib/labels";
 import { HOUSING_LABELS, type HousingClass } from "@/lib/model/types";
 import type { Active, Session } from "@/lib/session";
 import { DRAINAGE_RGB, FACILITY_COLORS, SETTLEMENT_COLOR, WARD_COLOR, WATER_COLORS, type BasemapStatus, type LayerKey, type LayerState, type MapCamera, type MapView, type Selection, type WardMetric } from "./mapTheme";
@@ -619,7 +620,7 @@ function bindInteractions(map: MapLibre, latest: { current: Props }, setTip: (t:
     if (!hit) return setTip(null);
     const props = hit.properties as Record<string, unknown>;
     const s = p.active.result.scenarios[p.k];
-    const event = `1 in ${s.returnPeriod} event`;
+    const event = `${rpLabel(s.returnPeriod)} event`;
     if (hit.layer.id === "buildings" || hit.layer.id === "columns") {
       const i = Number(props.i);
       const b = p.session.dataset.buildings[i];
@@ -628,9 +629,9 @@ function bindInteractions(map: MapLibre, latest: { current: Props }, setTip: (t:
         ...place(e),
         title: `${b.locId} · ${HOUSING_LABELS[b.housingClass as HousingClass]}`,
         lines: [
-          `Insured ${fmtKes(b.tivKes, 2)}`,
-          t.depthM > 0 ? `${event}: ${fmtNum(t.depthM)} m${t.drainageM > 0 && t.drainageM >= t.depthM ? " (drainage ponding)" : ""}, ${fmtPct(t.damageRatio, 1)} damage` : `${event}: dry`,
-          `Loss ${fmtKes(t.lossKes, 2)}`,
+          `Insured value ${fmtKes(b.tivKes, 2)} (synthetic)`,
+          t.depthM > 0 ? `${event}: ${fmtNum(t.depthM)} m of water${t.drainageM > 0 && t.drainageM >= t.depthM ? " (drainage ponding)" : ""}, ${fmtPct(t.damageRatio, 1)} damage` : `${event}: dry`,
+          `Ground-up loss ${fmtKes(t.lossKes, 2)}`,
           "Click to trace the loss",
         ],
       });
@@ -640,13 +641,18 @@ function bindInteractions(map: MapLibre, latest: { current: Props }, setTip: (t:
       setTip({
         ...place(e),
         title: `${row.name} ward · ${row.subcounty}`,
-        lines: [`${fmtInt(row.buildings)} buildings, ${fmtKes(row.tivKes)} insured`, `${event}: ${fmtInt(row.flooded)} flooded, loss ${fmtKes(row.lossKes)}`],
+        lines: [
+          `${fmtInt(row.buildings)} insured buildings (synthetic), ${fmtKes(row.tivKes)} insured value`,
+          `${event}: ${fmtInt(row.flooded)} buildings flooded, ground-up loss ${fmtKes(row.lossKes)}`,
+          `Loss is ${fmtPct(row.tivKes > 0 ? row.lossKes / row.tivKes : 0, 1)} of the ward's insured value`,
+          "Click to see what the ward holds",
+        ],
       });
     } else if (hit.layer.id === "facilities") {
       const i = Number(props.i);
       const f = p.geo.facilities?.features[i];
       const d = p.facilityDepth[i]?.[p.k] ?? 0;
-      setTip({ ...place(e), title: f?.properties.name ?? "Unnamed facility", lines: [String(props.kind).replace("_", " "), d > 0 ? `${event}: ${fmtNum(d)} m of water` : `${event}: dry`] });
+      setTip({ ...place(e), title: f?.properties.name ?? "Unnamed facility", lines: [`${String(props.kind).replace("_", " ")} (OpenStreetMap)`, d > 0 ? `${event}: ${fmtNum(d)} m of water` : `${event}: dry`] });
     } else if (hit.layer.id === "hotspots") {
       setTip({ ...place(e), title: String(props.name), lines: ["County-named flood area", Number(props.hit) === 1 ? (p.session.dataset.drainage ? "Flagged by terrain or the drainage zone" : "Flagged by the hazard proxy") : "Missed: drainage-driven flooding the open maps cannot see"] });
     } else if (hit.layer.id === "settlements-fill") {

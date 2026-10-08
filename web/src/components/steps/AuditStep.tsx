@@ -3,12 +3,13 @@
 import type { Deliberation } from "@/lib/agents/orchestrate";
 import type { Check, CheckGroup } from "@/lib/checks";
 import { buildAudit, buildNote, LIMITS, PARAM_LABELS, TERMS_NOTICE, termRows, unusedForDepth } from "@/lib/export";
-import { fmtNum } from "@/lib/format";
+import { fmtInt, fmtNum } from "@/lib/format";
 import { kes1 } from "@/lib/labels";
 import { flattenParams, REFERENCE_PARAMS } from "@/lib/model/params";
 import type { TermsResult } from "@/lib/model/terms";
 import { download, slim, type Active, type LogEntry, type Session } from "@/lib/session";
-import { SourceBadge } from "../charts/ChartFrame";
+import { STEP_NAMES, stepKicker } from "@/lib/steps";
+import { SourceBadge, SourceLine } from "../charts/ChartFrame";
 import { Button, Card, CheckList, ChecksSummary, StepHeader, Tag } from "../ui";
 
 const GROUPS: { id: CheckGroup; title: string }[] = [
@@ -27,9 +28,11 @@ interface Props {
   log: LogEntry[];
   /** The insurance terms in force and what they do to every event. */
   terms: TermsResult;
+  /** Where the model data was read from. The section is left out when this is absent. */
+  modelSource?: { source: "folder" | "sample"; folderName: string; reason: string | null };
 }
 
-export function AuditStep({ session, active, deliberation, checks, log, terms }: Props) {
+export function AuditStep({ session, active, deliberation, checks, log, terms, modelSource }: Props) {
   const isScore = session.dataset.hazardKind === "score";
   const ref = new Map(flattenParams(REFERENCE_PARAMS).map((p) => [p.path, p.value]));
   const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
@@ -37,7 +40,7 @@ export function AuditStep({ session, active, deliberation, checks, log, terms }:
 
   return (
     <div>
-      <StepHeader kicker="Step 9" title="Audit">
+      <StepHeader kicker={stepKicker("audit")} title={STEP_NAMES.audit}>
         Everything needed to challenge or reproduce this result: every check, every assumption and where it came from, the limits of the model, and a log of what ran.
       </StepHeader>
 
@@ -46,6 +49,33 @@ export function AuditStep({ session, active, deliberation, checks, log, terms }:
         <Button variant="secondary" onClick={() => download(`${base}-audit.json`, JSON.stringify(buildAudit(session, active, deliberation, checks, log, terms), null, 1))}>Download the full audit file</Button>
         {deliberation?.final && <Button variant="ghost" onClick={() => download(`${base}-agent-run.json`, JSON.stringify(slim(deliberation), null, 1))}>Save the agent run for replay</Button>}
       </div>
+
+      {modelSource && (
+        <Card title="Model data" className="mb-4">
+          <p className="-mt-2 max-w-3xl text-sm leading-relaxed text-ink-2">
+            {modelSource.source === "folder" ? (
+              <>The model data was read from the model data folder on this machine, named <span className="wrap-anywhere font-semibold text-ink">{modelSource.folderName}</span>.</>
+            ) : (
+              <>The model data folder was not used. The model is running on the sample data set that ships with the app.</>
+            )}
+          </p>
+          {modelSource.source === "sample" && modelSource.reason && (
+            <p className="mt-2 max-w-3xl text-sm leading-relaxed text-ink-2"><span className="font-semibold text-ink">Why:</span> {modelSource.reason}</p>
+          )}
+          <dl className="mt-4 grid grid-cols-[repeat(auto-fit,minmax(min(14rem,100%),1fr))] gap-x-8 gap-y-3 text-sm">
+            <div><dt className="text-xs text-muted">Data set</dt><dd className="wrap-anywhere font-semibold text-ink">{session.dataset.name}</dd></div>
+            <div><dt className="text-xs text-muted">Hazard maps</dt><dd className="tabular font-semibold text-ink">{fmtInt(session.dataset.scenarios.length)} {isScore ? "tiers, read as a hazard score" : "flood depth maps"}</dd></div>
+            <div><dt className="text-xs text-muted">Insured buildings</dt><dd className="tabular font-semibold text-ink">{fmtInt(session.dataset.buildings.length)}</dd></div>
+          </dl>
+          <SourceLine
+            className="mt-4 border-t border-line pt-3"
+            sources={[
+              { kind: "real", text: isScore ? "Hazard maps; the hazard score read from them is a derived proxy" : "Hazard maps" },
+              { kind: "synthetic", text: "Portfolio of insured buildings" },
+            ]}
+          />
+        </Card>
+      )}
 
       <Card title="All checks" aside={<ChecksSummary checks={checks} />}>
         {/* The groups flow down one column and on into the next, so a short group sits under another short one
@@ -104,6 +134,8 @@ export function AuditStep({ session, active, deliberation, checks, log, terms }:
           sits beside the assumption table and takes the table's height. Stacked on a narrow screen. */}
       <div className="mt-4 grid gap-4 @3xl:grid-cols-2 @6xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
         <Card title="Assumptions in force" aside={<Tag kind={active.source === "ai" ? "ai" : "assumption"}>{active.source === "ai" ? "Agreed by the agents" : "Reference values"}</Tag>}>
+          <p className="-mt-2 mb-3 text-sm leading-relaxed text-ink-2">Each row is one value the model uses, beside the reference value it started from.</p>
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="text-xs text-muted"><tr><th className="pb-2 text-left font-medium">Assumption</th><th className="pb-2 pl-3 text-right font-medium">In force</th><th className="pb-2 pl-3 text-right font-medium">Reference</th></tr></thead>
             <tbody className="divide-y divide-line">
@@ -112,7 +144,8 @@ export function AuditStep({ session, active, deliberation, checks, log, terms }:
               ))}
             </tbody>
           </table>
-          {active.source === "ai" && <p className="mt-3 text-xs text-muted">The reason for each value is in the assumption ledger in step 3 and in the written note.</p>}
+          </div>
+          {active.source === "ai" && <p className="mt-3 text-xs text-muted">The reason for each value is in the assumption ledger in the {STEP_NAMES.agents} step and in the written note.</p>}
         </Card>
 
         <Card title="What this model cannot tell you" className="@3xl:col-span-full @3xl:row-start-1">

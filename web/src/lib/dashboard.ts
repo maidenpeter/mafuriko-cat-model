@@ -10,11 +10,14 @@
  *   paramChanges(ledger)          the parameters the agents moved away from the reference
  *   hotspotCount(hits)            how many named flood areas the hazard layer flags
  *   chainStatus(checks)           the five stages of the model chain with their check counts
+ *   dashboardStepId(step)         which walkthrough step a link on the dashboard opens
+ *   droppedFileKind(name, exts)   whether a file given to the offer card is an offer, model data, or neither
  */
 
 import type { Check, CheckStatus } from "./checks";
 import type { TermsLossAt, LayerRow } from "./model/terms";
 import { HOUSING_CLASSES, HOUSING_LABELS, type HousingClass, type ScenarioResult } from "./model/types";
+import type { StepId } from "./steps";
 
 /** A fraction as a signed percentage with one decimal: 0.125 gives "+12.5%", -0.04 gives "-4.0%". */
 export function signedPct(fraction: number | null | undefined): string {
@@ -233,4 +236,40 @@ export function chainSummary(stage: Pick<ChainStage, "pass" | "warn" | "fail" | 
   if (stage.fail > 0) parts.push(`${stage.fail} failed`);
   if (stage.warn > 0) parts.push(`${stage.warn} warning${stage.warn > 1 ? "s" : ""}`);
   return parts.join(", ");
+}
+
+/** Every place the dashboard can send the reader: a stage of the model chain, the agents, or the offer. */
+export type DashboardStep = ChainStep | "agents" | "offer";
+
+const DASHBOARD_STEP_IDS: Record<DashboardStep, StepId> = {
+  hazard: "hazard",
+  vulnerability: "vulnerability",
+  // The exposure checks are shown where the files are read.
+  exposure: "data",
+  financial: "loss",
+  results: "results",
+  agents: "agents",
+  offer: "offer",
+};
+
+/**
+ * The walkthrough step a link on the dashboard opens, as an id from lib/steps.ts. The step's number and
+ * name come from there (stepIndex, STEP_NAMES), so a link never carries a number of its own.
+ */
+export function dashboardStepId(step: DashboardStep): StepId {
+  return DASHBOARD_STEP_IDS[step];
+}
+
+/** What a file given to the offer card is: an offer to read, a zip of model data, an old Word file, or none of these. */
+export type DroppedFileKind = "offer" | "model-data" | "old-word" | "unsupported";
+
+/**
+ * Sorts a file by the end of its name, whatever its case. A .zip is model data and a .doc is the old Word
+ * format, whatever the list of offer types says. `offerExtensions` are written with their dot: [".docx", ".txt"].
+ */
+export function droppedFileKind(fileName: string, offerExtensions: readonly string[]): DroppedFileKind {
+  const name = fileName.trim().toLowerCase();
+  if (name.endsWith(".zip")) return "model-data";
+  if (name.endsWith(".doc")) return "old-word";
+  return offerExtensions.some((ext) => name.endsWith(ext.toLowerCase())) ? "offer" : "unsupported";
 }

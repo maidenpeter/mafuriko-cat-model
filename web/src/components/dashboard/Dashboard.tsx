@@ -3,14 +3,16 @@
 /**
  * The dashboard: the whole model on one page, for a reader with two minutes.
  *
- *   Row 1  six headline figures
+ *   Top    what the page is (step 0 of the walkthrough) and the return period selector
+ *   Row 1  six headline figures, then the offer card and the path a demo follows
  *   Row 2  the loss curve (ground-up, gross, net) and one event taken through the insurance layers
  *   Row 3  where the loss falls: by housing class, and by ward with a small map
  *   Row 4  what the AI did: the agents' parameter changes and the latest priced offer,
  *          then the model chain with the checks on each stage
  *
- * The return period selector at the top drives the waterfall, the class bars, the ward bars and
- * the map. The headline figures defined at 1-in-100 stay at 1-in-100 and say so.
+ * The return period selector at the top drives every chart: the readout under the loss curve, the
+ * waterfall, the class bars, the ward bars and the map. The headline figures defined at 1-in-100
+ * stay at 1-in-100 and say so.
  *
  * How to mount it (Walkthrough.tsx already holds every value):
  *   <Dashboard
@@ -21,8 +23,8 @@
  *     checks={checks.all}
  *     drainageOn={drainageOn}
  *     offer={offerSummary}              or null when no offer has been priced
- *     onOpenStep={(step) => ...}        map the step name to the walkthrough's own step index
- *     offerCard={<... />}               optional: the offer drop zone
+ *     onOpenStep={(step) => ...}        open dashboardStepId(step) from lib/dashboard, a StepId
+ *     offerCard={<OfferDropCard />}     the offer drop zone, shown under the headline figures
  *   />
  *
  * The calculations live in lib/dashboard.ts; this file only lays them out.
@@ -36,6 +38,7 @@ import {
   chainStatus,
   chainSummary,
   classLossRows,
+  dashboardStepId,
   hotspotCount,
   layerSteps,
   nearestEventIndex,
@@ -43,7 +46,7 @@ import {
   signedPct,
   standardAt,
   topWards,
-  type ChainStep,
+  type DashboardStep,
 } from "@/lib/dashboard";
 import { PARAM_LABELS, unusedForDepth } from "@/lib/export";
 import { fmtInt, fmtNum } from "@/lib/format";
@@ -53,16 +56,17 @@ import { annualChance, EP_HELP, kes1, pct1, rpLabel, rpWithChance, type SourceKi
 import { STANDARD_RETURN_PERIODS } from "@/lib/model/financial";
 import type { TermsResult } from "@/lib/model/terms";
 import type { Active, Session } from "@/lib/session";
+import { STEP_IDS, STEP_NAMES, stepIndex, stepKicker } from "@/lib/steps";
 import { BarChart } from "../charts/BarChart";
 import { ChartFrame, SourceBadge, type ChartSource } from "../charts/ChartFrame";
 import { Figure } from "../charts/Figure";
 import { LineChart } from "../charts/LineChart";
 import { Waterfall } from "../charts/Waterfall";
-import { Button, Card, Note, Segmented, StatusIcon } from "../ui";
+import { Button, Card, Note, Segmented, StatusIcon, StepHeader } from "../ui";
 import { WardMap } from "./WardMap";
 
-/** The steps the dashboard can send the reader to. The wiring maps each name to its place in the walkthrough. */
-export type DashboardStep = ChainStep | "agents" | "offer";
+/** The steps the dashboard can send the reader to. dashboardStepId() in lib/dashboard gives each one's place in the walkthrough. */
+export type { DashboardStep };
 
 /** The latest priced offer, reduced to what the dashboard shows. */
 export interface OfferSummary {
@@ -72,9 +76,9 @@ export interface OfferSummary {
   fieldsRead: number;
   /** How many of those were found again in the document's own text by code. */
   fieldsVerified: number;
-  /** The offer's loss in a 1-in-100 event, or null when it could not be priced. */
+  /** The offer's gross loss in a 1-in-100 event, or null when it could not be priced. */
   loss100Kes: number | null;
-  /** The offer's average annual loss, or null when it could not be priced. */
+  /** The offer's gross average annual loss, or null when it could not be priced. */
   aalKes: number | null;
   /** True when the risk lies outside the area the hazard maps cover. */
   outside: boolean;
@@ -98,9 +102,17 @@ export interface DashboardProps {
 }
 
 const TERMS_NOTE = "Example terms, not from any real policy or treaty";
+/** Said beside every net figure, so "net" is never left unexplained. */
+const NET_MEANS = "Net is what is left after the example insurance terms: deductibles, policy limits, quota share and excess of loss.";
+
+/** "step 3, Hazard": a step's number and name, both from lib/steps. */
+const stepRef = (step: DashboardStep) => {
+  const id = dashboardStepId(step);
+  return `step ${stepIndex(id)}, ${STEP_NAMES[id]}`;
+};
 
 /** Columns that fit as many as the row has room for; the minimum is in rem, so it follows the text size. */
-const FIGURE_GRID = "grid gap-4 grid-cols-[repeat(auto-fit,minmax(min(14rem,100%),1fr))]";
+const FIGURE_GRID = "grid gap-4 grid-cols-[repeat(auto-fit,minmax(min(12rem,100%),1fr))]";
 const PANEL_GRID = "grid gap-4 grid-cols-[repeat(auto-fit,minmax(min(26rem,100%),1fr))]";
 
 export function Dashboard({ session, active, terms, deliberation, checks, drainageOn, offer, onOpenStep, offerCard }: DashboardProps) {
@@ -128,7 +140,9 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
   const wards = geo?.wards ?? null;
   const wardOf = useMemo(() => (wards ? assignPoints(dataset.buildings, wards) : null), [wards, dataset]);
   const wardRows = useMemo(() => (wards && wardOf && k >= 0 ? wardAccumulation(dataset, result, wardOf, wards, k) : []), [wards, wardOf, dataset, result, k]);
-  const wardTop = useMemo(() => topWards(wardRows, 10), [wardRows]);
+  // Buildings that fall outside every ward outline are not a ward: they stay out of the ranking and are counted in a line under it.
+  const outsideWards = wardRows.find((w) => w.index === -1) ?? null;
+  const wardTop = useMemo(() => topWards(wardRows.filter((w) => w.index !== -1), 10), [wardRows]);
 
   const stages = useMemo(() => chainStatus(checks), [checks]);
   const changes = useMemo(() => {
@@ -172,34 +186,40 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
     ...(usingAi ? [{ kind: "ai" as const, text: "Damage and depth assumptions agreed by the agents" }] : []),
   ];
   const termsSource: ChartSource = { kind: "assumption", text: TERMS_NOTE };
+  const layers = [
+    { name: "Ground-up", means: "before insurance terms", eventKes: layer.groundUpKes, aalKes: terms.aal.groundUpKes },
+    { name: "Gross", means: "after deductibles and limits", eventKes: layer.grossKes, aalKes: terms.aal.grossKes },
+    { name: "Net", means: "after reinsurance", eventKes: layer.netKes, aalKes: terms.aal.netKes },
+  ];
 
   return (
     <div className="min-w-0">
-      <header className="mb-5 flex flex-wrap items-end justify-between gap-x-8 gap-y-3">
+      <StepHeader kicker={stepKicker("dashboard")} title={STEP_NAMES.dashboard}>
+        A flood catastrophe model for Nairobi: hazard, vulnerability, exposure and a financial engine, with every assumption shown. This page says what a flood could cost the portfolio, how often, and where the loss falls.
+      </StepHeader>
+
+      {/* The selector sits above everything it drives. */}
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-x-8 gap-y-3 rounded-2xl border border-line bg-surface px-5 py-3.5">
         <div className="min-w-0">
-          <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted">Overview</div>
-          <h2 className="mt-1 text-3xl font-semibold tracking-tight text-ink">Dashboard</h2>
-          <p className="mt-2 max-w-3xl wrap-anywhere text-base leading-relaxed text-ink-2">
-            What a flood could cost this portfolio, how often, and where the loss falls. Using the {assumptions.toLowerCase()}{drainageOn ? ", with drainage-driven flooding switched on" : ""}.
+          <div className="text-sm font-semibold text-ink">Flood event shown in every chart</div>
+          <p className="mt-0.5 max-w-3xl wrap-anywhere text-sm leading-relaxed text-ink-2">
+            Now showing a {rpWithChance(rp)} event, on the {assumptions.toLowerCase()}{drainageOn ? ", with drainage-driven flooding switched on" : ""}. A rarer event is a larger flood.
           </p>
         </div>
-        <div className="min-w-0">
-          <div className="mb-1.5 text-sm text-ink-2">Flood event shown in the charts below</div>
-          <Segmented
-            label="Return period of the flood event shown in the charts"
-            value={scenario.id}
-            onChange={setPicked}
-            options={result.scenarios.map((s) => ({
-              value: s.id,
-              label: (
-                <span className="whitespace-nowrap">
-                  {rpLabel(s.returnPeriod)} <span className="text-xs text-muted">{annualChance(s.returnPeriod)}</span>
-                </span>
-              ),
-            }))}
-          />
-        </div>
-      </header>
+        <Segmented
+          label="Return period of the flood event shown in every chart"
+          value={scenario.id}
+          onChange={setPicked}
+          options={result.scenarios.map((s) => ({
+            value: s.id,
+            label: (
+              <span className="whitespace-nowrap">
+                {rpLabel(s.returnPeriod)} <span className="text-xs text-muted">{annualChance(s.returnPeriod)}</span>
+              </span>
+            ),
+          }))}
+        />
+      </div>
 
       {/* Row 1: the headline figures. */}
       <div className={FIGURE_GRID}>
@@ -218,15 +238,15 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
           sub={
             net100 === null
               ? "1-in-100 is more frequent than any event the model covers."
-              : `${pct1(net100 / (result.totalTivKes || 1))} of insured value, after deductibles and reinsurance${at100?.extrapolated ? ". Held flat beyond the rarest modelled event." : ""}`
+              : `${pct1(net100 / (result.totalTivKes || 1))} of insured value. Net: after the example insurance terms${at100?.extrapolated ? ". Held flat beyond the rarest modelled event." : ""}`
           }
           source={lossSource}
           sourceText={`${assumptions}. ${TERMS_NOTE}.`}
         />
         <Figure
-          label="Average annual loss, net"
+          label="Average annual loss (AAL), net"
           value={kes1(terms.aal.netKes)}
-          sub={`Ground-up ${kes1(terms.aal.groundUpKes)}, gross ${kes1(terms.aal.grossKes)}, a year on average`}
+          sub={`A year on average. Net: after the example insurance terms. Ground-up ${kes1(terms.aal.groundUpKes)}, gross ${kes1(terms.aal.grossKes)}`}
           source={lossSource}
           sourceText={`${assumptions}. ${TERMS_NOTE}.`}
         />
@@ -238,16 +258,45 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
           sourceText="Named flood areas against the hazard maps"
         />
         <Figure
-          label="What the AI changed: average annual loss"
+          label="What the AI changed: average annual loss, ground-up"
           value={aiChange ? (aiChange.fraction === null ? kes1(aiChange.agentsKes) : signedPct(aiChange.fraction)) : "Not run yet"}
           sub={
             aiChange
-              ? `Ground-up: ${kes1(aiChange.referenceKes)} on reference assumptions, ${kes1(aiChange.agentsKes)} on the agents' assumptions${usingAi ? "" : ". This page is using the reference assumptions."}`
+              ? `${kes1(aiChange.agentsKes)} on the agents' assumptions against ${kes1(aiChange.referenceKes)} on the reference assumptions${usingAi ? "" : ". This page is using the reference assumptions."}`
               : "Run the agents to see how their assumptions move the loss."
           }
           source="ai"
           sourceText="Assumptions chosen by the agents, loss worked out by code"
         />
+      </div>
+      <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm leading-relaxed text-ink-2">
+        <SourceBadge kind="assumption" />
+        <span className="min-w-0 wrap-anywhere">{NET_MEANS} {TERMS_NOTE}.</span>
+      </p>
+
+      {/* The offer card sits high on the page, so the path "Dashboard, then Read the offer" is the first thing to do. */}
+      <div className="mt-4 flex flex-wrap gap-4">
+        {offerCard && <div className="min-w-0 flex-[2_1_30rem]">{offerCard}</div>}
+        <Card title="The demo path" className="flex-[1_1_20rem]" aside={<span className="text-sm text-ink-2">Then follow the steps on the left</span>}>
+          <p className="max-w-3xl text-sm leading-relaxed text-ink-2">
+            Start here, {offerCard ? "give the model an offer in the card beside this one" : "price an offer"}, then follow the steps on the left in order. Each one opens a stage of the model and shows how its numbers were made.
+          </p>
+          <ol className="mt-3 grid gap-x-6 gap-y-1.5 text-sm grid-cols-[repeat(auto-fit,minmax(min(11rem,100%),1fr))]">
+            {STEP_IDS.map((id) => (
+              <li key={id} className="flex min-w-0 items-baseline gap-2" aria-current={id === "dashboard" ? "step" : undefined}>
+                <span className="tabular w-5 shrink-0 text-right text-muted">{stepIndex(id)}</span>
+                <span className={`min-w-0 wrap-anywhere ${id === "dashboard" ? "font-semibold text-ink" : "text-ink-2"}`}>
+                  {STEP_NAMES[id]}
+                  {id === "dashboard" && <span className="font-normal text-muted"> (you are here)</span>}
+                  {id === "offer" && <span className="text-muted"> (next)</span>}
+                </span>
+              </li>
+            ))}
+          </ol>
+          <Button variant="secondary" className="mt-4" onClick={() => onOpenStep("offer")}>
+            Open {stepRef("offer")}
+          </Button>
+        </Card>
       </div>
 
       {/* Row 2: how large a loss, how often, and who bears it. The curve takes the larger share of a wide row. */}
@@ -278,24 +327,36 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
               { id: "net", label: "Net", endLabel: "Net", color: "var(--accent)", points: points((row) => row.netKes), marker: "circle" },
             ]}
           />
-          <dl className="mt-4 grid gap-x-6 gap-y-2 grid-cols-[repeat(auto-fit,minmax(min(11rem,100%),1fr))]">
-            {[
-              { name: "Ground-up", value: terms.aal.groundUpKes },
-              { name: "Gross", value: terms.aal.grossKes },
-              { name: "Net", value: terms.aal.netKes },
-            ].map((item) => (
-              <div key={item.name} className="min-w-0 border-l-2 border-line pl-3">
-                <dt className="text-sm text-ink-2">Average annual loss, {item.name.toLowerCase()}</dt>
-                <dd className="tabular text-lg font-semibold text-ink">{kes1(item.value)}</dd>
-              </div>
-            ))}
-          </dl>
+          {/* The curve read at the event chosen at the top of the page, beside the yearly average. */}
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full min-w-[30rem] text-sm">
+              <caption className="pb-2 text-left text-sm text-ink-2">The three lines read at the {event} event chosen at the top of the page, and their yearly average.</caption>
+              <thead className="text-xs text-muted">
+                <tr>
+                  <th scope="col" className="pb-2 text-left font-medium">Line</th>
+                  <th scope="col" className="pb-2 pl-3 text-right font-medium">Loss in a {rpWithChance(rp)} event</th>
+                  <th scope="col" className="pb-2 pl-3 text-right font-medium">Average annual loss</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {layers.map((item) => (
+                  <tr key={item.name}>
+                    <th scope="row" className="py-1.5 text-left font-normal text-ink">
+                      <span className="font-semibold">{item.name}</span> <span className="text-ink-2">{item.means}</span>
+                    </th>
+                    <td className="tabular whitespace-nowrap py-1.5 pl-3 text-right font-semibold text-ink">{kes1(item.eventKes)}</td>
+                    <td className="tabular whitespace-nowrap py-1.5 pl-3 text-right text-ink-2">{kes1(item.aalKes)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </ChartFrame>
 
         <ChartFrame
           className="flex-[2_1_28rem]"
           title={`From ground-up loss to net loss in a ${event} event`}
-          subtitle={`Read left to right: each striped bar is what one party takes off the loss, and each solid bar is what is left. ${rpWithChance(rp)}.`}
+          subtitle={`Read left to right: each striped bar is what one party takes off the loss, and each solid bar is what is left. The last bar is the net loss. This is a ${rpWithChance(rp)} event.`}
           sources={[...lossSources, termsSource]}
         >
           <Waterfall
@@ -314,12 +375,12 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
         <ChartFrame
           className="flex-[1_1_26rem]"
           title={`Loss by housing class in a ${event} event`}
-          subtitle="Each bar is the ground-up loss to that class, before insurance terms. The diamond is where the bar would end if the class lost in line with its share of insured value: a bar past its diamond loses more than its share."
+          subtitle={`Each bar is the ground-up loss to that class in a ${event} event, before insurance terms. The diamond is where the bar would end if the class lost in line with its share of insured value: a bar past its diamond loses more than its share. The share is also written under each class name.`}
           sources={lossSources}
         >
           <BarChart
             title={`Loss by housing class in a ${event} event`}
-            rows={classes.map((c) => ({ label: c.label, value: c.lossKes, share: c.tivShare, note: `${fmtInt(c.affected)} of ${fmtInt(c.buildings)} flooded` }))}
+            rows={classes.map((c) => ({ label: c.label, value: c.lossKes, share: c.tivShare, note: `${pct1(c.tivShare)} of insured value, ${pct1(c.lossShare)} of the loss` }))}
             xLabel={`Ground-up loss in a ${rpWithChance(rp)} event, KES`}
             format={kes1}
             valueLabel="Ground-up loss"
@@ -330,7 +391,7 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
         <ChartFrame
           className="flex-[2_1_34rem]"
           title={`The ten wards with the most loss in a ${event} event`}
-          subtitle="Each bar is the ground-up loss to the insured buildings in that ward. The numbers beside the ward names are the numbers on the map."
+          subtitle={`Each bar is the ground-up loss to the insured buildings in that ward in a ${event} event. The numbers beside the ward names are the numbers on the map.`}
           sources={[...lossSources, { kind: "real", text: "Ward boundaries: Omare and Omare 2017, CC BY 4.0" }]}
         >
           {geo === null ? (
@@ -355,18 +416,25 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
               </div>
             </div>
           )}
+          {outsideWards && outsideWards.lossKes > 0 && (
+            <p className="mt-3 text-xs leading-relaxed text-muted">
+              {fmtInt(outsideWards.buildings)} insured buildings lie inside the hazard maps but outside Nairobi County&rsquo;s ward outlines. Their {kes1(outsideWards.lossKes)} of loss in this event is in every total on this page and is left out of the ward ranking.
+            </p>
+          )}
         </ChartFrame>
       </div>
 
       {/* Row 4: what the AI did, then the chain the figures came through. */}
-      <div className={`mt-4 ${PANEL_GRID}`}>
+      <h3 className="mt-8 text-lg font-semibold text-ink">What the AI did</h3>
+      <p className="mt-1 max-w-3xl text-sm leading-relaxed text-ink-2">The agents choose and explain the assumptions, and the model reads an offer into rows. Code does every calculation and checks both.</p>
+      <div className={`mt-3 ${PANEL_GRID}`}>
         <Card title="What the agents changed" aside={<SourceBadge kind="ai" />}>
           {changes === null ? (
             <div>
               <p className="max-w-3xl text-sm leading-relaxed text-ink-2">
                 The agents have not agreed a set of assumptions yet. Every figure on this page uses the reference assumptions.
               </p>
-              <Button variant="secondary" className="mt-3" onClick={() => onOpenStep("agents")}>Open the agents step</Button>
+              <Button variant="secondary" className="mt-3" onClick={() => onOpenStep("agents")}>Open {stepRef("agents")}</Button>
             </div>
           ) : (
             <div>
@@ -374,6 +442,7 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
                 {changes.moved.length === 0
                   ? `The agents kept all ${changes.of} parameters at their reference values.`
                   : `The agents moved ${changes.moved.length} of ${changes.of} parameters away from the reference. The rest are unchanged.`}
+                {aiChange ? ` Together they move the ground-up average annual loss ${aiChange.fraction === null ? `to ${kes1(aiChange.agentsKes)}` : `by ${signedPct(aiChange.fraction)}`}.` : ""}
                 {usingAi ? "" : " This page is using the reference assumptions."}
               </p>
               {changes.moved.length > 0 && (
@@ -403,7 +472,7 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
                   </table>
                 </div>
               )}
-              <Button variant="secondary" className="mt-3" onClick={() => onOpenStep("agents")}>See the agents&apos; reasons</Button>
+              <Button variant="secondary" className="mt-3" onClick={() => onOpenStep("agents")}>See the agents&apos; reasons in {stepRef("agents")}</Button>
             </div>
           )}
         </Card>
@@ -412,9 +481,9 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
           {offer === null ? (
             <div>
               <p className="max-w-3xl text-sm leading-relaxed text-ink-2">
-                No offer has been priced yet. Give the model a broker&apos;s offer document and it reads the fields, checks each one against the document, and prices the risk.
+                No offer has been priced yet. Give the model a broker&apos;s offer {offerCard ? "in the card near the top of this page" : `in ${stepRef("offer")}`}: it reads the fields, code checks each one against the document, and code prices the risk.
               </p>
-              <Button variant="secondary" className="mt-3" onClick={() => onOpenStep("offer")}>Price an offer</Button>
+              <Button variant="secondary" className="mt-3" onClick={() => onOpenStep("offer")}>Open {stepRef("offer")}</Button>
             </div>
           ) : (
             <div>
@@ -429,11 +498,11 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
                   <dd className="tabular text-lg font-semibold text-ink">{fmtInt(offer.fieldsVerified)} of {fmtInt(offer.fieldsRead)}</dd>
                 </div>
                 <div className="min-w-0 border-l-2 border-line pl-3">
-                  <dt className="text-sm text-ink-2">Loss, {rpWithChance(100)}</dt>
+                  <dt className="text-sm text-ink-2">Gross loss, {rpWithChance(100)}</dt>
                   <dd className="tabular text-lg font-semibold text-ink">{kes1(offer.loss100Kes)}</dd>
                 </div>
                 <div className="min-w-0 border-l-2 border-line pl-3">
-                  <dt className="text-sm text-ink-2">Average annual loss</dt>
+                  <dt className="text-sm text-ink-2">Average annual loss, gross</dt>
                   <dd className="tabular text-lg font-semibold text-ink">{kes1(offer.aalKes)}</dd>
                 </div>
               </dl>
@@ -443,15 +512,14 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
                   <span className="min-w-0">This risk lies outside the area the hazard maps cover, so the model cannot say how deep the water would be there.</span>
                 </p>
               )}
-              <Button variant="secondary" className="mt-3" onClick={() => onOpenStep("offer")}>Open the offer</Button>
+              <p className="mt-3 max-w-3xl text-xs leading-relaxed text-muted">The fields were read by the model and found again in the document by code. The loss figures are worked out by code, gross of reinsurance.</p>
+              <Button variant="secondary" className="mt-3" onClick={() => onOpenStep("offer")}>Open the offer in {stepRef("offer")}</Button>
             </div>
           )}
         </Card>
-
-        {offerCard && <div className="min-w-0">{offerCard}</div>}
       </div>
 
-      <Card title="Model chain" className="mt-4" aside={<span className="text-sm text-ink-2">Each stage with the checks code ran on it</span>}>
+      <Card title="Model chain" className="mt-4" aside={<span className="text-sm text-ink-2">Each stage with the checks code ran on it, and the step that shows its working</span>}>
         <ol className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(min(12rem,100%),1fr))]">
           {stages.map((stage, i) => (
             <li key={stage.step} className="flex min-w-0 flex-col rounded-xl border border-line bg-surface-2 p-3.5">
@@ -463,8 +531,8 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
                 </div>
               </div>
               <div className="mt-auto pt-3">
-                <Button variant="secondary" className="w-full" aria-label={`Open the ${stage.label} step: ${chainSummary(stage)}`} onClick={() => onOpenStep(stage.step)}>
-                  Open step
+                <Button variant="secondary" className="w-full" aria-label={`${stage.label}, ${chainSummary(stage)}. Open ${stepRef(stage.step)}`} onClick={() => onOpenStep(stage.step)}>
+                  <span className="min-w-0 wrap-anywhere">Open {stepRef(stage.step)}</span>
                 </Button>
               </div>
             </li>

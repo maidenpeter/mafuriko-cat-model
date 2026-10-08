@@ -18,6 +18,41 @@ setWorkerUrl(new URL("maplibre-gl/dist/maplibre-gl-worker.mjs", import.meta.url)
 const STYLE_URLS = { light: "https://tiles.openfreemap.org/styles/positron", dark: "https://tiles.openfreemap.org/styles/dark" };
 const TERRAIN_TILES = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 
+/**
+ * MapLibre's fullscreen button never looks at the browser's answer. A browser refuses when the
+ * request does not come from a real click or key press, or when the page sits in an embedded
+ * preview; the refusal then surfaced as an unhandled page error and the button did nothing.
+ * This one fills the browser window instead, and Escape leaves that view as it leaves real fullscreen.
+ */
+class FullscreenButton extends FullscreenControl {
+  onAdd(map: MapLibre) {
+    document.addEventListener("keydown", this.onKey);
+    return super.onAdd(map);
+  }
+
+  onRemove() {
+    document.removeEventListener("keydown", this.onKey);
+    super.onRemove();
+  }
+
+  _requestFullscreen() {
+    const fillWindow = () => {
+      if (this._map && !this._isFullscreen()) this._togglePseudoFullScreen();
+    };
+    if (this._container.requestFullscreen) this._container.requestFullscreen().catch(fillWindow);
+    else fillWindow();
+  }
+
+  _exitFullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else this._togglePseudoFullScreen();
+  }
+
+  private onKey = (e: KeyboardEvent) => {
+    if (e.key === "Escape" && this._map && this._isFullscreen() && !document.fullscreenElement) this._togglePseudoFullScreen();
+  };
+}
+
 interface Props {
   session: Session;
   active: Active;
@@ -73,6 +108,7 @@ async function loadStyle(dark: boolean, plane: string): Promise<{ style: StyleSp
 export function RiskMap(props: Props) {
   const { session, active, geo, k, layers, threeD, wardMetric, wardRows, facilityDepth, selection, focus } = props;
   const box = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibre | null>(null);
   const onlineRef = useRef(false);
   const latest = useRef(props);
@@ -114,7 +150,8 @@ export function RiskMap(props: Props) {
       });
       mapRef.current = map;
       map.addControl(new NavigationControl({ visualizePitch: true }), "top-right");
-      map.addControl(new FullscreenControl(), "top-right");
+      // The frame goes fullscreen, not the map alone, so the hover tooltips come with it.
+      map.addControl(new FullscreenButton({ container: frame.current ?? undefined }), "top-right");
       map.addControl(new ScaleControl({ unit: "metric" }), "bottom-left");
 
       map.on("load", () => {
@@ -344,7 +381,7 @@ export function RiskMap(props: Props) {
   }, [ready, threeD]);
 
   return (
-    <div className="relative h-[520px] w-full overflow-hidden rounded-xl border border-line bg-surface-2 lg:h-[660px]">
+    <div ref={frame} className="relative h-[520px] w-full overflow-hidden rounded-xl border border-line bg-surface-2 lg:h-[660px]">
       <div ref={box} className="h-full w-full" />
       {!ready && (
         <div className="absolute inset-0 flex items-center justify-center text-sm text-ink-2">

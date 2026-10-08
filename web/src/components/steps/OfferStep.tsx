@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useEffectEvent, useId, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { summarise, type Check } from "@/lib/checks";
-import { fmtInt, fmtKes, fmtNum, fmtPct } from "@/lib/format";
+import { fmtInt, fmtNum, fmtPct } from "@/lib/format";
 import type { DrainageState } from "@/lib/geo/drainageView";
 import { loadGeo, type GeoLayers } from "@/lib/geo/layers";
-import { annualChance, rpLabel } from "@/lib/labels";
+import { annualChance, kes1, rpLabel, rpWithChance, type SourceKind } from "@/lib/labels";
+import { lossAtReturnPeriod } from "@/lib/model/financial";
 import type { InsuranceTerms } from "@/lib/model/terms";
 import { HOUSING_CLASSES, HOUSING_LABELS, type Dataset } from "@/lib/model/types";
 import { offerChecks } from "@/lib/offer/checks";
@@ -23,6 +24,7 @@ import {
   type ExtractionRun,
   type OfferDocument,
   type OfferExtraction,
+  type OfferFile,
   type OfferLocation,
   type OfferPricing,
   type OfferRowValues,
@@ -37,7 +39,11 @@ import {
 } from "@/lib/offer/types";
 import { confirmValue, editValue, statusCounts, usableValue, waitingValues } from "@/lib/offer/verify";
 import { download, type Active, type Session } from "@/lib/session";
-import { Button, Card, CheckList, ChecksSummary, Note, Stat, StatusIcon, StepHeader, Tag } from "../ui";
+import { STEP_NAMES, stepKicker } from "@/lib/steps";
+import { SourceBadge, SourceLine, type ChartSource } from "../charts/ChartFrame";
+import { Figure } from "../charts/Figure";
+import type { OfferSummary } from "../dashboard/Dashboard";
+import { Button, Card, CheckList, ChecksSummary, Note, StatusIcon, StepHeader, Tag } from "../ui";
 
 /** One offer as it stands on screen. The walkthrough keeps it, so a visit to another step does not lose it. */
 export interface OfferState {
@@ -65,7 +71,20 @@ interface Props {
   policyDefaults: InsuranceTerms;
   /** A line for the run log. Never carries document text. */
   onLog: (message: string) => void;
+  /**
+   * An offer handed over from the Dashboard. When seq changes, the step takes the file or the
+   * text and reads it straight away, as if the reader had chosen it here and pressed the button.
+   */
+  incoming?: { file?: File; text?: string; seq: number } | null;
+  /** Called whenever the priced result changes, and with null when the offer is cleared. */
+  onSummary?: (summary: OfferSummary | null) => void;
 }
+
+/**
+ * The seq of the last offer taken from the Dashboard. Kept outside the component, so coming
+ * back to this step later does not read the same offer a second time.
+ */
+let lastIncomingSeq: number | null = null;
 
 // ---------------------------------------------------------------------------------------------
 // The fields, in the order they are shown
@@ -181,7 +200,7 @@ function boxText(value: string | number | null, kind: FieldKind): string {
 /** The same value in the short form used across the app, shown under a long figure. */
 function plainer(value: string | number | null, kind: FieldKind): string | null {
   if (typeof value !== "number") return null;
-  if (kind === "kes" && Math.abs(value) >= 1e6) return fmtKes(value);
+  if (kind === "kes" && Math.abs(value) >= 1e6) return kes1(value);
   if (kind === "metres" && value >= 1000) return fmtDistance(value);
   return null;
 }
@@ -465,7 +484,7 @@ function PricedBuilding({ priced, pricing, isScore }: { priced: Extract<RowPrici
         <span className="font-semibold text-ink">{priced.name}</span>
         <span>{HOUSING_LABELS[priced.housingClass]}</span>
         <span>
-          Insured value {fmtKes(priced.tivKes)}
+          Insured value {kes1(priced.tivKes)}
           {priced.tivFrom === "area_times_cost" ? " (floor area × cost per m², as none is stated)" : ""}
         </span>
         <span>{priced.ward ? `Falls in ${priced.ward.name} ward, ${priced.ward.subcounty}` : "Outside the ward map"}</span>
@@ -496,8 +515,8 @@ function PricedBuilding({ priced, pricing, isScore }: { priced: Extract<RowPrici
                   <td className="tabular py-2 pl-3 text-right text-ink-2">{wet ? (s.terrainM >= 0.005 ? `${fmtNum(s.terrainM, 2)} m` : "under 0.01 m") : "Dry"}</td>
                   {drainage && <td className="tabular py-2 pl-3 text-right text-ink-2">{s.drainageM > 0 ? `${fmtNum(s.drainageM, 2)} m` : "None"}</td>}
                   <td className="tabular py-2 pl-3 text-right text-ink-2">{fmtPct(s.damageRatio, 1)}</td>
-                  <td className="tabular whitespace-nowrap py-2 pl-3 text-right text-ink-2">{fmtKes(s.groundUpKes)}</td>
-                  <td className="tabular whitespace-nowrap py-2 pl-3 text-right font-semibold text-ink">{fmtKes(s.grossKes)}</td>
+                  <td className="tabular whitespace-nowrap py-2 pl-3 text-right text-ink-2">{kes1(s.groundUpKes)}</td>
+                  <td className="tabular whitespace-nowrap py-2 pl-3 text-right font-semibold text-ink">{kes1(s.grossKes)}</td>
                   <td className="tabular py-2 pl-3 text-right text-ink-2">{wet ? "Wet here" : s.nearestWetM === null ? "No water on this map" : `${fmtDistance(s.nearestWetM)} away`}</td>
                 </tr>
               );
@@ -534,7 +553,7 @@ function TermLine({ name, text, origin }: { name: string; text: string; origin: 
       {origin?.quotes.map((quote) => (
         <blockquote key={quote} className="mt-1.5 border-l-2 border-axis pl-2.5 text-xs leading-relaxed whitespace-pre-wrap wrap-anywhere text-ink-2">{quote}</blockquote>
       ))}
-      {!origin && <p className="mt-1.5 text-xs leading-relaxed text-muted">The document states none, so the Insurance terms panel in the Loss engine step is used.</p>}
+      {!origin && <p className="mt-1.5 text-xs leading-relaxed text-muted">The document states none, so the Insurance terms panel in the {STEP_NAMES.loss} step is used.</p>}
     </div>
   );
 }
@@ -568,23 +587,32 @@ function TermsUsed({ terms, stated, several }: { terms: PolicyTerms; stated: Off
 function PortfolioCard({ effect, matchesHeader }: { effect: PortfolioEffect; matchesHeader: boolean }) {
   const a = effect.without;
   const b = effect.with;
-  const loss = (f: PortfolioEffect["with"]) => (f.loss100Kes === null ? "not modelled" : `${fmtKes(f.loss100Kes)}${f.loss100Extrapolated ? " †" : ""}`);
-  const added = (before: number, after: number) => {
+  const loss = (f: PortfolioEffect["with"]) => (f.loss100Kes === null ? "not modelled" : `${kes1(f.loss100Kes)}${f.loss100Extrapolated ? " †" : ""}`);
+  // The amount and its share sit on two lines, so the last column stays narrow enough to fit its card.
+  const added = (before: number, after: number): ReactNode => {
     const diff = after - before;
     if (Math.abs(diff) < 0.5) return "no change";
-    return `${diff > 0 ? "+" : "-"}${fmtKes(Math.abs(diff))}${before > 0 ? ` (${diff > 0 ? "+" : "-"}${fmtPct(Math.abs(diff) / before, 3)})` : ""}`;
+    const sign = diff > 0 ? "+" : "-";
+    return (
+      <>
+        <span className="block">{sign}{kes1(Math.abs(diff))}</span>
+        {before > 0 && <span className="block text-xs text-muted">{sign}{fmtPct(Math.abs(diff) / before, 3)}</span>}
+      </>
+    );
   };
-  const cell = "tabular whitespace-nowrap py-2 pl-3 text-right";
+  const cell = "tabular whitespace-nowrap py-2 pl-3 text-right align-top";
+  const head = "pb-2 pl-3 text-right align-bottom font-medium";
   return (
-    <Card title="Effect on the portfolio" aside={<Tag kind="synthetic">Synthetic portfolio</Tag>}>
+    <Card title="Effect on the portfolio" aside={<SourceBadge kind="synthetic" />}>
+      {/* The table is as narrow as its figures allow and scrolls inside the card when even that does not fit. */}
       <div className="overflow-x-auto">
-        <table className="w-full min-w-120 text-sm">
+        <table className="w-full min-w-88 text-sm">
           <thead className="text-xs text-muted">
             <tr>
-              <th className="pb-2 text-left font-medium">Ground-up, before any terms</th>
-              <th className="pb-2 pl-3 text-right font-medium">Without the offer</th>
-              <th className="pb-2 pl-3 text-right font-medium">With the offer</th>
-              <th className="pb-2 pl-3 text-right font-medium">Added</th>
+              <th className="pb-2 text-left align-bottom font-medium">Ground-up, before any terms</th>
+              <th className={head}>Without the offer</th>
+              <th className={head}>With the offer</th>
+              <th className={head}>Added by the offer</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
@@ -596,20 +624,20 @@ function PortfolioCard({ effect, matchesHeader }: { effect: PortfolioEffect; mat
             </tr>
             <tr>
               <td className="py-2 text-ink">Insured value</td>
-              <td className={`${cell} text-ink-2`}>{fmtKes(a.totalTivKes)}</td>
-              <td className={`${cell} font-semibold text-ink`}>{fmtKes(b.totalTivKes)}</td>
+              <td className={`${cell} text-ink-2`}>{kes1(a.totalTivKes)}</td>
+              <td className={`${cell} font-semibold text-ink`}>{kes1(b.totalTivKes)}</td>
               <td className={`${cell} text-ink-2`}>{added(a.totalTivKes, b.totalTivKes)}</td>
             </tr>
             <tr>
-              <td className="py-2 text-ink"><ReturnPeriod years={100} /> loss</td>
+              <td className="py-2 text-ink">Loss in a <ReturnPeriod years={100} /> flood</td>
               <td className={`${cell} text-ink-2`}>{loss(a)}</td>
               <td className={`${cell} font-semibold text-ink`}>{loss(b)}</td>
               <td className={`${cell} text-ink-2`}>{a.loss100Kes !== null && b.loss100Kes !== null ? added(a.loss100Kes, b.loss100Kes) : "n/a"}</td>
             </tr>
             <tr>
               <td className="py-2 text-ink">Average annual loss</td>
-              <td className={`${cell} text-ink-2`}>{fmtKes(a.aalKes)}</td>
-              <td className={`${cell} font-semibold text-ink`}>{fmtKes(b.aalKes)}</td>
+              <td className={`${cell} text-ink-2`}>{kes1(a.aalKes)}</td>
+              <td className={`${cell} font-semibold text-ink`}>{kes1(b.aalKes)}</td>
               <td className={`${cell} text-ink-2`}>{added(a.aalKes, b.aalKes)}</td>
             </tr>
           </tbody>
@@ -620,6 +648,13 @@ function PortfolioCard({ effect, matchesHeader }: { effect: PortfolioEffect; mat
         {matchesHeader ? " The figures without the offer are the ones in the bar at the top of the page." : ""}
         {a.loss100Extrapolated || b.loss100Extrapolated ? " † held flat beyond the rarest modelled scenario." : ""}
       </p>
+      <SourceLine
+        className="mt-3 border-t border-line pt-3"
+        sources={[
+          { kind: "synthetic", text: "The portfolio of insured buildings it is compared with" },
+          { kind: "assumption", text: "Return periods and damage curves" },
+        ]}
+      />
     </Card>
   );
 }
@@ -628,63 +663,127 @@ function PortfolioCard({ effect, matchesHeader }: { effect: PortfolioEffect; mat
 // The step
 // ---------------------------------------------------------------------------------------------
 
-export function OfferStep({ session, active, drainage, modelReady, offer, onOffer, policyDefaults, onLog }: Props) {
+const typedDocument = (text: string): OfferDocument => ({ name: "typed text", kind: "typed", text });
+
+export function OfferStep({ session, active, drainage, modelReady, offer, onOffer, policyDefaults, onLog, incoming, onSummary }: Props) {
   const { dataset } = session;
   const isScore = dataset.hazardKind === "score";
 
   const [geo, setGeo] = useState<GeoLayers | null>(null);
+  // One source at a time: a chosen file or a typed description, never both.
   const [file, setFile] = useState<OfferDocument | null>(offer && offer.document.kind !== "typed" ? offer.document : null);
   const [typed, setTyped] = useState(offer?.document.kind === "typed" ? offer.document.text : "");
+  /** Says what was cleared when one source took the place of the other. */
+  const [swapped, setSwapped] = useState<string | null>(null);
   const [rulesOnly, setRulesOnly] = useState(false);
+  /** A file is being opened in this browser. */
+  const [opening, setOpening] = useState(false);
+  /** The offer is being read into rows. */
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [over, setOver] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
   const textId = useId();
+  // Each choice of a source and each read takes a number. Only the latest of each may change the screen,
+  // so a slow file or a slow answer can never overwrite what the reader did after it.
+  const sourceTurn = useRef(0);
+  const readTurn = useRef(0);
 
   // Ward names and the waterways: for place names, the ward a point falls in and the river check.
   useEffect(() => {
     loadGeo().then(setGeo);
   }, []);
 
-  const chooseFile = (chosen: File | undefined) => {
-    if (!chosen) return;
+  /** Opens a file in this browser and makes it the source. Resolves to the document, or null when it could not be opened or something newer took its place. */
+  const openFile = async (chosen: OfferFile): Promise<OfferDocument | null> => {
+    const turn = ++sourceTurn.current;
+    const hadTyped = typed.trim().length > 0;
     setProblem(null);
-    // Opened here, in the browser. Nothing is sent anywhere until the button is pressed.
-    readOfferFile(chosen)
-      .then((doc) => {
-        setFile(doc);
-        setTyped("");
-      })
-      .catch((e: Error) => {
-        setFile(null);
-        setProblem(e.message);
-      });
+    setSwapped(null);
+    setOpening(true);
+    try {
+      // Opened here, in the browser. Nothing is sent anywhere until the offer is read.
+      const doc = await readOfferFile(chosen);
+      if (turn !== sourceTurn.current) return null;
+      setFile(doc);
+      setTyped("");
+      if (hadTyped) setSwapped(`The typed description was cleared: ${doc.name} is read in its place.`);
+      return doc;
+    } catch (e) {
+      if (turn === sourceTurn.current) setProblem((e as Error).message);
+      return null;
+    } finally {
+      if (turn === sourceTurn.current) setOpening(false);
+    }
   };
 
-  const source: OfferDocument | null = file ?? (typed.trim() ? { name: "typed text", kind: "typed", text: typed } : null);
+  /** Makes typed text the source. Typing takes the place of a chosen file, and of one still being opened. */
+  const typeText = (text: string) => {
+    sourceTurn.current++;
+    setOpening(false);
+    setTyped(text);
+    if (file) {
+      setFile(null);
+      setSwapped(`${file.name} was removed: the typed description is read in its place.`);
+    }
+  };
 
-  const read = async () => {
-    if (!source || busy) return;
+  const removeFile = () => {
+    sourceTurn.current++;
+    setOpening(false);
+    setFile(null);
+    setSwapped(null);
+  };
+
+  const source: OfferDocument | null = file ?? (typed.trim() ? typedDocument(typed) : null);
+
+  const read = async (doc: OfferDocument) => {
+    const turn = ++readTurn.current;
     setBusy(true);
     setProblem(null);
     try {
+      // An offer can arrive from the Dashboard before the ward map has loaded: the read waits for it here.
       const layers = geo ?? (await loadGeo());
       // The rules find a place in free text only if they know the names to look for.
       const knownPlaces = [...(layers.wards?.features.flatMap((f) => (f.properties.name ?? "").split("/").map((n) => n.trim())) ?? []), ...dataset.hotspots.map((h) => h.name)].filter(Boolean);
-      const run = await extractOffer(source.text, { rulesOnly, knownPlaces });
-      onOffer({ document: source, run, extraction: run.extraction });
+      const run = await extractOffer(doc.text, { rulesOnly, knownPlaces });
+      if (turn !== readTurn.current) return;
+      onOffer({ document: doc, run, extraction: run.extraction });
       const counts = statusCounts(run.extraction);
       // Counts and names only: the run log is downloaded with the audit file, and no document text belongs in it.
       onLog(
-        `${source.name} read by ${run.path === "model" ? `the model (${run.model ?? "model"}${run.ms ? `, ${(run.ms / 1000).toFixed(1)} s` : ""})` : "the fixed rules"}: ${plural(run.extraction.rows.length, "building")}, ${counts.verified} values verified, ${counts.unverified} unverified; ${run.sentToModel ? `${fmtInt(run.documentText.length)} characters sent with contact details removed` : "nothing sent to the model"}`,
+        `${doc.name} read by ${run.path === "model" ? `the model (${run.model ?? "model"}${run.ms ? `, ${(run.ms / 1000).toFixed(1)} s` : ""})` : "the fixed rules"}: ${plural(run.extraction.rows.length, "building")}, ${counts.verified} values verified, ${counts.unverified} unverified; ${run.sentToModel ? `${fmtInt(run.documentText.length)} characters sent with contact details removed` : "nothing sent to the model"}`,
       );
     } catch (e) {
-      setProblem(`The offer could not be read: ${(e as Error).message}`);
+      if (turn === readTurn.current) setProblem(`The offer could not be read: ${(e as Error).message}`);
     } finally {
-      setBusy(false);
+      if (turn === readTurn.current) setBusy(false);
     }
   };
+
+  // An offer dropped on the Dashboard: taken as the source and read at once, with no button to press.
+  const takeIncoming = useEffectEvent(async (input: { file?: File; text?: string }) => {
+    if (input.file) {
+      const doc = await openFile(input.file);
+      if (doc) await read(doc);
+    } else if (input.text?.trim()) {
+      sourceTurn.current++;
+      setOpening(false);
+      setSwapped(null);
+      setFile(null);
+      setTyped(input.text);
+      await read(typedDocument(input.text));
+    }
+  });
+  const incomingSeq = incoming?.seq ?? null;
+  useEffect(() => {
+    if (!incoming || incomingSeq === null || incomingSeq === lastIncomingSeq) return;
+    lastIncomingSeq = incomingSeq;
+    // Started just after the effect, not inside it: the read sets this step's busy state as it begins.
+    queueMicrotask(() => void takeIncoming(incoming));
+    // Keyed on seq alone: the same offer is never read twice, whatever else re-renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incomingSeq]);
 
   const extraction = offer?.extraction ?? null;
   const wards = geo?.wards ?? null;
@@ -728,67 +827,115 @@ export function OfferStep({ session, active, drainage, modelReady, offer, onOffe
   const matchesHeader = !!pricing?.portfolio && Math.abs(pricing.portfolio.without.aalKes - active.result.aalKes) <= 1e-6 * Math.max(1, active.result.aalKes);
   const summary = summarise(checks);
 
+  // The offer's gross loss in a 1-in-100 flood, read off its own curve the way the portfolio's is.
+  const gross100 = useMemo(
+    () => (totals ? lossAtReturnPeriod(totals.scenarios.map((s) => ({ returnPeriod: s.returnPeriod, lossKes: s.grossKes })), 100) : null),
+    [totals],
+  );
+
+  // What the Dashboard shows of this offer. undefined while the ward map is still loading: nothing is reported yet.
+  const dashboardSummary = useMemo<OfferSummary | null | undefined>(() => {
+    if (!offer) return null;
+    if (!pricing) return undefined;
+    const c = statusCounts(offer.extraction);
+    const pricedNow = !held && pricing.totals !== null;
+    return {
+      name: offer.document.name,
+      fieldsRead: c.verified + c.unverified + c.confirmed + c.edited,
+      fieldsVerified: c.verified,
+      loss100Kes: pricedNow ? (gross100?.lossKes ?? null) : null,
+      aalKes: pricedNow && pricing.totals ? pricing.totals.aalGrossKes : null,
+      // Outside means no building could be priced because the offer lies beyond the maps.
+      outside: pricing.rows.some((r) => r.status === "outside") && !pricing.rows.some((r) => r.status === "priced"),
+    };
+  }, [offer, pricing, held, gross100]);
+  useEffect(() => {
+    if (dashboardSummary !== undefined) onSummary?.(dashboardSummary);
+  }, [dashboardSummary, onSummary]);
+
+  // Where the figures of the price come from, by the four badges used across the app.
+  const readByModel = !!extraction && extraction.rows.some((r) => r.path === "model");
+  const termsFromDocument = !!pricing && (pricing.terms.deductible.source === "document" || pricing.terms.limit.source === "document");
+  const termsFromExample = !!pricing && (pricing.terms.deductible.source === "example" || pricing.terms.limit.source === "example");
+  const hazardSource: SourceKind = isScore ? "assumption" : "real";
+  const hazardText = isScore ? "Susceptibility score with an assumed depth scale" : "Hazard maps read at the building";
+  const grossSource: SourceKind = termsFromDocument ? (readByModel ? "ai" : "real") : "assumption";
+  const grossText = termsFromDocument ? (readByModel ? "Terms read from the document by the model, checked by code" : "Terms as the document states them") : "Example policy terms";
+  const priceSources: ChartSource[] = [
+    { kind: hazardSource, text: isScore ? "Depth worked out from a 0 to 1 susceptibility score and an assumed depth scale" : "Hazard depth maps, read at the building's point" },
+    ...(readByModel ? [{ kind: "ai" as const, text: "Building values and terms read from the document by the model, each checked against its sentence by code" }] : []),
+    { kind: "assumption", text: `Return periods and damage curves${termsFromExample ? ", and the example deductible or limit where the document states none" : ""}${pricing?.drainageOn ? ", and drainage ponding" : ""}` },
+  ];
+
+  const takeDrop = (e: DragEvent) => {
+    e.preventDefault();
+    setOver(false);
+    const dropped = e.dataTransfer.files[0];
+    if (dropped) void openFile(dropped);
+  };
+
   return (
     <div>
-      <StepHeader kicker="Step 8" title="Price an offer">
-        Give a broker&apos;s memo, or describe an offer in a sentence. The model turns it into rows in the exposure file&apos;s shape, code checks every value against the document, and code alone works out the damage and the loss on the maps and assumptions already loaded.
+      <StepHeader kicker={stepKicker("offer")} title={STEP_NAMES.offer}>
+        Give a broker&apos;s memo, or describe an offer in a sentence. The model reads it into rows in the exposure file&apos;s shape, code checks every value against the document, and code alone prices it on the hazard maps already loaded. The steps that follow show the model behind that price.
       </StepHeader>
 
       <div className="grid gap-4 @5xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
         <Card title="The offer" aside={<span className="text-xs text-muted">Word (.docx), text (.txt) or typed</span>}>
+          {/* A file dropped anywhere on the two inputs is taken, so one that lands on the text box is not opened by the browser as a page. */}
           <div
             onDragOver={(e) => {
               e.preventDefault();
               setOver(true);
             }}
             onDragLeave={() => setOver(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setOver(false);
-              chooseFile(e.dataTransfer.files[0]);
-            }}
-            className={`flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border-2 border-dashed px-4 py-3 transition ${over ? "border-accent bg-accent-wash" : "border-axis bg-surface"}`}
+            onDrop={takeDrop}
           >
-            <Button variant="secondary" className="whitespace-nowrap" onClick={() => picker.current?.click()}>Choose a file</Button>
-            <div className="min-w-0 flex-1 basis-48 text-sm leading-relaxed text-ink-2">
-              {file ? (
-                <>
-                  <span className="font-medium text-ink wrap-anywhere">{file.name}</span>
-                  <span className="text-muted"> · {fmtInt(file.text.length)} characters, opened in this browser</span>
-                </>
-              ) : (
-                "A broker's memo as a Word or text file. Drop it here or choose it. It is opened in this browser."
-              )}
+            <div className={`flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border-2 border-dashed px-4 py-3 transition ${over ? "border-accent bg-accent-wash" : "border-axis bg-surface"}`}>
+              <Button variant="secondary" className="whitespace-nowrap" onClick={() => picker.current?.click()}>Choose a file</Button>
+              <div className="min-w-0 flex-1 basis-48 text-sm leading-relaxed text-ink-2">
+                {opening ? (
+                  "Opening the file in this browser."
+                ) : file ? (
+                  <>
+                    <span className="font-medium text-ink wrap-anywhere">{file.name}</span>
+                    <span className="text-muted"> · {fmtInt(file.text.length)} characters, opened in this browser</span>
+                  </>
+                ) : (
+                  "A broker's memo as a Word or text file. Drop it here or choose it. It is opened in this browser."
+                )}
+              </div>
+              {file && !opening && <SmallButton onClick={removeFile}>Remove</SmallButton>}
+              <input
+                ref={picker}
+                type="file"
+                accept=".docx,.txt"
+                className="hidden"
+                onChange={(e) => {
+                  const chosen = e.target.files?.[0];
+                  if (chosen) void openFile(chosen);
+                  e.target.value = "";
+                }}
+              />
             </div>
-            {file && <SmallButton onClick={() => setFile(null)}>Remove</SmallButton>}
-            <input
-              ref={picker}
-              type="file"
-              accept=".docx,.txt"
-              className="hidden"
-              onChange={(e) => {
-                chooseFile(e.target.files?.[0]);
-                e.target.value = "";
-              }}
+
+            <label htmlFor={textId} className="mt-4 block text-sm font-medium text-ink">Or describe the offer in plain English</label>
+            <textarea
+              id={textId}
+              rows={4}
+              value={typed}
+              // The box always shows what this step holds, never text a browser kept from an earlier visit.
+              autoComplete="off"
+              onChange={(e) => typeText(e.target.value)}
+              placeholder="For example: two-storey masonry shop in Kibera worth KES 8 million"
+              className={`${BOX} mt-1.5 leading-relaxed`}
             />
           </div>
-
-          <label htmlFor={textId} className="mt-4 block text-sm font-medium text-ink">Or describe the offer in plain English</label>
-          <textarea
-            id={textId}
-            rows={4}
-            value={typed}
-            onChange={(e) => {
-              setTyped(e.target.value);
-              // One source at a time: typing takes the place of a chosen file.
-              if (file) setFile(null);
-            }}
-            placeholder="For example: two-storey masonry shop in Kibera worth KES 8 million"
-            className={`${BOX} mt-1.5 leading-relaxed`}
-          />
+          {swapped && <p role="status" className="mt-2 text-xs leading-relaxed text-ink-2 wrap-anywhere">{swapped}</p>}
 
           <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2.5">
-            <Button className="whitespace-nowrap" onClick={read} disabled={!source || busy}>
+            {/* Enabled whenever there is a file or typed text and nothing is being read. */}
+            <Button className="whitespace-nowrap" onClick={() => source && void read(source)} disabled={!source || busy || opening}>
               {busy && <StatusIcon status="running" size={16} />}
               {busy ? "Reading the offer" : offer ? "Read the offer again" : "Read the offer"}
             </Button>
@@ -798,7 +945,7 @@ export function OfferStep({ session, active, drainage, modelReady, offer, onOffe
             </label>
           </div>
           <p className="mt-2 text-xs leading-relaxed text-muted">
-            {source ? `Will read ${source.kind === "typed" ? `the typed text (${fmtInt(source.text.length)} characters)` : source.name}. ` : "Choose a file or type a description first. "}
+            {opening ? "Opening the file. " : source ? `${busy ? "Reading" : "Will read"} ${source.kind === "typed" ? `the typed text (${fmtInt(source.text.length)} characters)` : source.name}. ` : "Choose a file or type a description first. "}
             {rulesOnly
               ? "The fixed rules read it here, with no model."
               : modelReady === false
@@ -811,7 +958,7 @@ export function OfferStep({ session, active, drainage, modelReady, offer, onOffe
         {offer ? (
           <SentCard offer={offer} />
         ) : (
-          <Card title="How an offer is priced">
+          <Card title="How an offer is read and priced">
             <ol className="space-y-2.5 text-sm leading-relaxed text-ink-2">
               {[
                 "Contact details are taken out of the text in this browser, and you can see exactly what is left.",
@@ -922,9 +1069,9 @@ export function OfferStep({ session, active, drainage, modelReady, offer, onOffe
               title="Flood price, worked out by code"
               aside={
                 <span className="inline-flex flex-wrap gap-2">
-                  <Tag kind={isScore ? "proxy" : "real"}>{isScore ? "Proxy hazard, not measured" : "Published depth maps"}</Tag>
-                  {pricing.drainageOn && <Tag kind="assumption">Drainage ponding assumed</Tag>}
-                  <Tag kind={active.source === "ai" ? "ai" : "assumption"}>{active.source === "ai" ? "Agreed assumptions" : "Reference assumptions"}</Tag>
+                  {isScore ? <Tag kind="proxy">Proxy hazard, not measured</Tag> : <SourceBadge kind="real" />}
+                  {readByModel && <SourceBadge kind="ai" />}
+                  <SourceBadge kind="assumption" />
                 </span>
               }
             >
@@ -996,8 +1143,8 @@ export function OfferStep({ session, active, drainage, modelReady, offer, onOffe
                           {totals.scenarios.map((s) => (
                             <tr key={s.id}>
                               <td className="tabular py-2 text-ink"><ReturnPeriod years={s.returnPeriod} /></td>
-                              <td className="tabular whitespace-nowrap py-2 pl-3 text-right text-ink-2">{fmtKes(s.groundUpKes)}</td>
-                              <td className="tabular whitespace-nowrap py-2 pl-3 text-right font-semibold text-ink">{fmtKes(s.grossKes)}</td>
+                              <td className="tabular whitespace-nowrap py-2 pl-3 text-right text-ink-2">{kes1(s.groundUpKes)}</td>
+                              <td className="tabular whitespace-nowrap py-2 pl-3 text-right font-semibold text-ink">{kes1(s.grossKes)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -1015,26 +1162,56 @@ export function OfferStep({ session, active, drainage, modelReady, offer, onOffe
                     </div>
                   )}
 
-                  <div className="mt-4 grid gap-4 @2xl:grid-cols-3">
-                    <Stat label="Average annual loss, ground-up" value={fmtKes(totals.aalGroundUpKes)} note={`Before any terms. ${fmtRate(totals.ratePerMilleGroundUp)} of the insured value of ${fmtKes(totals.tivKes)}`} />
-                    <Stat label="Average annual loss, gross" value={fmtKes(totals.aalGrossKes)} note={`After the deductible and the limit. ${fmtRate(totals.ratePerMilleGross)} of insured value`} />
-                    <Stat
+                  {/* Columns that fit as many as the card has room for; the minimum is in rem, so it follows the text size. */}
+                  <div className="mt-4 grid gap-4 grid-cols-[repeat(auto-fit,minmax(min(14rem,100%),1fr))]">
+                    <Figure
+                      strong
+                      label={`Gross loss in a ${rpWithChance(100)} flood`}
+                      value={gross100 && gross100.lossKes !== null ? `${kes1(gross100.lossKes)}${gross100.extrapolated ? " †" : ""}` : "Not modelled"}
+                      sub={
+                        gross100 && gross100.lossKes !== null
+                          ? `After the deductible and the limit, read off this offer's own loss curve.${gross100.extrapolated ? " † held flat beyond the rarest modelled scenario." : ""}`
+                          : "A 1-in-100 flood is more frequent than the most frequent scenario modelled."
+                      }
+                      source={grossSource}
+                      sourceText={grossText}
+                    />
+                    <Figure
+                      label="Average annual loss, ground-up"
+                      value={kes1(totals.aalGroundUpKes)}
+                      sub={`Before any terms. ${fmtRate(totals.ratePerMilleGroundUp)} of the insured value of ${kes1(totals.tivKes)}`}
+                      source={hazardSource}
+                      sourceText={hazardText}
+                    />
+                    <Figure
+                      label="Average annual loss, gross"
+                      value={kes1(totals.aalGrossKes)}
+                      sub={`After the deductible and the limit. ${fmtRate(totals.ratePerMilleGross)} of insured value`}
+                      source={grossSource}
+                      sourceText={grossText}
+                    />
+                    <Figure
                       label="Pure flood rate, gross"
                       value={fmtRate(totals.ratePerMilleGross)}
-                      note={<>Gross average annual loss ÷ insured value × 1000. Ground-up: {fmtRate(totals.ratePerMilleGroundUp)}. Before expense, profit and uncertainty loadings, and before any reinsurance.</>}
+                      sub={<>Gross average annual loss ÷ insured value × 1000. Ground-up: {fmtRate(totals.ratePerMilleGroundUp)}. Before expense, profit and uncertainty loadings, and before any reinsurance.</>}
+                      source={grossSource}
+                      sourceText={grossText}
                     />
                   </div>
 
                   <p className="mt-3 text-xs leading-relaxed text-muted">
                     Every figure in this card comes from the loss engine: the hazard maps read at the building, the damage curve for its class, and its insured value. None comes from the model.
+                    {" "}The assumptions in force are the {active.source === "ai" ? "ones the agents agreed" : "reference ones"}.
                     {isScore ? " Depth is worked out from a 0 to 1 susceptibility score and the assumed depth scale, and the return periods are assumed: it is not a measured depth." : ""}
                     {pricing.drainageOn ? " Drainage ponding is an assumed depth near open drains and informal settlements; the damage is read at the deeper of the two." : ""}
                   </p>
+                  <SourceLine sources={priceSources} className="mt-3 border-t border-line pt-3" />
                 </>
               )}
             </Card>
 
-            <div className="grid content-start gap-4">
+            {/* min-w-0 and one shrinkable column, so a wide table scrolls inside its card and is never cut off. */}
+            <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-4">
               {!held && pricing.portfolio && <PortfolioCard effect={pricing.portfolio} matchesHeader={matchesHeader} />}
               <Card title="The rows as an exposure file">
                 <p className="text-sm leading-relaxed text-ink-2">

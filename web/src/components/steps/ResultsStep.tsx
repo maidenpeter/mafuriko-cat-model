@@ -8,7 +8,8 @@ import { lossAtReturnPeriod, STANDARD_RETURN_PERIODS } from "@/lib/model/financi
 import type { TermsResult } from "@/lib/model/terms";
 import { HOUSING_CLASSES, HOUSING_LABELS, type ModelResult } from "@/lib/model/types";
 import type { Active, Session } from "@/lib/session";
-import { ChartFrame, SourceBadge, type ChartSource } from "../charts/ChartFrame";
+import { STEP_NAMES, stepKicker } from "@/lib/steps";
+import { ChartFrame, SourceBadge, SourceLine, type ChartSource } from "../charts/ChartFrame";
 import { Figure } from "../charts/Figure";
 import { LineChart, valueAt, type Point } from "../charts/LineChart";
 import { OasisCheck } from "../OasisCheck";
@@ -107,9 +108,16 @@ export function ResultsStep({
     ...(usingAi ? [{ kind: "ai" as const, text: "Hazard and damage assumptions agreed by the agents" }] : []),
   ];
 
+  // Where the ground-up loss of one scenario comes from. The hazard maps are real data; a hazard score read from them is a proxy.
+  const lossSources: ChartSource[] = [
+    { kind: "synthetic", text: "Portfolio of insured buildings and their insured values" },
+    { kind: "real", text: isScore ? "Hazard maps; the hazard score read from them is a derived proxy" : "Flood depth maps" },
+    { kind: basis, text: usingAi ? "Hazard and damage assumptions agreed by the agents" : "Reference hazard and damage assumptions" },
+  ];
+
   return (
     <div>
-      <StepHeader kicker="Step 7" title="Results">
+      <StepHeader kicker={stepKicker("results")} title={STEP_NAMES.results}>
         What an underwriter needs: how large the loss could be at each level of rarity, what an average year costs, and where the loss comes from.
       </StepHeader>
 
@@ -262,7 +270,7 @@ export function ResultsStep({
                   <caption className="pb-2 text-left text-sm font-medium text-ink">Ground-up loss at each standard return period, KES</caption>
                   <thead className="text-xs text-muted">
                     <tr>
-                      <th className="pb-2 text-left font-medium">Return period</th>
+                      <th className="pb-2 text-left font-medium">Return period (chance a year)</th>
                       <th className="pb-2 pl-3 text-right font-medium">Agreed</th>
                       <th className="pb-2 pl-3 text-right font-medium">Without AI</th>
                       {deliberation?.optimist && <th className="pb-2 pl-3 text-right font-medium">Optimist</th>}
@@ -277,7 +285,7 @@ export function ResultsStep({
                       };
                       return (
                         <tr key={l.returnPeriod}>
-                          <td className="tabular py-2 text-ink">{rpLabel(l.returnPeriod)}</td>
+                          <td className="tabular py-2 text-ink">{rpWithChance(l.returnPeriod)}</td>
                           <td className="tabular whitespace-nowrap py-2 pl-3 text-right font-semibold text-ink">{cell(r)}</td>
                           <td className="tabular whitespace-nowrap py-2 pl-3 text-right text-ink-2">{cell(reference)}</td>
                           {deliberation?.optimist && <td className="tabular whitespace-nowrap py-2 pl-3 text-right text-ink-2">{cell(deliberation.optimist.result)}</td>}
@@ -300,23 +308,32 @@ export function ResultsStep({
           <Card title="What the AI changed" className="flex flex-col" aside={<Tag kind="ai" />}>
             {/* The Chair's summary sits beside the figures where there is room, which also keeps its lines short enough to read.
                 Next to a taller card, the figures spread down the height they are given. */}
+            <p className="-mt-2 mb-4 max-w-3xl text-sm leading-relaxed text-ink-2">Each figure reads from the reference assumptions, without AI, to the assumptions the agents agreed. All are ground-up, before insurance terms.</p>
             <div className={`grid grow gap-x-8 gap-y-4 ${!summary ? "" : paired ? "@7xl:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]" : "@7xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]"}`}>
               <div className="grid content-between gap-4 grid-cols-[repeat(auto-fit,minmax(min(15.5rem,100%),1fr))]">
-                <div><div className="text-sm text-ink-2">Rarest scenario loss, ground-up</div><div className="tabular mt-0.5 text-lg font-semibold text-ink">{fmtKes(refRarest.lossKes, 2)} → {fmtKes(rarest.lossKes, 2)}</div><div className="text-xs text-muted">{signed(rarest.lossKes / refRarest.lossKes - 1)} against reference{rarest.returnPeriod !== refRarest.returnPeriod ? `; return period ${rpLabel(refRarest.returnPeriod)} → ${rpLabel(rarest.returnPeriod)}` : ""}</div></div>
-                <div><div className="text-sm text-ink-2">Average annual loss, ground-up</div><div className="tabular mt-0.5 text-lg font-semibold text-ink">{fmtKes(reference.aalKes, 2)} → {fmtKes(r.aalKes, 2)}</div><div className="text-xs text-muted">{signed(r.aalKes / reference.aalKes - 1)} against reference</div></div>
+                <div><div className="text-sm text-ink-2">Ground-up loss in the rarest scenario, {rpWithChance(rarest.returnPeriod)}</div><div className="tabular mt-0.5 text-lg font-semibold text-ink">{kes1(refRarest.lossKes)} → {kes1(rarest.lossKes)}</div><div className="text-xs text-muted">{signed(rarest.lossKes / refRarest.lossKes - 1)} against reference{rarest.returnPeriod !== refRarest.returnPeriod ? `; return period ${rpLabel(refRarest.returnPeriod)} → ${rpLabel(rarest.returnPeriod)}` : ""}</div></div>
+                <div><div className="text-sm text-ink-2">Average annual loss, ground-up</div><div className="tabular mt-0.5 text-lg font-semibold text-ink">{kes1(reference.aalKes)} → {kes1(r.aalKes)}</div><div className="text-xs text-muted">{signed(r.aalKes / reference.aalKes - 1)} against reference</div></div>
                 {deliberation?.optimist && deliberation.cautious && (
-                  <div><div className="text-sm text-ink-2">Range of average annual loss, ground-up</div><div className="tabular mt-0.5 text-lg font-semibold text-ink">{fmtKes(Math.min(deliberation.optimist.result.aalKes, deliberation.cautious.result.aalKes), 2)} to {fmtKes(Math.max(deliberation.optimist.result.aalKes, deliberation.cautious.result.aalKes), 2)}</div><div className="text-xs text-muted">Optimist to Cautious</div></div>
+                  <div><div className="text-sm text-ink-2">Range of average annual loss, ground-up</div><div className="tabular mt-0.5 text-lg font-semibold text-ink">{kes1(Math.min(deliberation.optimist.result.aalKes, deliberation.cautious.result.aalKes))} to {kes1(Math.max(deliberation.optimist.result.aalKes, deliberation.cautious.result.aalKes))}</div><div className="text-xs text-muted">Optimist to Cautious</div></div>
                 )}
               </div>
               {summary && <p className="max-w-3xl text-sm leading-relaxed text-ink-2">{summary}</p>}
             </div>
+            <SourceLine
+              className="mt-4 border-t border-line pt-3"
+              sources={[
+                { kind: "ai", text: summary ? "Agreed assumptions, the two proposals and the Chair's summary" : "Agreed assumptions and the two proposals" },
+                { kind: "assumption", text: "Reference assumptions and return periods" },
+                { kind: "synthetic", text: "Portfolio of insured buildings" },
+              ]}
+            />
           </Card>
         ) : (
-          <Note>These results use the reference assumptions only. Run the agents in step 3 to see how their agreed assumptions change the curve.</Note>
+          <Note>These results use the reference assumptions only. Run the agents in the {STEP_NAMES.agents} step to see how their agreed assumptions change the curve.</Note>
         )}
 
         {drainageCard && terrainResult && (
-          <Card title="What drainage-driven flooding adds to the ground-up loss" aside={<span className="inline-flex flex-wrap gap-2"><SourceBadge kind="real" /><Tag kind="assumption">Drainage ponding assumed</Tag></span>}>
+          <Card title="What drainage-driven flooding adds to the ground-up loss" className="flex flex-col" aside={<Tag kind="assumption">Drainage ponding assumed</Tag>}>
             {/* With the whole row to itself, the explanation sits beside the table and not in one long line under it. */}
             <div className={`grid gap-x-8 gap-y-3 @6xl:grid-cols-[minmax(0,2.4fr)_minmax(0,1fr)] ${paired ? "@7xl:grid-cols-1" : ""}`}>
               <div className="min-w-0 overflow-x-auto">
@@ -326,9 +343,9 @@ export function ResultsStep({
                     <tr>
                       <th className="pb-2 text-left font-medium">Event (chance a year)</th>
                       <th className="pb-2 text-right font-medium">Buildings flooded</th>
-                      <th className="pb-2 text-right font-medium">Terrain only</th>
-                      <th className="pb-2 text-right font-medium">Terrain + drainage</th>
-                      <th className="pb-2 text-right font-medium">Added</th>
+                      <th className="pb-2 text-right font-medium">Terrain only (KES)</th>
+                      <th className="pb-2 text-right font-medium">Terrain + drainage (KES)</th>
+                      <th className="pb-2 text-right font-medium">Added (%)</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-line">
@@ -361,6 +378,15 @@ export function ResultsStep({
                 Ponding is shallow, so it adds most where it reaches buildings the terrain map leaves dry, and adds proportionally more to frequent events. The added loss rests on open drain and settlement maps and on our assumed ponding depths; it is a first estimate of a peril the proxy leaves out, not a measurement.
               </p>
             </div>
+            <SourceLine
+              className="mt-auto border-t border-line pt-3"
+              sources={[
+                { kind: "real", text: "OpenStreetMap drains and settlements, and the hazard maps" },
+                { kind: "assumption", text: "Drainage ponding depths and return periods" },
+                { kind: "synthetic", text: "Portfolio of insured buildings" },
+                ...(usingAi ? [{ kind: "ai" as const, text: "Hazard and damage assumptions agreed by the agents" }] : []),
+              ]}
+            />
           </Card>
         )}
       </div>
@@ -376,6 +402,7 @@ export function ResultsStep({
       <div className="mt-3 grid gap-4 @3xl:grid-cols-2">
         {/* Beside the longer list of single losses this card is the shorter one, so its four rows share out the spare height. */}
         <Card title={`Ground-up loss by construction class, ${rpWithChance(s.returnPeriod)} flood`} className="flex flex-col" aside={<SourceBadge kind="synthetic" />}>
+          <p className="-mt-2 mb-3 max-w-3xl text-sm leading-relaxed text-ink-2">Each row is one construction class, named beside its colour. Each bar is the loss to that class in a {rpLabel(s.returnPeriod)} flood, drawn against the class with the largest loss.</p>
           <div className="grow overflow-x-auto">
             <table className="h-full w-full text-sm">
               <thead className="text-xs text-muted">
@@ -400,16 +427,20 @@ export function ResultsStep({
             </table>
           </div>
           <p className="mt-3 text-xs leading-relaxed text-muted">Each bar is that class’s loss beside the largest class. Loss follows insured value, so a few large concrete buildings dominate. The informal and semi-permanent buildings are many, but carry little insured value.</p>
+          <SourceLine className="mt-3 border-t border-line pt-3" sources={lossSources} />
         </Card>
 
         <Card title={`Largest single losses, ${rpWithChance(s.returnPeriod)} flood`} aside={<span className="inline-flex flex-wrap items-center gap-2 text-xs text-muted">Top {top.length} are {fmtPct(top10Share, 0)} of this scenario <SourceBadge kind="synthetic" /></span>}>
+          <p className="-mt-2 mb-3 max-w-3xl text-sm leading-relaxed text-ink-2">
+            Each row is one building, largest ground-up loss first. {isScore ? "The hazard score is read from the hazard map at the building; it is a derived proxy, not a measured depth." : "The depth is read from the flood map at the building."} Gross is the loss after that building&rsquo;s deductible and limit.
+          </p>
           {top.length === 0 ? (
             <p className="text-sm text-ink-2">No losses in this scenario.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="text-xs text-muted">
-                  <tr><th className="pb-2 text-left font-medium">Building</th><th className="pb-2 pl-3 text-left font-medium">Class</th><th className="pb-2 pl-3 text-right font-medium">{isScore ? "Hazard score (0 to 1)" : "Depth (m)"}</th><th className="pb-2 pl-3 text-right font-medium">Damage (% of value)</th><th className="pb-2 pl-3 text-right font-medium">Ground-up (KES)</th><th className="pb-2 pl-3 text-right font-medium">Gross (KES)</th></tr>
+                  <tr><th className="pb-2 text-left font-medium">Building</th><th className="pb-2 pl-3 text-left font-medium">Class</th><th className="pb-2 pl-3 text-right font-medium">{isScore ? <span className="inline-flex flex-wrap items-center justify-end gap-1.5">Hazard score (0 to 1) <Tag kind="proxy" /></span> : "Depth (m)"}</th><th className="pb-2 pl-3 text-right font-medium">Damage (% of value)</th><th className="pb-2 pl-3 text-right font-medium">Ground-up (KES)</th><th className="pb-2 pl-3 text-right font-medium">Gross (KES)</th></tr>
                 </thead>
                 <tbody className="divide-y divide-line">
                   {top.map(({ i, p }) => (
@@ -426,6 +457,7 @@ export function ResultsStep({
               </table>
             </div>
           )}
+          <SourceLine className="mt-3 border-t border-line pt-3" sources={[...lossSources, { kind: "assumption", text: "Gross uses the example policy terms" }]} />
         </Card>
       </div>
 

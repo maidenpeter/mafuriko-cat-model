@@ -164,6 +164,7 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
   // With an offer priced, its own loss curve sits beside the portfolio's.
   const pricedOffer = isPriced(offerFocus) ? offerFocus : null;
   const offerCurve = useOfferCurveRows(pricedOffer, dataset, active.params);
+  const sideBySide = pricedOffer !== null && offerCurve.length > 0;
   const isScore = dataset.hazardKind === "score";
 
   // The chosen event is kept by its id, which stays the same when new assumptions move its return period.
@@ -334,22 +335,8 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
         <span className="min-w-0 wrap-anywhere">{NET_MEANS} {TERMS_NOTE}.</span>
       </p>
 
-      {pricedOffer && offerCurve.length > 0 && (
-        <OfferLossCurve
-          compact
-          className={`mt-4 ${CHART_CARD}`}
-          focus={pricedOffer}
-          rows={offerCurve}
-          sources={[
-            { kind: "real", text: "Hazard maps supplied with the model data" },
-            { kind: "real", text: "The offer's insured value, deductible and limit, as read from the document" },
-            { kind: usingAi ? "ai" : "assumption", text: usingAi ? "Assumptions agreed by the agents; every loss computed by code" : "Reference assumptions behind the depths, the damage and the loss drivers" },
-          ]}
-        />
-      )}
-
-      {/* How large a loss, how often, and who bears it. */}
-      <div className={`mt-4 ${TWO_COLUMNS}`}>
+      {/* How large a loss, how often, and who bears it. With an offer priced, its own curve sits beside the portfolio one and the waterfall runs across below. */}
+      <div className={`mt-4 ${sideBySide ? "grid gap-4 @5xl:grid-cols-2" : TWO_COLUMNS}`}>
         <ChartFrame
           className={CHART_CARD}
           title="Loss curve: how large a loss, how often"
@@ -379,8 +366,22 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
           </div>
         </ChartFrame>
 
+        {pricedOffer && offerCurve.length > 0 && (
+          <OfferLossCurve
+            compact
+            className={CHART_CARD}
+            focus={pricedOffer}
+            rows={offerCurve}
+            sources={[
+              { kind: "real", text: "Hazard maps supplied with the model data" },
+              { kind: "real", text: "The offer's insured value, deductible and limit, as read from the document" },
+              { kind: usingAi ? "ai" : "assumption", text: usingAi ? "Assumptions agreed by the agents; every loss computed by code" : "Reference assumptions behind the depths, the damage and the loss drivers" },
+            ]}
+          />
+        )}
+
         <ChartFrame
-          className={CHART_CARD}
+          className={`${CHART_CARD} ${sideBySide ? "@5xl:col-span-2" : ""}`}
           title={`From ground-up loss to net loss in a ${event} event`}
           subtitle="Read left to right: a striped bar is what one party takes off the loss, a solid bar is what is left. The last bar is the net loss."
           sources={[...lossSources, termsSource]}

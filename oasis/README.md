@@ -196,8 +196,12 @@ and event losses:
 - `team_a_nairobi_drainage_depth-only.csv`
 - `team_a_nairobi_drainage_all-drivers.csv`
 
-For any other settings, choose them in the header bar of the app, open the Audit step and
-press "Download the building-level export". The file is the same format.
+For any other settings, choose them in the header bar of the app and open the Oasis check
+step. "Run Oasis now on these settings" there does the whole run on this machine and shows
+the result: the app writes the export to `oasis/runs/live/<fingerprint>.csv`, starts this
+script in WSL and reads `oasis/runs/live/<fingerprint>.json` back. To run by hand instead,
+press "Download the building-level export" at the foot of that step. The file is the same
+format.
 
 The exports hold the starter kit's buildings, so they stay out of git: `oasis/runs/` is
 ignored. Do not move them elsewhere in the repository.

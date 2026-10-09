@@ -425,8 +425,9 @@ when the header's View switch is on Portfolio.
 | 4. Hazard map | The map zoomed to the building, standing as a 3D block on the nearest OpenStreetMap building outline within 30 m (a square block of approximate shape, and a line saying so, when none is found or the lookup is offline), with a call-out giving the water at the site, and the buffer ring around it; above the map a control strip with "Play the flood", the return period slider, "3D view" and the layer chips, all going fullscreen with the map; per return period the depth at the point, the depth within the buffer, ponding and "drains overloaded: yes or no"; distance to the nearest wet cell, river and drain. Portfolio layers are toggles, off by default. | The interactive map of Nairobi with insured buildings, wards, waterways, settlements and facilities. The hotspot test and the drainage sensitivity sit under "Model validation". |
 | 5. Vulnerability | The JRC damage curve with the building on it, one diamond per flood modelled; then the building as components: structure (JRC curve), basement machinery and contents (basement ladder), business interruption (outage days), each with its value and damage per return period. | Damage curves and ratios per construction class. |
 | 6. Loss engine | One flood in five steps (the water at the building, what it damages, what the model cannot see, the damage in full, what the insurer pays); the stack for one return period, line by line: surrounding flooding, drainage ponding, drain overload, basement ingress, business interruption, uncertainty loading, then deductible and limit, each line naming its source; and the same figures for every return period in one table. | The portfolio engine with drivers 1 to 3, the Insurance terms panel, and each event from ground-up to gross to net. |
-| 7. Results | The underwriter's decision page: the price and the flood rate, with the line that they rest on two placeholders; the premium build-up beside the all-risks rate; the "Loss by driver" chart; what the offer does to the portfolio; the Oasis check on the portfolio for the header settings; broker questions; points for the underwriter with evidence, sorted by severity; suggested conditions; the decision and its note; "Download decision note", one printed page. | Total exposure, losses at key return periods, the loss curve with its band, the portfolio's loss by driver, breakdowns, with and without AI, the Oasis check. |
-| 8. Audit | The offer on record with its decision and the count of broker questions; every check, the model's and the offer's; the extraction record; the assumptions beyond flood depth with value, range, source and who set each; agent usage; the model data source with the total insured value and its flag; and the exports, including the audit report as a PDF, which lists the questions, and the building-level export for the settings in force. | The same, without the offer. |
+| 7. Results | The underwriter's decision page: the price and the flood rate, with the line that they rest on two placeholders; the premium build-up beside the all-risks rate; the "Loss by driver" chart; what the offer does to the portfolio; the tornado of which assumptions move the answer most; broker questions; points for the underwriter with evidence, sorted by severity; suggested conditions; the decision and its note; "Download decision note", one printed page. | Total exposure, losses at key return periods, the loss curve with its band, the portfolio's loss by driver, breakdowns, with and without AI, the Oasis check. |
+| 8. Oasis check | The portfolio result for the header settings beside the same portfolio run through Oasis LMF: a saved run for three settings on the starter kit, a run made on this machine for any other; the three saved runs in one table; the export and the commands for a run by hand. | The check by an independent engine. |
+| 9. Audit | The offer on record with its decision and the count of broker questions; every check, the model's and the offer's; the extraction record; the assumptions beyond flood depth with value, range, source and who set each; agent usage; the model data source with the total insured value and its flag; and the exports, including the audit report as a PDF, which lists the questions. The building-level export is on the Oasis check step. | The same, without the offer. |
 
 The header has three rows. A slim top bar holds the brand, "Step N of 8"
 with the step's name, and the two display settings (theme and text size). A
@@ -503,8 +504,9 @@ against being handed something unexpected on the day.
 
 ### Independent check with Oasis LMF
 
-The Oasis check covers what the screen shows. The app writes a building-level
-export for the settings in force (Audit, "Download the building-level
+The Oasis check is a step of its own, between Results and Audit, and covers
+what the screen shows. The app writes a building-level export for the settings
+in force (at the foot of the Oasis check step, "Download the building-level
 export"): one row per building and return period with the depth of water at
 the site and the final ground-up damage ratio after every loss driver, and a
 header naming the view (flood source, losses from, the assumptions and the
@@ -532,12 +534,28 @@ over:
 | `reference-drainage.json` | Terrain + drainage, Depth only | Depths | The same three, with drainage ponding in the depths | 0.084% | Oasis KES 130.90m, this app KES 130.93m (-0.026%) |
 | `reference-drivers.json` | Terrain + drainage, All loss drivers | Final damage ratios | Financial engine and the arithmetic with drivers 1 to 3 in the damage. Not the damage function or the drivers | 0.072% | Oasis KES 481.82m, this app KES 481.82m (-0.001%) |
 
-The Results step loads the file made for exactly the combination in the
+The Oasis check step loads the file made for exactly the combination in the
 header and shows it only when its view carries the fingerprint of the result
-on screen. For any other combination it says "Not checked by Oasis for these
-settings" and shows no figures: assumptions agreed by the agents, a typed
-figure that reaches the portfolio, Terrain only with All loss drivers, other
-model data. It never shows a match from other settings.
+on screen: a table with the loss at every return period from this app and from
+Oasis side by side, the difference, and the step average annual loss. Under it
+a summary lists the three saved runs and marks the one on screen. For any other
+combination it says "Not checked by Oasis for these settings" and shows no
+figures: assumptions agreed by the agents, a typed figure that reaches the
+portfolio, Terrain only with All loss drivers, other model data. It never
+shows a match from other settings.
+
+For those other combinations the step runs Oasis itself. "Run Oasis now on
+these settings" sends the building-level export for the result on screen to
+`POST /api/oasis/run`, which writes it to `oasis/runs/live/<fingerprint>.csv`,
+starts `oasis/build_and_run.py` in WSL (`--depths` under Depth only,
+`--damage-ratios` under All loss drivers) and returns what the script wrote.
+The run takes about a minute and a half and is kept by the result's
+fingerprint, so the same result is never run twice. It is shown only when it
+carries the fingerprint of the result on screen, with the same sentence on
+what a damage ratio run does and does not check. Nothing leaves the machine,
+and `oasis/runs` is not in git. The run needs Oasis installed in WSL and the
+data set on disk under the model data folder; a data set dropped into the
+browser cannot be run, and the step says so.
 
 Not covered by any run: the hazard itself (both engines read the same
 depths); the damage curve's own figures; how the loss drivers reach the
@@ -648,7 +666,9 @@ Each phase ends with something that works, so there is always a demo.
   gross loss, and at the reference cost of capital it can be the largest line
   of the premium build-up. It can never exceed the cost of capital × the
   flood limit.
-- The Oasis check covers three settings, all on reference assumptions:
+- The saved Oasis runs cover three settings, all on reference assumptions and
+  the starter kit; any other setting or data is checked only when the live run
+  on the Oasis check step is pressed. The three saved runs are:
   Terrain only with Depth only and Terrain + drainage with Depth only (the
   damage function, the financial engine and the loss arithmetic), and
   Terrain + drainage with All loss drivers (the financial engine and the loss

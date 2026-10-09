@@ -171,7 +171,7 @@ export function OasisCheck({ dataset, result, source, runs, onShowChecked, liveR
 
   // A saved file was fed the way its spec says; a run made now says so itself, and failing that follows "Losses from".
   const runMode: OasisRunMode = savedOk && spec ? spec.mode : (run.mode ?? (settings.lossesFrom === "all_drivers" ? "damage_ratios" : "depths"));
-  const fileLabel = savedOk && spec ? spec.file : "run just now on this machine";
+  const fileLabel = savedOk && spec ? spec.file : `a run made on this machine on ${runDate(run.generatedAt)}`;
   const assumptionWords = settings.referenceAssumptions ? "reference assumptions" : "the assumptions in force (agreed by the agents or typed over)";
   const byRatio = runMode === "damage_ratios";
   const allDrivers = settings.lossesFrom === "all_drivers";

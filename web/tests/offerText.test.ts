@@ -1000,6 +1000,11 @@ describe.skipIf(offers.length === 0)("the test offers", () => {
       const read = verifyExtraction(extractByRules(text), text);
       const losses = read.floodLosses ?? [];
       expect(read.terms.floodHistoryYears?.status === "verified" && (read.terms.floodHistoryYears.value ?? 0) > 0, label).toBe(true);
+      // The Nairobi memo's one water claim came from an air-conditioning condensate line: water from inside the building, so no flood loss.
+      if (/NAIROBI/i.test(file)) {
+        expect(losses, label).toEqual([]);
+        continue;
+      }
       expect(losses.length > 0, label).toBe(true);
       expect(losses.every((l) => l.year.status === "verified" && l.amountKes.status === "verified"), label).toBe(true);
       // Both memos tell a loss in more than one place. No year is listed twice.

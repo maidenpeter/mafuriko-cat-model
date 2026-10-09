@@ -251,22 +251,51 @@ describe("the document's own loss history, by the rules", () => {
     expect(first.amountKes).toEqual({ value: 4_200_000, quote: "Amount paid: KES 4.2 million", status: "unverified", reason: null });
   });
 
-  it("leaves out the fire, and lists the loss with no amount by its year alone", () => {
+  it("leaves out the fire, and the burst pipe, which is water from inside the building", () => {
     const losses = extractByRules(HISTORY).floodLosses!;
-    // The fire's own lines mention water from the sprinklers. It is still a fire.
-    expect(losses.map((l) => l.year.value)).toEqual([2018, 2022]);
-    expect(losses[1].year.quote).toBe("LOSS #3: 2022, November");
-    // The total for all losses, after the blank line, is never taken for this loss.
-    expect(losses[1].amountKes).toEqual(missing);
+    // The fire's own lines mention water from the sprinklers. It is still a fire. A burst pipe is water damage, not a flood.
+    expect(losses.map((l) => l.year.value)).toEqual([2018]);
+  });
+
+  it("does not count water from inside the building as flood history", () => {
+    // The shape of a memo that reports a claim for water from an air-conditioning condensate line.
+    const INTERNAL = `PREVIOUS LOSS HISTORY (11 YEARS: 2015-2026)
+LOSS #1: 2018, May
+Description: Water intrusion from AC condensation in F4 office area
+Cause: Blocked condensate drainage line
+Damage: Water staining on ceiling tiles, minor content damage
+Amount claimed: KES 850,000
+Status: Settled (June 2018)
+
+LOSS #2: 2021, July
+Description: Electrical fire in electrical distribution board
+Amount claimed: KES 300,000
+
+LOSS #3: 2023, March
+Description: Leak from a roof water tank onto the sixth floor
+Amount claimed: KES 120,000`;
+    const read = extractByRules(INTERNAL);
+    expect(read.floodLosses).toEqual([]);
+    // The length of the history is still read: eleven years with no flood loss is a fact worth having.
+    expect(read.terms.floodHistoryYears?.value).toBe(11);
+
+    // The same building with a real flood beside the leak: the flood is kept, the leak is not.
+    const MIXED = `${INTERNAL}
+
+LOSS #4: 2024, April
+Description: Storm water entered the basement through the ramp after a pipe gave way
+Amount claimed: KES 2,000,000`;
+    expect(extractByRules(MIXED).floodLosses!.map((l) => [l.year.value, l.amountKes.value])).toEqual([[2024, 2_000_000]]);
+
+    // In typed sentences too.
+    const typed = extractByRules("Loss history: a pipe burst on level 3 in 2021 with damage of KES 400,000. The basement flooded in 2019 with a loss of KES 1.2 million.");
+    expect(typed.floodLosses!.map((l) => l.year.value)).toEqual([2019]);
   });
 
   it("verifies each value against the document, and counts them", () => {
     const checked = verifyExtraction(extractByRules(HISTORY), HISTORY);
     expect(checked.terms.floodHistoryYears).toMatchObject({ value: 8, status: "verified" });
-    expect(checked.floodLosses!.map((l) => [l.year.status, l.amountKes.status])).toEqual([
-      ["verified", "verified"],
-      ["verified", "missing"],
-    ]);
+    expect(checked.floodLosses!.map((l) => [l.year.status, l.amountKes.status])).toEqual([["verified", "verified"]]);
   });
 
   it("keeps a flood once when the memo tells it in three places, at the figure the claim ended at", () => {
@@ -286,10 +315,8 @@ describe("the document's own loss history, by the rules", () => {
   it("reads lines that open with the date, and only where losses are being listed", () => {
     const read = extractByRules(DATED);
     expect(read.terms.floodHistoryYears?.value).toBe(5);
-    expect(read.floodLosses!.map((l) => [l.year.value, l.amountKes.value])).toEqual([
-      [2018, 4_200_000],
-      [2021, null],
-    ]);
+    // The burst pipe of 2021 is water from inside the building: not flood history.
+    expect(read.floodLosses!.map((l) => [l.year.value, l.amountKes.value])).toEqual([[2018, 4_200_000]]);
     // "No flood losses" is not a loss, and money spent on a barrier is not one either.
     expect(read.floodLosses!.some((l) => l.year.value === 2022 || l.year.value === 2023)).toBe(false);
   });

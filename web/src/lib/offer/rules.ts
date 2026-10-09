@@ -186,10 +186,21 @@ const NUMBERED_LOSS = new RegExp(String.raw`^\W*(?:[A-Za-z]+\s+){0,2}?${LOSS_NOU
 /** A loss on a line that opens with its date: "4. 2020 Flood: KES 1,250,000 paid", "April 2018: storm water in the basement", "Loss in 2021: burst pipe". */
 const DATED_LOSS = new RegExp(String.raw`^\W*(?:\d{1,2}[.)]\s+)?(?:${LOSS_NOUN}\s+(?:in\s+|of\s+)?)?\(?(?:\d{1,2}(?:st|nd|rd|th)?\s+)?(?:${MONTH}\s+)?${YEAR_AT}(?!\s*[-/]\s*\d)`, "i");
 
-/** Flood and water damage: a river or storm water, water in a basement, a burst pipe, drains that block or overflow. */
+/** Flood and water from outside: a river or storm water, water in a basement, drains that block or overflow. Water from inside the building is taken out by internalWater. */
 const WATER_LOSS = /\b(?:flood(?:s|ed|ing)?|inundat(?:ed|ion)|water|stormwater|burst\s+(?:\w+\s+)?(?:pipes?|mains?)|pipes?\s+burst|overflow\w*|seepage|sewer\w*\s+back\w*|blocked\s+(?:\w+\s+)?drain\w*)\b/i;
 /** The other perils a loss history lists. A loss that names one is not read, even when water came into it. */
 const OTHER_PERIL = /\b(?:fire|arson|theft|burglary|break[\s-]?in|robbery|stolen|machinery|breakdown|riot|vandalism|malicious|explosion|lightning|collision|vehicle|earthquake|wind(?:storm)?|hail|subsidence)\b/i;
+/**
+ * Water that came from inside the building: condensation, air conditioning, a leak, a burst pipe,
+ * plumbing, a sprinkler or a tank. It is water damage, but it is not a flood, so it is not flood history.
+ */
+const INTERNAL_WATER = /\b(?:condensat\w*|air[\s-]?condition\w*|HVAC|leak(?:s|ed|ing|age)?|burst\s+(?:\w+\s+)?(?:pipes?|mains?)|pipes?\s+burst|plumbing|sprinklers?|water\s+(?:heater|tank)|geyser|cistern)\b/i;
+/** "AC" and "A/C" in capitals only: in lower case they are parts of other words and abbreviations. */
+const AIR_CON = /\bA\/?C\b/;
+/** A flood proper: water from outside. A loss that names one is flood history even when a pipe also gave way. */
+const FLOOD_PROPER = /\b(?:flood(?:s|ed|ing)?|inundat(?:ed|ion)|storm\s?water|river|rain(?:s|fall|water)?|surface\s+water|run-?off|sewer\w*)\b/i;
+/** The words say the water came from inside the building, and name no flood. */
+export const internalWater = (texts: string[]): boolean => texts.some((t) => INTERNAL_WATER.test(t) || AIR_CON.test(t)) && !texts.some((t) => FLOOD_PROPER.test(t));
 const LOSS_WORD = /\b(?:loss(?:es)?|claims?|damage[ds]?|paid|settled|incurred|events?|incidents?)\b/i;
 /** The lines of a loss that say what happened. */
 const CAUSE_LABEL = /^(?:description|cause|peril|type|nature|event|details?|trigger|circumstances|what\s+happened)\b/i;
@@ -234,7 +245,8 @@ const isHeading = (line: Line) => (line.label !== null && !line.value) || (/[A-Z
  *                     from its description and cause lines, the amount from its amount or total line.
  *   a dated line      a line that opens with the year, such as "4. 2020 Flood: KES 1,250,000 paid".
  * A loss is kept only when its own words, or the heading it stands under, name flood or water
- * damage and name no other peril. The amount is the one written for the loss as a whole. Parts
+ * damage and name no other peril. A loss whose own words put the water inside the building
+ * (condensation, a leak, a burst pipe) and name no flood is not flood history and is left out. The amount is the one written for the loss as a whole. Parts
  * are never added up, so a loss with no such figure keeps its year and a missing amount.
  */
 function floodLossesIn(lines: Line[]): FloodLoss[] {
@@ -263,12 +275,13 @@ function floodLossesIn(lines: Line[]): FloodLoss[] {
     // A dated line is a loss only where losses are being listed.
     if (!numbered && ![header, ...around].some((text) => LOSS_WORD.test(text))) continue;
 
+    const causes = body.filter((l) => l.label !== null && CAUSE_LABEL.test(l.label));
+    const told = (causes.length ? causes : body).map((l) => l.text);
     let water: boolean;
     if (OTHER_PERIL.test(header)) water = false;
+    else if (internalWater([header, ...told])) water = false;
     else if (saysWater(header)) water = true;
     else {
-      const causes = body.filter((l) => l.label !== null && CAUSE_LABEL.test(l.label));
-      const told = (causes.length ? causes : body).map((l) => l.text);
       if (told.some((text) => OTHER_PERIL.test(text))) water = false;
       else water = told.some(saysWater) || around.some((text) => saysWater(text) && !OTHER_PERIL.test(text));
     }
@@ -301,7 +314,7 @@ function typedFloodLosses(sentences: string[]): FloodLoss[] {
   for (const sentence of sentences) {
     const years = sentence.match(new RegExp(YEAR_AT, "g")) ?? [];
     const when = happened.exec(sentence);
-    if (years.length !== 1 || !when || OTHER_PERIL.test(sentence)) continue;
+    if (years.length !== 1 || !when || OTHER_PERIL.test(sentence) || internalWater([sentence])) continue;
     // "Has not flooded since 2018" reports no loss. Only the clause the event stands in is asked.
     if (NEGATED.test(sentence.slice(0, when.index).split(/[,;:]/).pop()!)) continue;
     const m = lossAmount.exec(sentence);

@@ -21,7 +21,6 @@ import { BarChart } from "../charts/BarChart";
 import { LineChart, valueAt, type Point } from "../charts/LineChart";
 import { driverSeries, PORTFOLIO_SERIES, StackedBars, type StackColumn } from "../charts/StackedBars";
 import { DecisionPanel } from "../DecisionPanel";
-import { OasisCheck } from "../OasisCheck";
 import { DriverSources, offerKindOf } from "../DriverSources";
 import { Button, Card, Fold, InsuredValueFlag, Note, PlaceholderBadge, Segmented, StepHeader, StepLink, Tag } from "../ui";
 import { CLASS_COLORS } from "./DataStep";
@@ -97,7 +96,6 @@ export function ResultsStep({ offerFocus, decision, onDecision, dataSource, onOp
           onOpenStep={onOpenStep}
           onJudgement={onJudgement}
           savedRunLabel={portfolio.savedRunLabel}
-          portfolioRun={{ dataset: portfolio.session.dataset, result: portfolio.active.result, source: portfolio.active.source }}
         />
       ) : (
         <PortfolioResults {...portfolio} onOpenStep={onOpenStep} />
@@ -496,7 +494,6 @@ function OfferResults({
   onOpenStep,
   onJudgement,
   savedRunLabel,
-  portfolioRun,
 }: {
   focus: PricedFocus;
   decision: DecisionRecord;
@@ -505,8 +502,6 @@ function OfferResults({
   onOpenStep?: (id: StepId) => void;
   onJudgement?: (next: Partial<OfferJudgement>) => void;
   savedRunLabel?: string | null;
-  /** The portfolio's run under the header's settings, for the Oasis check: it follows the same settings as the portfolio view. */
-  portfolioRun?: { dataset: Session["dataset"]; result: ModelResult; source: Active["source"] };
 }) {
   const { terms, conditions, drivers, questions } = focus;
   const { total, building, portfolio } = focus.price;
@@ -773,12 +768,9 @@ function OfferResults({
         </Card>
       </div>
 
-      {/* The portfolio under the header's settings, checked by Oasis where a run was made for them. */}
-      {portfolioRun && (
-        <Fold summary="Independent check: the portfolio run through Oasis LMF" className="mt-2">
-          <OasisCheck dataset={portfolioRun.dataset} result={portfolioRun.result} source={portfolioRun.source} />
-        </Fold>
-      )}
+      <p className="mt-2 text-sm text-muted">
+        The portfolio figures are run through Oasis LMF, an independent loss engine, in <StepLink to="oasis" onOpenStep={onOpenStep} />.
+      </p>
 
       <Card
         title="Before you decide"
@@ -1369,9 +1361,9 @@ function PortfolioResults({ session, active, deliberation, terrainResult, terms,
           <SourceLine className="mt-3 border-t border-line pt-3" sources={[...lossSources, { kind: "assumption", text: "Gross uses the example policy terms" }]} />
         </Fold>
 
-        <Fold summary="Independent check: the same model run through Oasis LMF" className="py-1.5">
-          <OasisCheck dataset={dataset} result={r} source={active.source} />
-        </Fold>
+        <p className="py-1.5 text-sm text-muted">
+          These figures are run through Oasis LMF, an independent loss engine, in <StepLink to="oasis" onOpenStep={onOpenStep} />.
+        </p>
       </div>
     </div>
   );

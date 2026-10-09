@@ -37,6 +37,7 @@ import { AuditStep } from "./steps/AuditStep";
 import { DataStep } from "./steps/DataStep";
 import { HazardStep } from "./steps/HazardStep";
 import { LossStep } from "./steps/LossStep";
+import { OasisStep } from "./steps/OasisStep";
 import { OfferStep } from "./steps/OfferStep";
 import { ResultsStep } from "./steps/ResultsStep";
 import { ReplaceDataPanel } from "./steps/UploadStep";
@@ -140,6 +141,8 @@ const AgentsView = handed<StepExtras & { prices: Prices | null }>()(AgentsStep);
 const VulnerabilityView = handed<StepExtras>()(VulnerabilityStep);
 const LossView = handed<StepExtras>()(LossStep);
 const ResultsView = handed<StepExtras & DecisionExtras & RunExtras & { onDecision: (next: DecisionRecord) => void }>()(ResultsStep);
+/** The Oasis check reads the settings in force from the result and the data set it was run on, whatever View says. */
+const OasisView = handed<StepExtras & { onShowChecked: () => void }>()(OasisStep);
 const AuditView = handed<StepExtras & DecisionExtras & RunExtras & { prices: Prices | null }>()(AuditStep);
 
 const fileNameOf = (path: string) => path.split("/").pop() || path;
@@ -274,14 +277,14 @@ export function Walkthrough() {
   const stepId = STEP_IDS[step];
 
   const stepsRef = useRef<HTMLOListElement>(null);
-  useEffect(() => {
-    // On a phone the steps are one row that scrolls sideways: bring the current one to the middle of it.
   // A new step opens at its top, at once and before it paints. A smooth scroll here started from
   // wherever the last page was left, so a long page handed over to the bottom of the next one.
   useLayoutEffect(() => {
     window.scrollTo({ top: 0, behavior: "instant" });
   }, [step]);
 
+  useEffect(() => {
+    // On a phone the steps are one row that scrolls sideways: bring the current one to the middle of it.
     const list = stepsRef.current;
     const item = list?.children[step];
     if (list && item) {
@@ -743,6 +746,11 @@ export function Walkthrough() {
   const nextId: StepId | undefined = STEP_IDS[step + 1];
   const modelDataLine = session && origin ? `${dataSetLabel(session.dataset.name)}, ${origin.from}` : opening || busy ? "Opening" : "None loaded";
   const openStep = (id: StepId) => goTo(stepIndex(id));
+  // Oasis was run on the reference assumptions; with all loss drivers it was run with drainage on.
+  const showOasisChecked = () => {
+    setUseAi(false);
+    if (mode === "all_drivers") setUseDrainage(true);
+  };
 
   return (
     <div
@@ -921,6 +929,7 @@ export function Walkthrough() {
                       onOpenStep={openStep}
                     />
                   )}
+                  {stepId === "oasis" && <OasisView session={view} active={active} {...follow} onOpenStep={openStep} onShowChecked={showOasisChecked} />}
                   {stepId === "audit" && (
                     <AuditView
                       session={view}

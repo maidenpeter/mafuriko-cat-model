@@ -14,8 +14,8 @@
  *                           with its source sentence and the result of the check on it
  *   Agent usage and cost    per agent and in total; a cost only when token prices are set on the server
  *   Model data, insurance terms, assumptions and where each came from, limits, run log
- *   Exports                 the print view (save as PDF), the written note, the audit file, the building-level
- *                           export for the settings in force, the agent run
+ *   Exports                 the print view (save as PDF), the written note, the audit file, the agent run. The
+ *                           building-level export for the settings in force has its home on the Oasis check step
  *
  * The page is laid out once as plain rows (auditPage) and drawn twice from them: on screen, and as a
  * self-contained black on white document for printing (auditHtml). Nothing is priced here: every
@@ -58,7 +58,6 @@ import { insuredValueFlag, kes1, LOSS_MODE_LABELS, PLACEHOLDER_BADGE, PORTFOLIO_
 import { flattenParams, REFERENCE_PARAMS } from "@/lib/model/params";
 import type { TermsResult } from "@/lib/model/terms";
 import type { LossMode } from "@/lib/model/drivers";
-import { buildingExport, buildingExportCsv } from "@/lib/oasisExport";
 import { isPriced, type FocusJudgement, type OfferFocus, type OfferFocusProps } from "@/lib/offer/focus";
 import { plural } from "@/lib/offer/shared";
 import { download, slim, type Active, type LogEntry, type Session } from "@/lib/session";
@@ -536,11 +535,9 @@ export function AuditStep({ session, active, deliberation, checks, log, terms, m
         <Button onClick={print}>Print or save the audit as PDF</Button>
         <Button variant="secondary" onClick={() => download(`${base()}-note.md`, buildNote(session, active, deliberation, checks, terms, extras), "text/markdown")}>Download the written note</Button>
         <Button variant="secondary" onClick={() => download(`${base()}-audit.json`, JSON.stringify(buildAudit(session, active, deliberation, checks, log, terms, extras), null, 1))}>Download the full audit file</Button>
-        {/* One row per building and return period for the settings in force: what oasis/build_and_run.py reads. */}
-        <Button variant="secondary" onClick={() => download(`${base()}-buildings.csv`, buildingExportCsv(buildingExport(session.dataset, active.result, active.source)), "text/csv")}>Download the building-level export</Button>
         {deliberation?.final && <Button variant="ghost" onClick={() => download(`${base()}-agent-run.json`, JSON.stringify(slim(deliberation), null, 1))}>Save the agent run for replay</Button>}
       </div>
-      <p className="-mt-2 mb-4 max-w-3xl text-xs leading-relaxed text-muted">The print view opens in a new window as a plain black on white page. Choose &quot;Save as PDF&quot; as the printer to keep it as a file.</p>
+      <p className="-mt-2 mb-4 max-w-3xl text-xs leading-relaxed text-muted">The print view opens in a new window as a plain black on white page. Choose &quot;Save as PDF&quot; as the printer to keep it as a file. The building-level export for the settings in force is in {stepLink("oasis")}.</p>
       {printNote && <div className="mb-4"><Note tone="warn">{printNote}</Note></div>}
 
       {offerHidden && read && (

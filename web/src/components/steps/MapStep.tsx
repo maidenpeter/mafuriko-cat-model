@@ -398,7 +398,8 @@ export function MapStep({ session, active, offer = null, onOpenStep }: { session
     <>
       {/* Two columns where the step has the room at the chosen text size: the map with its controls and its key, and the panel beside it. */}
       <div className="grid gap-4 @3xl:grid-cols-[minmax(0,1fr)_20rem] @6xl:grid-cols-[minmax(0,1fr)_22rem]">
-        <div className="min-w-0">
+        {/* Beside a long panel the map stays in view under the header, so the column under it is never left empty while the panel is read. */}
+        <div className="min-w-0 @3xl:sticky @3xl:top-[calc(var(--header-height,9rem)+0.75rem)] @3xl:self-start">
           {/* The frame holds the control strip, the map and the key, and the frame is what goes fullscreen, so all three are
               in reach there. Its class list never changes: the map adds a class of its own to it when it fills the window. */}
           <div ref={frame} className="@container isolate flex flex-col overflow-hidden rounded-xl border border-line bg-surface">

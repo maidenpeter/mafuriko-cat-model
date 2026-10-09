@@ -25,6 +25,7 @@ import { notLiveWhy, tornado, TORNADO_TITLE, tornadoMethodLine, tornadoPlan, typ
 import { kes1, wrapLabel } from "@/lib/labels";
 import type { LossMode } from "@/lib/model/drivers";
 import { useTextScale } from "@/lib/useDisplay";
+import { TornadoWords } from "./Words";
 import { ChartFrame, HatchPattern, type ChartSource, type LegendItem } from "../charts/ChartFrame";
 import { Fold } from "../ui";
 
@@ -286,7 +287,10 @@ export function Tornado({ target, base, mode, subject, sources, className = "" }
   const reasons = [...new Set(leftOut.map((x) => x.why))];
 
   return frame(
-    chart,
+    <>
+      <TornadoWords rows={rows} subject={subject} />
+      {chart}
+    </>,
     <>
       <p className="mt-2 max-w-3xl text-xs leading-relaxed text-muted">{tornadoMethodLine(rows)}</p>
       {reasons.map((why) => (

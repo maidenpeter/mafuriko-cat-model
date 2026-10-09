@@ -28,6 +28,7 @@ import { kes1, wrapLabel } from "@/lib/labels";
 import type { LossMode } from "@/lib/model/drivers";
 import type { StepId } from "@/lib/steps";
 import { useTextScale } from "@/lib/useDisplay";
+import { ShapleyWords } from "./Words";
 import { ChartFrame, HatchPattern, type ChartSource, type LegendItem } from "../charts/ChartFrame";
 import { Fold, Segmented, StatusIcon, StepLink } from "../ui";
 
@@ -346,7 +347,10 @@ export function Shapley({ target, reference, agreed, mode, subject, sources = []
   );
 
   return frame(
-    chart,
+    <>
+      {!compact && <ShapleyWords result={result} measure={shown} reference={reference} agreed={agreed} subject={subject} />}
+      {chart}
+    </>,
     <>
       <p className="mt-2 max-w-3xl text-xs leading-relaxed text-muted">{shapleyMethodLine(result)}</p>
       {cells.dropped && <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted">{cells.dropped}</p>}

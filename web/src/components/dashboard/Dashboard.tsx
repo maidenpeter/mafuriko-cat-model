@@ -313,8 +313,14 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
         <Figure
           className={SIX_ACROSS}
           label="Agents' effect on average annual loss"
-          value={aiChange ? (aiChange.fraction === null ? kes1(aiChange.agentsKes) : signedPct(aiChange.fraction)) : "Not run yet"}
-          sub={aiChange ? `Ground-up: ${kes1(aiChange.agentsKes)} against ${kes1(aiChange.referenceKes)} on the reference` : "The agents have not agreed a set yet"}
+          value={aiChange ? (aiChange.agentsKes === aiChange.referenceKes ? "No change" : aiChange.fraction === null ? kes1(aiChange.agentsKes) : signedPct(aiChange.fraction)) : "Not run yet"}
+          sub={
+            aiChange
+              ? aiChange.agentsKes === aiChange.referenceKes
+                ? `The set the agents agreed gives the same ground-up loss as the reference: ${kes1(aiChange.agentsKes)}`
+                : `Ground-up: ${kes1(aiChange.agentsKes)} against ${kes1(aiChange.referenceKes)} on the reference`
+              : "The agents have not agreed a set yet"
+          }
           source="ai"
           sourceText="Assumptions by the agents, loss by code"
         />
@@ -559,7 +565,9 @@ function OfferCallout({
     );
   }
 
-  const title = offer.line.text || offer.documentName;
+  // The offer's line is its name, then its place, value, cover and period: the name is the heading and the rest sits under it.
+  const [title, ...titleRest] = (offer.line.text || offer.documentName).split(" · ");
+  const titleDetail = titleRest.join(" · ");
 
   if (!priced) {
     // Outside the hazard maps the sentence is the focus's fixed one. No figure is shown: a loss of zero would be wrong.
@@ -569,6 +577,7 @@ function OfferCallout({
         <div className="min-w-0 flex-1 basis-80">
           <div className={KICKER}>The offer</div>
           <h3 className={`mt-1 wrap-anywhere leading-snug ${SECTION_TITLE}`}>{title}</h3>
+          {titleDetail && <p className="mt-1 wrap-anywhere text-sm leading-relaxed text-ink-2">{titleDetail}</p>}
           <p className="mt-2 flex items-start gap-2 text-sm leading-relaxed text-ink">
             <span className="mt-0.5 shrink-0"><StatusIcon status={offer.status === "locating" ? "running" : "warn"} size={16} /></span>
             <span className="min-w-0 wrap-anywhere font-medium">{sentence}</span>
@@ -585,6 +594,7 @@ function OfferCallout({
         <div className="min-w-0 flex-1 basis-80">
           <div className={KICKER}>The offer</div>
           <h3 className={`mt-1 wrap-anywhere leading-snug ${SECTION_TITLE}`}>{title}</h3>
+          {titleDetail && <p className="mt-1 wrap-anywhere text-sm leading-relaxed text-ink-2">{titleDetail}</p>}
           {priced.severalLine && <p className="mt-1 wrap-anywhere text-sm leading-relaxed text-ink-2">{priced.severalLine}</p>}
         </div>
         <div className="flex flex-wrap items-center gap-2">

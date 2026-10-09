@@ -314,7 +314,7 @@ export function MapStep({ session, active, offer = null, onOpenStep }: { session
   const metricLabel = WARD_METRICS.find((m) => m.value === wardMetric)?.label ?? "";
   const pondingM = drainage ? (drainage.depthM[dataset.scenarios.findIndex((x) => x.id === s.id)] ?? 0) : 0;
   // Where the numbers on this step come from, in the four shared badges.
-  const hazardSource: ChartSource = { kind: "real", text: isScore ? "Hazard maps from the starter kit. The score on them is a derived proxy for flooding, not a measured depth" : "Flood depth maps from the starter kit" };
+  const hazardSource: ChartSource = { kind: "real", text: isScore ? "Hazard maps from the model data. The score on them is a derived proxy for flooding, not a measured depth" : "Flood depth maps from the starter kit" };
   const portfolioSource: ChartSource = { kind: "synthetic", text: "Portfolio of insured buildings, placed at random" };
   const assumptionSource: ChartSource = { kind: "assumption", text: `${isScore ? "Return periods, the scale that turns the score into metres, " : "Damage curves, "}fragility and caps${drainage ? ", drainage ponding" : ""}` };
   // The offer building at the event picked, and the mark the map draws for it.

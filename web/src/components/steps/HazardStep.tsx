@@ -75,7 +75,7 @@ export function HazardStep({ session, active, drainage, focus = null, offerFocus
   const returnPeriod = scenario.fixedReturnPeriod ?? reference.scenarios.find((s) => s.id === scenario.id)?.returnPeriod;
   const scenarioLabel = (s: (typeof dataset.scenarios)[number]) => (s.fixedReturnPeriod ? rpLabel(s.fixedReturnPeriod) : s.label);
   const mapSources: { badge: ReactNode; text: ReactNode }[] = [
-    { badge: <SourceBadge kind="real" />, text: isScore ? "Hazard maps supplied with the starter kit" : "Flood depth maps supplied with the data" },
+    { badge: <SourceBadge kind="real" />, text: isScore ? "Hazard maps supplied with the model data" : "Flood depth maps supplied with the data" },
     ...(isScore ? [{ badge: <Tag kind="proxy" />, text: "The 0 to 1 score in those maps, built from terrain and distance to rivers. It is not a measured flood depth" }] : []),
     { badge: <SourceBadge kind="synthetic" />, text: "Buildings and their insured values" },
     ...(hits.length > 0 ? [{ badge: <SourceBadge kind="real" />, text: "Known flood areas: real names, approximate coordinates" }] : []),

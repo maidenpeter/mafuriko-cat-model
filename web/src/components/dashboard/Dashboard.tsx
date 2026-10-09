@@ -231,7 +231,7 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
 
   const lossSources: ChartSource[] = [
     { kind: "synthetic", text: "Portfolio of insured buildings" },
-    { kind: "real", text: "Hazard maps supplied with the starter kit" },
+    { kind: "real", text: "Hazard maps supplied with the model data" },
     { kind: "assumption", text: isScore ? "Return periods and flood depths" : "Damage curves" },
     ...(usingAi ? [{ kind: "ai" as const, text: "Damage and depth assumptions agreed by the agents" }] : []),
   ];

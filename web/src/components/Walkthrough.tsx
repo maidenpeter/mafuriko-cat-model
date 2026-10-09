@@ -94,10 +94,14 @@ const DASHBOARD_LINKS: Record<DashboardStep, StepId> = {
   offer: "offer",
 };
 
-/** A data set is named after its folder ("team_a_nairobi"). This is the name a reader sees. */
+/**
+ * A data set is named after its folder ("team_a_nairobi"). This is the name a reader sees. Only the
+ * starter kit's own two folders are called the starter kit: any other data set shows its folder
+ * name in words, so data brought in later is never passed off as the kit.
+ */
 function dataSetLabel(name: string): string {
-  const place = /nairobi/i.test(name) ? "Nairobi" : /nzoia/i.test(name) ? "Nzoia" : null;
-  if (place) return `${place} starter kit`;
+  const kit = /^team_[a-z]_(nairobi|nzoia)$/i.exec(name.trim());
+  if (kit) return `${kit[1][0].toUpperCase()}${kit[1].slice(1).toLowerCase()} starter kit`;
   const words = name.replace(/[_-]+/g, " ").trim();
   return words ? words[0].toUpperCase() + words.slice(1) : "Unnamed data set";
 }

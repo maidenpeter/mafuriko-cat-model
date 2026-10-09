@@ -10,7 +10,7 @@
  *     title="Loss by housing class"
  *     subtitle="Each bar is the loss to that class in a 1-in-100 event"
  *     sources={[
- *       { kind: "real", text: "Hazard maps supplied with the starter kit" },
+ *       { kind: "real", text: "Hazard maps supplied with the model data" },
  *       { kind: "synthetic", text: "Portfolio of insured buildings" },
  *     ]}
  *   >
@@ -49,7 +49,7 @@ export interface LegendItem {
 export interface ChartSource {
   /** Which of the four badges. */
   kind: SourceKind;
-  /** A few words on what the source is, for example "Hazard maps supplied with the starter kit". */
+  /** A few words on what the source is, for example "Hazard maps supplied with the model data". */
   text: ReactNode;
 }
 

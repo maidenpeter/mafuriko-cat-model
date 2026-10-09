@@ -33,7 +33,7 @@ const useTarget = (focus: PricedFocus | null, dataset: Dataset): Target =>
   useMemo(() => (focus ? offerTarget(focus, dataset) : { kind: "portfolio", dataset }), [focus, dataset]);
 
 const sourcesFor = (focus: PricedFocus | null): ChartSource[] => [
-  { kind: "real", text: "Hazard maps supplied with the starter kit; the score on them is a derived proxy for flooding" },
+  { kind: "real", text: "Hazard maps supplied with the model data; the score on them is a derived proxy for flooding" },
   focus ? { kind: "real", text: "The offer's own figures, as read from the document" } : { kind: "synthetic", text: "Portfolio of insured buildings" },
 ];
 

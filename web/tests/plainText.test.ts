@@ -46,7 +46,7 @@ describe("the runs shipped with the app", () => {
     for (const name of readdirSync(AGENTS)) expect(DASHES.test(readFileSync(join(AGENTS, name), "utf8")), name).toBe(false);
   });
 
-  it("do not call the offer's water claim a flood loss, and say what was corrected", () => {
+  it("do not call the offer's water claim a flood loss, and name any correction in both places", () => {
     const offerRuns = index.runs.filter((r) => r.kind === "offer");
     expect(offerRuns.length).toBeGreaterThan(0);
     for (const entry of offerRuns) {
@@ -55,9 +55,8 @@ describe("the runs shipped with the app", () => {
       expect(/one (?:reported )?flood (?:loss|claim)/i.test(replies), entry.file).toBe(false);
       expect(run.offerJudgement.brief.floodLossCount, entry.file).toBe(0);
       expect(run.offerJudgement.brief.floodLossTotalKes, entry.file).toBeNull();
-      // Text put right after the run is never passed off as the agents' own: the run and the index both say so.
-      expect(run.corrections?.length, entry.file).toBeGreaterThan(0);
-      expect(entry.corrections, entry.file).toEqual(run.corrections);
+      // A run whose text was put right after it was made says so, in the run and in the index alike. A run made on the corrected offer carries no such note.
+      expect(entry.corrections ?? [], entry.file).toEqual(run.corrections ?? []);
     }
   });
 });

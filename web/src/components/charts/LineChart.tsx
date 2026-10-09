@@ -20,6 +20,8 @@ export interface Series {
   points: Point[];
   /** De-emphasised context line: thinner, no markers. */
   quiet?: boolean;
+  /** The line the chart is about: drawn heavier than the rest. */
+  strong?: boolean;
   /** Round markers at each point. Use `marker` to choose another shape. */
   markers?: boolean;
   /** A marker of this shape at each point. */
@@ -210,7 +212,7 @@ function Swatch({ s }: { s: Series }) {
   const shape = markerOf(s);
   return (
     <svg viewBox="0 0 30 12" aria-hidden className="shrink-0" style={{ width: "1.875rem", height: "0.75rem" }}>
-      <line x1={1} x2={29} y1={6} y2={6} stroke={s.color} strokeWidth={s.quiet ? 1.5 : 2.5} strokeDasharray={s.dash} strokeLinecap="round" />
+      <line x1={1} x2={29} y1={6} y2={6} stroke={s.color} strokeWidth={s.quiet ? 1.5 : s.strong ? 3.5 : 2.5} strokeDasharray={s.dash} strokeLinecap="round" />
       {shape && <Marker shape={shape} x={15} y={6} r={3.5} color={s.color} />}
     </svg>
   );
@@ -511,7 +513,7 @@ export function LineChart({ series, band, xScale, xTicks, xFormat, xSubFormat, y
               const shape = markerOf(s);
               return (
                 <g key={s.id}>
-                  <path d={path(s.points)} fill="none" stroke={s.color} strokeWidth={s.quiet ? 1.5 : 2} strokeDasharray={s.dash} strokeLinejoin="round" strokeLinecap="round" />
+                  <path d={path(s.points)} fill="none" stroke={s.color} strokeWidth={s.quiet ? 1.5 : s.strong ? 4 : 2} strokeDasharray={s.dash} strokeLinejoin="round" strokeLinecap="round" />
                   {shape && s.points.map((p) => <Marker key={p.x} shape={shape} x={sx(p.x)} y={sy(p.y)} r={4.5} color={s.color} />)}
                 </g>
               );

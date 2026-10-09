@@ -80,6 +80,7 @@ import { STEP_NAMES } from "@/lib/steps";
 import { BarChart } from "../charts/BarChart";
 import { ChartFrame, SourceBadge, type ChartSource } from "../charts/ChartFrame";
 import { Figure } from "../charts/Figure";
+import { OfferLossCurve, useOfferCurveRows } from "../charts/OfferCurves";
 import { LineChart } from "../charts/LineChart";
 import { driverSeries, StackStrip } from "../charts/StackedBars";
 import { Waterfall } from "../charts/Waterfall";
@@ -160,6 +161,9 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
   const { dataset, reference } = session;
   const result = active.result;
   const usingAi = active.source === "ai";
+  // With an offer priced, its own loss curve sits beside the portfolio's.
+  const pricedOffer = isPriced(offerFocus) ? offerFocus : null;
+  const offerCurve = useOfferCurveRows(pricedOffer, dataset, active.params);
   const isScore = dataset.hazardKind === "score";
 
   // The chosen event is kept by its id, which stays the same when new assumptions move its return period.
@@ -329,6 +333,20 @@ export function Dashboard({ session, active, terms, deliberation, checks, draina
         <SourceBadge kind="assumption" />
         <span className="min-w-0 wrap-anywhere">{NET_MEANS} {TERMS_NOTE}.</span>
       </p>
+
+      {pricedOffer && offerCurve.length > 0 && (
+        <OfferLossCurve
+          compact
+          className={`mt-4 ${CHART_CARD}`}
+          focus={pricedOffer}
+          rows={offerCurve}
+          sources={[
+            { kind: "real", text: "Hazard maps supplied with the model data" },
+            { kind: "real", text: "The offer's insured value, deductible and limit, as read from the document" },
+            { kind: usingAi ? "ai" : "assumption", text: usingAi ? "Assumptions agreed by the agents; every loss computed by code" : "Reference assumptions behind the depths, the damage and the loss drivers" },
+          ]}
+        />
+      )}
 
       {/* How large a loss, how often, and who bears it. */}
       <div className={`mt-4 ${TWO_COLUMNS}`}>

@@ -19,6 +19,7 @@ import pkg from "../../../package.json";
 import { ChartFrame, SourceBadge, SourceLine, type ChartSource } from "../charts/ChartFrame";
 import { BarChart } from "../charts/BarChart";
 import { LineChart, valueAt, type Point } from "../charts/LineChart";
+import { OfferDamageCurve, OfferLossCurve, useOfferCurveRows } from "../charts/OfferCurves";
 import { driverSeries, PORTFOLIO_SERIES, StackedBars, type StackColumn } from "../charts/StackedBars";
 import { DecisionPanel } from "../DecisionPanel";
 import { DriverSources, offerKindOf } from "../DriverSources";
@@ -67,6 +68,20 @@ export function ResultsStep({ offerFocus, decision, onDecision, dataSource, onOp
   // The walkthrough owns the record. This one only stands in if the step is ever used without it.
   const [ownDecision, setOwnDecision] = useState<DecisionRecord>(emptyDecision);
   const offer = isPriced(offerFocus) ? offerFocus : null;
+  // The offer's own loss curve and damage ratio curve, with all loss drivers beside Depth only.
+  const curveRows = useOfferCurveRows(offer, portfolio.session.dataset, portfolio.active.params);
+  const curveSources: ChartSource[] = [
+    { kind: "real", text: "Hazard maps supplied with the model data" },
+    { kind: "real", text: "The offer's insured value, deductible and limit, as read from the document" },
+    { kind: portfolio.active.source === "ai" ? "ai" : "assumption", text: portfolio.active.source === "ai" ? "Assumptions agreed by the agents; every loss computed by code" : "Reference assumptions behind the depths, the damage and the loss drivers" },
+  ];
+  const curves =
+    offer && curveRows.length > 0 ? (
+      <div className="mt-4 grid items-start gap-4 @5xl:grid-cols-2">
+        <OfferLossCurve focus={offer} rows={curveRows} sources={curveSources} />
+        <OfferDamageCurve focus={offer} rows={curveRows} sources={curveSources} />
+      </div>
+    ) : null;
   // Which assumptions move the answer most: the offer's answer when one is priced, the portfolio's otherwise.
   const tornado = portfolio.judgement ? (
     <StepTornado focus={offer} dataset={portfolio.session.dataset} params={portfolio.active.params} judgement={portfolio.judgement} mode={portfolio.mode ?? "all_drivers"} className="mt-4" />
@@ -102,6 +117,7 @@ export function ResultsStep({ offerFocus, decision, onDecision, dataSource, onOp
           onJudgement={onJudgement}
           savedRunLabel={portfolio.savedRunLabel}
           tornado={tornado}
+          curves={curves}
         />
       ) : (
         <PortfolioResults {...portfolio} onOpenStep={onOpenStep} tornado={tornado} />
@@ -501,6 +517,7 @@ function OfferResults({
   onJudgement,
   savedRunLabel,
   tornado,
+  curves,
 }: {
   focus: PricedFocus;
   decision: DecisionRecord;
@@ -511,6 +528,8 @@ function OfferResults({
   savedRunLabel?: string | null;
   /** The sensitivity tornado for this offer, drawn above the decision. */
   tornado?: ReactNode;
+  /** The offer's loss curve and damage ratio curve, drawn above the loss by driver. */
+  curves?: ReactNode;
 }) {
   const { terms, conditions, drivers, questions } = focus;
   const { total, building, portfolio } = focus.price;
@@ -639,6 +658,8 @@ function OfferResults({
       <Fold summary="How the flood rate is built up" className="mt-2">
         <PremiumBuildUp focus={focus} onJudgement={onJudgement} onOpenStep={onOpenStep} />
       </Fold>
+
+      {curves}
 
       {/* Where the loss comes from, beside what the offer does to the portfolio. */}
       <div className="mt-4 grid items-start gap-4 @5xl:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">

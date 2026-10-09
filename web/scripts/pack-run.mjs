@@ -17,6 +17,10 @@
  *                      was made on and the parameters. For a run on a real offer.
  *   --out              where to write. web/public/agents when left out.
  *
+ * En and em dashes in the replies are written out ("0 to 1", "9.97 to 10.05"): the app shows none.
+ * A run that carries "corrections" (sentences saying what was put right in its text after it was
+ * made) keeps them, and they are listed in index.json so the app shows them with the run.
+ *
  * The run is checked (every agent replied, the final parameters and the inputs are there), written
  * under a dated name and listed in index.json, replacing an older run of the same kind made on the
  * same inputs (and, for an offer run, on the same offer). Plain Node, nothing to install.
@@ -110,6 +114,16 @@ function offerKey(brief) {
   return fnv(facts, 0x811c9dc5) + fnv(facts, 0x9747b28c);
 }
 
+/** Text with no en or em dash, by the three rules of src/lib/agents/text.ts: a range reads "to", a pause is a comma, any other is a hyphen. */
+const plainDashes = (text) => text.replace(/(\d)\s*[\u2013\u2014]\s*(?=\d)/g, "$1 to ").replace(/\s+[\u2013\u2014]\s+/g, ", ").replace(/[\u2013\u2014]/g, "-");
+/** The same for every text inside a value. */
+function plainDashesDeep(value) {
+  if (typeof value === "string") return plainDashes(value);
+  if (Array.isArray(value)) return value.map(plainDashesDeep);
+  if (isRecord(value)) return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, plainDashesDeep(v)]));
+  return value;
+}
+
 const sameInputs = (a, b) => a.dataset === b.dataset && a.buildings === b.buildings && Math.round(a.totalTivKes) === Math.round(b.totalTivKes) && a.reference === b.reference;
 
 function readRun(path) {
@@ -146,8 +160,11 @@ function check(run) {
 }
 
 const args = readArgs(process.argv.slice(2));
-const run = readRun(args.file);
+const run = plainDashesDeep(readRun(args.file));
 check(run);
+const corrections = Array.isArray(run.corrections) ? run.corrections.filter((c) => typeof c === "string" && c.trim() !== "") : [];
+if (corrections.length > 0) run.corrections = corrections;
+else delete run.corrections;
 
 const inputs = { dataset: run.inputs.dataset, buildings: run.inputs.buildings, totalTivKes: Math.round(run.inputs.totalTivKes), reference: run.inputs.reference };
 const savedAt = new Date(run.startedAt).toISOString();
@@ -194,7 +211,7 @@ if (existsSync(indexPath)) {
 
 const day = savedAt.slice(0, 10);
 const file = args.kind === "offer" ? `offer-${day}-${key.slice(0, 8)}.json` : `portfolio-${day}.json`;
-const entry = { file, kind: args.kind, savedAt, model: models.join(", "), inputs, ...(key !== null ? { offerKey: key } : {}) };
+const entry = { file, kind: args.kind, savedAt, model: models.join(", "), inputs, ...(key !== null ? { offerKey: key } : {}), ...(corrections.length > 0 ? { corrections } : {}) };
 
 // An older run of the same kind on the same inputs (and the same offer) gives way to this one.
 const replaces = (e) => isRecord(e) && e.kind === entry.kind && isRecord(e.inputs) && sameInputs(e.inputs, inputs) && (entry.kind === "portfolio" || e.offerKey === key);
@@ -215,4 +232,4 @@ console.log(`  kind ${entry.kind}, made ${savedAt}, model ${entry.model}`);
 console.log(`  inputs: ${inputs.dataset}, ${inputs.buildings} buildings, total insured value KES ${inputs.totalTivKes}, reference fingerprint ${inputs.reference}`);
 if (key !== null) console.log(`  offer key ${key}`);
 console.log(`  tokens in ${used("promptTokens")}, out ${used("outputTokens")}, thinking ${used("thinkingTokens")}; result fingerprint ${run.fingerprint}`);
-console.log(`  prompts ${args.dropPrompts ? "left out" : "kept"}; index.json now lists ${runs.length} run(s)`);
+console.log(`  prompts ${args.dropPrompts ? "left out" : "kept"}; ${corrections.length} correction(s) carried; index.json now lists ${runs.length} run(s)`);

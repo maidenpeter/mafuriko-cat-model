@@ -5,6 +5,7 @@ import { resultFingerprint, runModel } from "../model/pipeline";
 import type { Dataset, ModelParams, ModelResult } from "../model/types";
 import { AGENT_JUDGEMENT_KEYS, BASEMENT_LADDER, enforceJudgement, JUDGEMENT_BOUNDS, JUDGEMENT_LABELS, OUTAGE_LADDER, REFERENCE_JUDGEMENT, type JudgementAdjustment, type OfferJudgement } from "../offer/judgement";
 import type { OfferBrief } from "./offerBrief";
+import { plainDashesDeep } from "./text";
 import { outcomeSummary, type DataProfile } from "./profile";
 import type { AgentRequest, ChairContext, ChairSide } from "./prompts";
 import { reasonAt, toJudgement, toParams, type AgentOutput, type Critique, type Decision, type JudgementDecision, type JudgementProposal, type Proposal, type Role } from "./schema";
@@ -93,7 +94,7 @@ async function callAgent<R extends Role>(role: R, request: AgentRequest): Promis
   try {
     const res = await fetch(`/api/agents/${role}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request) });
     const body = await res.json();
-    if (body.ok) return { role, status: "done", model: body.model, ms: body.ms, attempts: body.attempts, usage: body.usage, prompt: body.prompt, raw: body.raw, output: body.output };
+    if (body.ok) return { role, status: "done", model: body.model, ms: body.ms, attempts: body.attempts, usage: body.usage, prompt: body.prompt, raw: plainDashesDeep(body.raw), output: plainDashesDeep(body.output) };
     return { role, status: "error", model: body.model, ms: body.ms, prompt: body.prompt, error: body.error ?? `Request failed (${res.status})` };
   } catch (e) {
     return { role, status: "error", error: (e as Error).message };
@@ -242,8 +243,11 @@ export async function deliberate(dataset: Dataset, profile: DataProfile, onUpdat
 export function replay(dataset: Dataset, saved: Deliberation, model?: ModelBasis | null): Deliberation {
   const basis = model ?? savedBasis(saved.basis);
   const rescore = (proposal: { depthScaleM: unknown } | undefined) => (proposal ? score(dataset, toParams(proposal as Proposal), basis) : null);
+  // The replies are shown with no en or em dash, whenever the run was saved.
+  const plain = <R extends Role>(run: AgentRun<R>): AgentRun<R> => ({ ...run, raw: plainDashesDeep(run.raw), output: plainDashesDeep(run.output) });
   const replayed: Deliberation = {
     ...saved,
+    runs: { optimist: plain(saved.runs.optimist), cautious: plain(saved.runs.cautious), critic: plain(saved.runs.critic), chair: plain(saved.runs.chair) },
     optimist: rescore(saved.runs.optimist.output),
     cautious: rescore(saved.runs.cautious.output),
     final: rescore(saved.runs.chair.output?.decision),
@@ -252,7 +256,7 @@ export function replay(dataset: Dataset, saved: Deliberation, model?: ModelBasis
   if (basis) replayed.basis = basis;
   else delete replayed.basis;
   // The offer's figures are worked out again from the saved replies, like the parameters. A run saved without an offer stays without one.
-  if (saved.offerJudgement) replayed.offerJudgement = settleJudgement(saved.runs, saved.offerJudgement.brief);
+  if (saved.offerJudgement) replayed.offerJudgement = settleJudgement(replayed.runs, saved.offerJudgement.brief);
   return replayed;
 }
 

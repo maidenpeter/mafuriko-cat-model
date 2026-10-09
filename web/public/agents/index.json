@@ -13,7 +13,7 @@
       }
     },
     {
-      "file": "offer-2026-10-08-d713ff1c.json",
+      "file": "offer-2026-10-08-8c635242.json",
       "kind": "offer",
       "savedAt": "2026-10-08T20:47:23.832Z",
       "model": "gpt-6-luna",
@@ -23,7 +23,10 @@
         "totalTivKes": 63635075000,
         "reference": "bdc87191"
       },
-      "offerKey": "d713ff1c64deefc9"
+      "offerKey": "8c635242e0692ab3",
+      "corrections": [
+        "After this run the offer reader was corrected: the memo records no flood loss in its 11-year history. Its one water claim (2018, KES 850,000) came from a blocked air-conditioning condensate line, and the agents had been given it as a flood loss. Four passages that repeated this were put right: the Optimist's and the Cautious's reasons for the uncertainty loading, the Critic's challenge C7 on the loss history, and the Chair's reply to it. Every figure the agents set is as they gave it; the Chair had already set the claim aside as evidence."
+      ]
     }
   ]
 }

@@ -43,6 +43,11 @@ export interface ShippedEntry {
   inputs: RunInputs;
   /** For an offer run: the key of the offer the agents saw (offerKey). */
   offerKey?: string;
+  /**
+   * What was corrected in the run's text after it was made, in plain sentences, when anything was.
+   * Shown with the run wherever it is replayed, so no word is passed off as the agents' own.
+   */
+  corrections?: string[];
 }
 
 export interface ShippedIndex {
@@ -152,7 +157,10 @@ export function readShippedIndex(raw: unknown): ShippedIndex {
     const key = text(r?.offerKey);
     if (file === null || !FILE_NAME.test(file) || kind === null || savedAt === null || !isDate(savedAt) || model === null || inputs === null) continue;
     if (kind === "offer" && key === null) continue;
-    runs.push(kind === "offer" ? { file, kind, savedAt, model, inputs, offerKey: key! } : { file, kind, savedAt, model, inputs });
+    // What was put right in the run after it was made, kept only as plain sentences.
+    const said = Array.isArray(r?.corrections) ? r.corrections.filter((c): c is string => typeof c === "string" && c.trim() !== "") : [];
+    const corrections = said.length > 0 ? { corrections: said } : {};
+    runs.push(kind === "offer" ? { file, kind, savedAt, model, inputs, offerKey: key!, ...corrections } : { file, kind, savedAt, model, inputs, ...corrections });
   }
   return { runs };
 }

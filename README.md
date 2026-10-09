@@ -98,6 +98,19 @@ You need Node.js 20 or newer.
    For development use `npm run dev` instead of the last line. More detail, the settings and
    the tests are in [web/README.md](web/README.md).
 
+## New data set
+
+1. **Where the files go.** Put the new data set in a folder of its own, for example `data/new/<name>/`, with its exposure CSV, its hazard GeoTIFFs and, when there is one, its flood areas CSV. Use a plain folder name: letters, digits, dots, hyphens, underscores.
+2. **Point the app at it.** In `web/.env.local` set `MODEL_DATA_DIR=../data/new`: the folder that holds the data set folder, relative to `web` or absolute. Left on `data/data`, the app keeps opening `team_a_nairobi`, which it picks first by name.
+3. **Restart.** Stop the app, then `npm run build && npm start` in `web` (or `npm run dev`). The setting is read at start. **Model data** in the bar names the data set and where it came from.
+4. **A quicker way, with one limit.** **Model data**, **Replace model data** reads a folder chosen in the browser with no restart. Every step works on it except the live Oasis run, which reads the exposure file from disk.
+5. **What works with no saved agent run.** Everything, on the reference assumptions: reading and pricing an offer, the hazard map with Play, the damage curve, the loss engine, Results with the tornado, the exports and the Audit.
+6. **What the Agents step says.** "No saved run matches the model data loaded", and for an offer the app has not seen, "No saved run was made on this offer". The saved runs are tied to the starter kit and to the test offer; they are never replayed on other data.
+7. **Run the agents live.** With a key in `web/.env.local` and a network, press **Run the agents** (or **Run the agents on this offer**) on the Agents step: about a minute. The **Assumptions** switch and the Shapley chart then show what the agents changed.
+8. **Keep that run.** **Save the agent run for replay** on the Audit step downloads it; `node scripts/pack-run.mjs <file> --kind portfolio` (or `--kind offer --drop-prompts`) in `web` ships it with the app.
+9. **Run Oasis live.** On the Oasis check step press **Run Oasis now on these settings**: about a minute and a half, on this machine, for the data and settings on screen. It needs Oasis in WSL and the data set on disk under `MODEL_DATA_DIR`.
+10. **The three saved Oasis runs** belong to the starter kit. On other data the step says "Not checked by Oasis for these settings" until the live run has finished.
+
 ## The demo path
 
 Ten stops, in order. The header stays in view throughout: a control bar with the switches

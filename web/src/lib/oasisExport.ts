@@ -215,7 +215,7 @@ export const viewName = (v: { floodSource: FloodSource; lossesFrom: LossMode }) 
 
 export const OASIS_NOT_CHECKED = "Not checked by Oasis for these settings";
 /** The one line under it: which settings an Oasis run exists for. */
-export const OASIS_COVERED_LINE = `Oasis runs exist for the reference assumptions with nothing typed over, on the Nairobi starter kit, under three settings: ${OASIS_RUNS.map(viewName).join("; ")}.`;
+export const OASIS_COVERED_LINE = `Saved Oasis runs exist for the reference assumptions with nothing typed over, on the starter kit data set, under three settings: ${OASIS_RUNS.map(viewName).join("; ")}.`;
 
 /** The run made for exactly these settings. null for any other combination: agreed or typed assumptions, or a pairing no run was made for. */
 export function oasisRunFor(settings: OasisSettings): OasisRunSpec | null {

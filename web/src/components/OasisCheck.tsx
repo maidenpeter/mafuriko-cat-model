@@ -99,8 +99,12 @@ function switchHint(settings: OasisSettings): string {
  * No figure is shown: never a match from other settings. `why` says what is missing when a run was
  * made for these settings but not for this very result: a file not present, or one made for another result.
  */
-function NotChecked({ settings, why, onShowChecked }: { settings: OasisSettings; why?: string; onShowChecked?: () => void }) {
+/** A live run of Oasis on this machine, as the step tracks it. */
+export type LiveState = { status: "idle" } | { status: "running"; seconds: number } | { status: "error"; message: string };
+
+function NotChecked({ settings, why, onShowChecked, onRunLive, live }: { settings: OasisSettings; why?: string; onShowChecked?: () => void; onRunLive?: () => void; live?: LiveState }) {
   const hint = switchHint(settings);
+  const running = live?.status === "running";
   return (
     <Card title={TITLE} aside={<Tag kind="none">Not checked</Tag>}>
       <p className="text-base font-semibold text-ink">{OASIS_NOT_CHECKED}</p>
@@ -108,14 +112,25 @@ function NotChecked({ settings, why, onShowChecked }: { settings: OasisSettings;
         The settings on screen are {viewName(settings)}, {settings.referenceAssumptions ? "reference assumptions" : "with assumptions agreed by the agents or typed over"}. {OASIS_COVERED_LINE}
         {why ? ` ${why}` : ""}
       </p>
+      {onRunLive && (
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1">
+          <Button onClick={onRunLive} disabled={running}>{running ? "Oasis is running" : "Run Oasis now on these settings"}</Button>
+          <span className="text-sm text-ink-2" role="status">
+            {live?.status === "running"
+              ? `Running Oasis LMF on this machine for the portfolio and settings on screen: ${live.seconds} seconds so far, about a minute and a half in all.`
+              : "Runs Oasis LMF on this machine for the portfolio and settings on screen. About a minute and a half; nothing leaves this machine."}
+          </span>
+        </div>
+      )}
+      {live?.status === "error" && <p className="mt-2 max-w-4xl text-sm leading-relaxed text-critical">{live.message}</p>}
       {hint && onShowChecked && (
         <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1">
-          <Button onClick={onShowChecked}>Show the checked settings</Button>
-          <span className="text-sm text-muted">Sets the switches in the bar above to the nearest settings Oasis was run on.</span>
+          <Button variant="secondary" onClick={onShowChecked} disabled={running}>Show the checked settings</Button>
+          <span className="text-sm text-muted">Sets the switches in the bar above to the nearest settings a saved run exists for.</span>
         </div>
       )}
       <p className="mt-3 max-w-4xl text-sm leading-relaxed text-muted">
-        {hint ? `${hint} ` : ""}To check any other settings, download the building-level export below and run it through Oasis as described there.
+        {hint ? `${hint} ` : ""}The export and the commands for a run by hand are at the foot of this page.
       </p>
     </Card>
   );
@@ -126,28 +141,39 @@ function NotChecked({ settings, why, onShowChecked }: { settings: OasisSettings;
  * and `result` are the ones in force (with drainage when it is on), and `source` says whether the
  * assumptions are the reference set or the agents'. `runs` is what useOasisRuns read. `onShowChecked`
  * sets the switches to the nearest settings a run exists for, for the button on the "Not checked" card.
+ * `liveRun` is a run made on this machine for the result on screen (shown only when it carries this
+ * result's fingerprint), `onRunLive` starts one and `live` says how it is going.
  */
-export function OasisCheck({ dataset, result, source, runs, onShowChecked }: { dataset: Dataset; result: ModelResult; source: Active["source"]; runs: OasisRuns | null; onShowChecked?: () => void }) {
+export function OasisCheck({ dataset, result, source, runs, onShowChecked, liveRun = null, onRunLive, live }: { dataset: Dataset; result: ModelResult; source: Active["source"]; runs: OasisRuns | null; onShowChecked?: () => void; liveRun?: OasisRunFile | null; onRunLive?: () => void; live?: LiveState }) {
   const settings = oasisSettings(dataset, result, source);
   const spec = oasisRunFor(settings);
-  if (!spec) return <NotChecked settings={settings} onShowChecked={onShowChecked} />;
-  if (!runs) {
+  const fingerprint = resultFingerprint(result);
+  if (spec && !runs) {
     return (
       <Card title={TITLE}>
         <p className="text-sm text-muted">Reading the Oasis run for {viewName(settings)}, reference assumptions.</p>
       </Card>
     );
   }
-  const run = runs[spec.file];
-  if (!oasisChecked(spec, run, dataset, result)) {
-    const why = run === null || run === undefined
-      ? `The file for these settings, ${spec.file}, is not present under web/public/oasis.`
-      : `The file for these settings, ${spec.file}, was made for another result (fingerprint ${run.view?.fingerprint ?? "none"}; this result is ${resultFingerprint(result)}), so it is not shown.`;
-    return <NotChecked settings={settings} why={why} />;
+  const saved = spec && runs ? runs[spec.file] : null;
+  const savedOk = spec && oasisChecked(spec, saved, dataset, result) ? saved : null;
+  // A run made just now counts only for the very result it was made for.
+  const liveOk = !savedOk && liveRun?.view && liveRun.view.fingerprint === fingerprint ? (liveRun as OasisRunFile & { view: NonNullable<OasisRunFile["view"]> }) : null;
+  const run = savedOk ?? liveOk;
+  if (!run) {
+    const why = !spec
+      ? undefined
+      : saved === null || saved === undefined
+        ? `The file for these settings, ${spec.file}, is not present under web/public/oasis.`
+        : `The file for these settings, ${spec.file}, was made for another result (fingerprint ${saved.view?.fingerprint ?? "none"}; this result is ${fingerprint}), so it is not shown.`;
+    return <NotChecked settings={settings} why={why} onShowChecked={onShowChecked} onRunLive={onRunLive} live={live} />;
   }
 
-  // oasisChecked has settled that the file was fed the way the spec says, so the spec's mode is the file's.
-  const byRatio = spec.mode === "damage_ratios";
+  // A saved file was fed the way its spec says; a run made now says so itself, and failing that follows "Losses from".
+  const runMode: OasisRunMode = savedOk && spec ? spec.mode : (run.mode ?? (settings.lossesFrom === "all_drivers" ? "damage_ratios" : "depths"));
+  const fileLabel = savedOk && spec ? spec.file : "run just now on this machine";
+  const assumptionWords = settings.referenceAssumptions ? "reference assumptions" : "the assumptions in force (agreed by the agents or typed over)";
+  const byRatio = runMode === "damage_ratios";
   const allDrivers = settings.lossesFrom === "all_drivers";
   const drainage = settings.floodSource === "terrain_drainage";
   const rows = run.events.map((e) => {
@@ -165,15 +191,15 @@ export function OasisCheck({ dataset, result, source, runs, onShowChecked }: { d
       aside={
         <span className="inline-flex flex-wrap gap-2">
           <Tag kind="real">Oasis LMF {run.oasislmfVersion}</Tag>
-          <Tag kind="assumption">Reference assumptions</Tag>
+          <Tag kind="assumption">{settings.referenceAssumptions ? "Reference assumptions" : "Assumptions in force"}</Tag>
         </span>
       }
     >
       <p className="-mt-2 text-sm leading-relaxed text-ink-2">
-        <strong className="font-semibold text-ink">View checked: {viewName(settings)}, reference assumptions.</strong> It is the view in force now (result fingerprint <span className="font-mono">{run.view.fingerprint}</span>).
+        <strong className="font-semibold text-ink">View checked: {viewName(settings)}, {assumptionWords}.</strong> It is the view in force now (result fingerprint <span className="font-mono">{run.view.fingerprint}</span>).
       </p>
       {/* What this run did and did not check: said in full, above the figures, and never folded away. */}
-      <p className="mt-2 max-w-4xl text-base font-semibold leading-relaxed text-ink">{OASIS_CHECKED_LINE[spec.mode]}</p>
+      <p className="mt-2 max-w-4xl text-base font-semibold leading-relaxed text-ink">{OASIS_CHECKED_LINE[runMode]}</p>
       <div className="mt-3 overflow-x-auto">
         <table className="w-full min-w-xl text-sm">
           <caption className="pb-2 text-left text-sm leading-relaxed text-ink-2">
@@ -218,12 +244,12 @@ export function OasisCheck({ dataset, result, source, runs, onShowChecked }: { d
       <SourceLine
         className="mt-3 border-t border-line pt-3"
         sources={[
-          { kind: "real", text: `Oasis LMF ${run.oasislmfVersion} output, ${spec.file}: totals only, never a building` },
+          { kind: "real", text: `Oasis LMF ${run.oasislmfVersion} output, ${fileLabel}: totals only, never a building` },
           { kind: "synthetic", text: "Portfolio of insured buildings, the same file in both engines" },
           { kind: "real", text: dataset.hazardKind === "score" ? "Hazard maps; the score on them is a derived proxy for flooding" : "Flood depth maps" },
           {
             kind: "assumption",
-            text: `Reference assumptions: return periods, depth scale, fragility and caps${drainage ? ", the drainage reach and ponding depths" : ""}${allDrivers ? ", the buffer, the drain design return period and the drain overload depth" : ""}`,
+            text: `${settings.referenceAssumptions ? "Reference assumptions" : "Assumptions in force"}: return periods, depth scale, fragility and caps${drainage ? ", the drainage reach and ponding depths" : ""}${allDrivers ? ", the buffer, the drain design return period and the drain overload depth" : ""}`,
           },
         ]}
       />

@@ -16,13 +16,15 @@
  * (with drainage when it is on). The three files are read once and serve both tables.
  */
 
+import { useEffect, useState } from "react";
 import { fmtInt } from "@/lib/format";
-import { buildingExport, buildingExportCsv, OASIS_NOT_CHECKED, OASIS_RUNS, oasisChecked, oasisRunFor, oasisSettings, viewName } from "@/lib/oasisExport";
+import { resultFingerprint } from "@/lib/model/pipeline";
+import { buildingExport, buildingExportCsv, OASIS_NOT_CHECKED, OASIS_RUNS, oasisChecked, oasisRunFor, oasisSettings, viewName, type OasisRunFile } from "@/lib/oasisExport";
 import type { OfferFocusProps } from "@/lib/offer/focus";
 import { download, type Active, type Session } from "@/lib/session";
 import { STEP_NAMES, type StepId } from "@/lib/steps";
 import { SourceLine } from "../charts/ChartFrame";
-import { eventDiffPct, OASIS_CHECKED_SHORT, OASIS_GIVEN, OasisCheck, runDate, useOasisRuns } from "../OasisCheck";
+import { eventDiffPct, OASIS_CHECKED_SHORT, OASIS_GIVEN, OasisCheck, runDate, useOasisRuns, type LiveState } from "../OasisCheck";
 import { Button, Card, Fold, StepHeader, StepLink, Tag } from "../ui";
 
 interface Props extends OfferFocusProps {
@@ -58,6 +60,53 @@ export function OasisStep({ session, active, onOpenStep, onShowChecked }: Props)
   const version = files[0]?.oasislmfVersion ?? null;
   const summarySources = [{ kind: "real" as const, text: `Oasis LMF${version ? ` ${version}` : ""} output: ${OASIS_RUNS.map((r) => r.file).join(", ")} under web/public/oasis, totals only, never a building` }];
 
+  // Runs made on this machine, by the fingerprint of the result each was made for.
+  const fingerprint = resultFingerprint(active.result);
+  const [liveRuns, setLiveRuns] = useState<Record<string, OasisRunFile>>({});
+  const [live, setLive] = useState<{ state: LiveState; fingerprint: string | null }>({ state: { status: "idle" }, fingerprint: null });
+
+  // A run made earlier for this very result is picked up without running again.
+  useEffect(() => {
+    let dropped = false;
+    fetch(`/api/oasis/run?fingerprint=${fingerprint}`, { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body: { ok?: boolean; run?: OasisRunFile } | null) => {
+        if (!dropped && body?.ok && body.run) setLiveRuns((all) => ({ ...all, [fingerprint]: body.run as OasisRunFile }));
+      })
+      .catch(() => undefined);
+    return () => {
+      dropped = true;
+    };
+  }, [fingerprint]);
+
+  const runLive = async () => {
+    if (live.state.status === "running") return;
+    const started = Date.now();
+    setLive({ state: { status: "running", seconds: 0 }, fingerprint });
+    const tick = setInterval(() => setLive((s) => (s.state.status === "running" ? { ...s, state: { status: "running", seconds: Math.round((Date.now() - started) / 1000) } } : s)), 1000);
+    try {
+      const csv = buildingExportCsv(buildingExport(dataset, active.result, active.source));
+      const res = await fetch("/api/oasis/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dataset: dataset.name, fingerprint, mode: settings.lossesFrom === "all_drivers" ? "damage_ratios" : "depths", csv }),
+      });
+      const body = (await res.json().catch(() => null)) as { ok?: boolean; run?: OasisRunFile; reason?: string } | null;
+      if (body?.ok && body.run) {
+        setLiveRuns((all) => ({ ...all, [fingerprint]: body.run as OasisRunFile }));
+        setLive({ state: { status: "idle" }, fingerprint });
+      } else {
+        setLive({ state: { status: "error", message: body?.reason ?? "Oasis could not be run from here." }, fingerprint });
+      }
+    } catch {
+      setLive({ state: { status: "error", message: "The app's server did not answer, so Oasis was not run." }, fingerprint });
+    } finally {
+      clearInterval(tick);
+    }
+  };
+  // An error belongs to the result it was raised for; a run in flight stays on show whatever the settings, as only one runs at a time.
+  const liveShown: LiveState = live.fingerprint === fingerprint || live.state.status === "running" ? live.state : { status: "idle" };
+
   const exportBuildings = () => {
     const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
     download(`mafuriko-${dataset.name}-${stamp}-buildings.csv`, buildingExportCsv(buildingExport(dataset, active.result, active.source)), "text/csv");
@@ -69,7 +118,7 @@ export function OasisStep({ session, active, onOpenStep, onShowChecked }: Props)
         Oasis LMF is the open-source loss engine used across the insurance and reinsurance industry. The portfolio was written as Oasis files and run through that engine on the same inputs, so the figures in {STEP_NAMES.results} are checked by an engine that is not ours.
       </StepHeader>
 
-      <OasisCheck dataset={dataset} result={active.result} source={active.source} runs={runs} onShowChecked={onShowChecked} />
+      <OasisCheck dataset={dataset} result={active.result} source={active.source} runs={runs} onShowChecked={onShowChecked} liveRun={liveRuns[fingerprint] ?? null} onRunLive={runLive} live={liveShown} />
 
       <Card title="The three runs shipped with the app" className="mt-4" aside={<Tag kind="real">Oasis LMF{version ? ` ${version}` : ""}</Tag>}>
         <p className="-mt-2 mb-3 max-w-4xl text-sm leading-relaxed text-ink-2">

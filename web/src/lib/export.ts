@@ -1008,7 +1008,7 @@ export function buildNote(session: Session, active: Active, deliberation: Delibe
   } else if (oasis) {
     lines.push(`The saved Oasis run was made for "${oasis.dataset}", not for this data set, so it is not compared here. See oasis/README.md to produce one.`, ``);
   } else {
-    lines.push(`The loss engine is checked against the open-source Oasis LMF engine on the reference assumptions; the comparison is on the Results step and the method is in oasis/README.md. The figures were not available when this note was written.`, ``);
+    lines.push(`The loss engine is checked against the open-source Oasis LMF engine on the reference assumptions; the comparison is on the Oasis check step, which can also run Oasis on the settings on screen, and the method is in oasis/README.md. The figures were not available when this note was written.`, ``);
   }
 
   // --- Checks ---------------------------------------------------------------------------------

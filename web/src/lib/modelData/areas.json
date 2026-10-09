@@ -1,0 +1,15 @@
+{
+  "nairobi": {
+    "name": "Nairobi",
+    "hazardKind": "score",
+    "returnPeriodsByTier": { "extreme": 10, "severe": 25, "moderate": 50, "occasional": 100, "common": 250 },
+    "sources": {
+      "hazard": "Hazard maps (hackathon starter kit): five tiers of a 0 to 1 flood susceptibility score, built by the organisers from the Copernicus GLO-30 elevation model (https://doi.org/10.5270/ESA-c5d3d65) and the distance to rivers and streams mapped in OpenStreetMap (https://www.openstreetmap.org/copyright). Real terrain and real rivers; the reading of the score as flood hazard is a constructed proxy.",
+      "exposure": "Exposure file (hackathon starter kit): buildings with a location, a construction class and an insured value. Fully synthetic and randomly placed.",
+      "hotspots": "County flood areas (hackathon starter kit): the flood hotspots named by Nairobi County in its mapping of March 2026, geocoded by the organisers through OpenStreetMap. Real places, used to check the hazard maps.",
+      "wards": "Ward boundaries: Omare, B.D.A. and Omare, G.J.M. (2017), Kenya County Assembly Boundaries, digitised from the IEBC 2012 boundary maps, CC BY 4.0, as published by geoBoundaries (https://www.geoboundaries.org). Processing in web/public/geo/SOURCES.md.",
+      "drainage": "Waterways (rivers, streams, canals, drains and ditches) and informal settlements: OpenStreetMap contributors, ODbL 1.0 (https://www.openstreetmap.org/copyright), from the Geofabrik Kenya extract of 3 May 2025 and a Nairobi extract of 10 February 2025. Processing in web/public/geo/SOURCES.md.",
+      "other": "Open map layers (county and sub-county outlines, schools, health and emergency services): OpenStreetMap contributors (ODbL 1.0) and geoBoundaries (CC BY 4.0). Processing in web/public/geo/SOURCES.md."
+    }
+  }
+}

@@ -894,6 +894,8 @@ export function Walkthrough() {
                       hasSaved={hasSaved}
                       replayed={replayed}
                       shippedLabel={shippedName}
+                      shippedKind={shippedInForce?.entry.kind ?? null}
+                      shippedCorrections={shippedInForce?.entry.corrections ?? null}
                       shippedOtherData={shippedHere?.otherData ?? false}
                       statusFailed={statusFailed}
                       onShipped={ownDeliberation && shippedDeliberation ? backToShipped : undefined}

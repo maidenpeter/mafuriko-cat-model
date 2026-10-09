@@ -1022,6 +1022,10 @@ interface Props {
   replayed: boolean;
   /** "Saved run from 8 October 2026, model x" while the run shown is the one that ships with the app. null for the reader's own run, and when there is none. */
   shippedLabel?: string | null;
+  /** Whether the shipped run shown was made on the portfolio alone or on an offer. null when no shipped run is shown. */
+  shippedKind?: "portfolio" | "offer" | null;
+  /** What was put right in the shipped run's text after it was made, when anything was. */
+  shippedCorrections?: string[] | null;
   /** True when the app ships a run made on other model data, or before the model changed, so it is not replayed here. */
   shippedOtherData?: boolean;
   /** True when the server could not be asked which agents have a key. With a shipped run to show, that counts as having no key. */
@@ -1046,7 +1050,7 @@ interface Props {
   onOpenStep?: (id: StepId) => void;
 }
 
-export function AgentsStep({ session, deliberation: d, busy, checks, status, hasSaved, replayed, shippedLabel = null, shippedOtherData = false, statusFailed = false, onShipped, onRun, onReplay, onImport, prices = null, focus = null, offerFocus = null, mode = "all_drivers", judgement = null, onJudgement, onOpenStep }: Props) {
+export function AgentsStep({ session, deliberation: d, busy, checks, status, hasSaved, replayed, shippedLabel = null, shippedKind = null, shippedCorrections = null, shippedOtherData = false, statusFailed = false, onShipped, onRun, onReplay, onImport, prices = null, focus = null, offerFocus = null, mode = "all_drivers", judgement = null, onJudgement, onOpenStep }: Props) {
   // Once a figure is typed here its fold stays open, also after the figure is handed back.
   const [typedHere, setTypedHere] = useState(false);
   // The agents are handed the offer's facts only once it is priced, whatever the "View" switch in the bar says.
@@ -1116,10 +1120,29 @@ export function AgentsStep({ session, deliberation: d, busy, checks, status, has
         </p>
         {shippedLabel && (
           <p className="mt-2 max-w-4xl text-sm leading-relaxed text-ink-2">
-            <strong className="font-semibold text-ink">This run was saved with the app.</strong> Its replies are shown as they were given, and code has worked out every figure again just now. {liveLine}
+            <strong className="font-semibold text-ink">This run was saved with the app.</strong> Its replies are shown as they were given{shippedCorrections?.length ? ", except for the correction below" : ""}, and code has worked out every figure again just now. {liveLine}
           </p>
         )}
-        {shippedOtherData && <p className="mt-2 max-w-4xl text-sm leading-relaxed text-ink-2">The run saved with the app was made on different model data, so it is not replayed here.</p>}
+        {shippedLabel &&
+          shippedCorrections?.map((correction) => (
+            <p key={correction} className="mt-2 max-w-4xl text-sm leading-relaxed text-ink-2">
+              <strong className="font-semibold text-ink">Corrected after the run.</strong> {correction}
+            </p>
+          ))}
+        {shippedLabel && shippedKind === "portfolio" && offerArgued && (
+          <div className="mt-3 max-w-4xl">
+            <Note tone="warn">
+              <strong className="font-semibold text-ink">No saved run was made on this offer.</strong> The run shown was made on the portfolio alone, so it says nothing about this building: the figures beyond flood depth stay at their reference values. Press &quot;Run the agents on this offer&quot; for a run of its own (needs a key and a network).
+            </Note>
+          </div>
+        )}
+        {shippedOtherData && (
+          <div className="mt-3 max-w-4xl">
+            <Note tone="warn">
+              <strong className="font-semibold text-ink">No saved run matches the model data loaded.</strong> The run saved with the app was made on other data, so it is not replayed here. Every step still works, on the reference assumptions. Press &quot;Run the agents&quot; for a run on this data (needs a key and a network).
+            </Note>
+          </div>
+        )}
         {d && <AgentStatuses d={d} />}
         {missingKeys.length > 0 && !d && (
           <div className="mt-3 max-w-3xl">

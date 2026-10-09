@@ -72,6 +72,12 @@ export type DecisionNoteInput = {
   assumptions?: { label: string; value: string; setBy: "offer" | "agents" | "typed" | "reference"; placeholder?: boolean }[];
   /** The questions for the broker, in the order to ask them. */
   questions?: string[];
+  /**
+   * The assumptions that move the answer most, from the sensitivity tornado, largest swing first: the
+   * value in force, the low and high values swung to, and the change in each figure from the low value
+   * to the high one. At most MAX_MOVERS_ON_NOTE are printed, so the page stays one page.
+   */
+  movers?: { label: string; inForce: string; low: string; high: string; change100: string; changeAal: string }[];
   flags: Flag[];
   /** Every suggested condition on the page. The ticked ones are read from decision.conditions. */
   conditions: { id: string; text: string }[];
@@ -102,6 +108,8 @@ export const MAX_TERMS_ON_NOTE = 6;
 /** With the loss drivers on the note, fewer points are printed so the page still holds everything. */
 export const MAX_FLAGS_WITH_DRIVERS = 4;
 export const MAX_QUESTIONS_ON_NOTE = 8;
+/** The tornado's rows printed on the note: the five largest swings, in one small table. */
+export const MAX_MOVERS_ON_NOTE = 5;
 const SET_BY_ORDER = ["offer", "agents", "typed", "reference"] as const;
 const headed = (text: string) => text[0].toUpperCase() + text.slice(1);
 /** Who set an assumption, in the words the note groups them under: the counted form of the one table in labels.ts (SETTER_WORDS). */
@@ -232,8 +240,8 @@ export function buildDecisionNoteHtml(input: DecisionNoteInput): string {
   const e = escapeHtml;
   const { offer, figures, decision, terms, footer } = input;
 
-  // With the drivers on the note there is more to fit on the page, so the lists are set tighter.
-  const tight = Boolean(input.drivers || input.premium || input.assumptions?.length || input.questions);
+  // With the drivers or the tornado on the note there is more to fit on the page, so the lists are set tighter.
+  const tight = Boolean(input.drivers || input.premium || input.assumptions?.length || input.questions || input.movers?.length);
   const flagChars = tight ? 130 : MAX_FLAG_TEXT_CHARS;
 
   const allFlags = sortFlags(input.flags);
@@ -327,6 +335,21 @@ ${more(allQuestions.length - questions.length, "question", "questions")}
 </div>`
     : "";
 
+  // The tornado's largest swings: the assumption, the values swung to, and the change in each figure from the low value to the high one.
+  const allMovers = input.movers ?? [];
+  const movers = allMovers.slice(0, MAX_MOVERS_ON_NOTE);
+  const moversBlock =
+    allMovers.length > 0
+      ? `<div id="movers">
+<h2>Which assumptions move the answer most (${movers.length} of ${allMovers.length})</h2>
+<table class="small"><thead><tr><th>Assumption</th><th>In force</th><th>Low value</th><th>High value</th><th>1-in-100 loss, low to high</th><th>Average annual loss, low to high</th></tr></thead><tbody>
+${movers.map((m) => `<tr><td>${e(m.label)}</td><td>${e(m.inForce)}</td><td>${e(m.low)}</td><td>${e(m.high)}</td><td>${e(m.change100)}</td><td>${e(m.changeAal)}</td></tr>`).join("\n")}
+</tbody></table>
+<p class="small">Each assumption swung on its own across its allowed range, every other left as it stands; the changes are ground-up, before the deductible and the limit.</p>
+${more(allMovers.length - movers.length, "assumption", "assumptions")}
+</div>`
+      : "";
+
   const periods = [...input.lossByReturnPeriod]
     .sort((a, b) => a.returnPeriodYears - b.returnPeriodYears)
     .slice(-MAX_RETURN_PERIODS_ON_NOTE);
@@ -414,6 +437,8 @@ ${more(orderedConditions.length - conditions.length, "suggestion", "suggestions"
 </div>
 
 ${questionsBlock}
+
+${moversBlock}
 
 ${assumptionsBlock}
 ${drivers ? "" : premiumBlock}

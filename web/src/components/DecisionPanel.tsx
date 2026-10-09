@@ -32,12 +32,14 @@ interface Props {
   onDecision: (next: DecisionRecord) => void;
   /** Ids of the suggested conditions on screen: ticks for conditions no longer suggested do not count. */
   conditionIds: string[];
+  /** One line on which assumptions move the answer most, pointing at the tornado drawn above the panel. */
+  movers?: ReactNode;
   /** The export buttons, shown at the foot of the panel. */
   children?: ReactNode;
   className?: string;
 }
 
-export function DecisionPanel({ decision, onDecision, conditionIds, children, className = "" }: Props) {
+export function DecisionPanel({ decision, onDecision, conditionIds, movers, children, className = "" }: Props) {
   const id = useId();
   // Messages appear once the underwriter has tried to record, not while the form is still being filled in.
   const [tried, setTried] = useState(false);
@@ -55,6 +57,7 @@ export function DecisionPanel({ decision, onDecision, conditionIds, children, cl
   return (
     <Card title="The underwriter's decision" className={className}>
       <p className="-mt-2 max-w-3xl text-sm leading-relaxed text-ink-2">{DECISION_STANCE}</p>
+      {movers && <p className="mt-2 max-w-3xl text-sm leading-relaxed text-ink-2">{movers}</p>}
 
       {/* Where there is room the note sits beside the four choices, so the whole panel fits on one screen. */}
       <div className="mt-4 grid gap-x-8 gap-y-4 @4xl:grid-cols-2">

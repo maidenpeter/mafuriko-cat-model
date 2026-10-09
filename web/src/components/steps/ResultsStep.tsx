@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useMemo, useState } from "react";
+import { useId, useMemo, useState, type ReactNode } from "react";
 import type { Deliberation } from "@/lib/agents/orchestrate";
 import { countFlags, emptyDecision, EVIDENCE_LABELS, SEVERITY_LABELS, SEVERITY_ORDER, sortFlags, toggleCondition, type DecisionRecord, type Flag, type Severity } from "@/lib/decision";
 import { buildDecisionNoteHtml, decisionNoteFileName, type DecisionNoteInput } from "@/lib/decisionNote";
@@ -22,6 +22,7 @@ import { LineChart, valueAt, type Point } from "../charts/LineChart";
 import { driverSeries, PORTFOLIO_SERIES, StackedBars, type StackColumn } from "../charts/StackedBars";
 import { DecisionPanel } from "../DecisionPanel";
 import { DriverSources, offerKindOf } from "../DriverSources";
+import { StepTornado } from "../interpret/Movers";
 import { Button, Card, Fold, InsuredValueFlag, Note, PlaceholderBadge, Segmented, StepHeader, StepLink, Tag } from "../ui";
 import { CLASS_COLORS } from "./DataStep";
 
@@ -66,6 +67,10 @@ export function ResultsStep({ offerFocus, decision, onDecision, dataSource, onOp
   // The walkthrough owns the record. This one only stands in if the step is ever used without it.
   const [ownDecision, setOwnDecision] = useState<DecisionRecord>(emptyDecision);
   const offer = isPriced(offerFocus) ? offerFocus : null;
+  // Which assumptions move the answer most: the offer's answer when one is priced, the portfolio's otherwise.
+  const tornado = portfolio.judgement ? (
+    <StepTornado focus={offer} dataset={portfolio.session.dataset} params={portfolio.active.params} judgement={portfolio.judgement} mode={portfolio.mode ?? "all_drivers"} className="mt-4" />
+  ) : null;
 
   return (
     <div>
@@ -96,9 +101,10 @@ export function ResultsStep({ offerFocus, decision, onDecision, dataSource, onOp
           onOpenStep={onOpenStep}
           onJudgement={onJudgement}
           savedRunLabel={portfolio.savedRunLabel}
+          tornado={tornado}
         />
       ) : (
-        <PortfolioResults {...portfolio} onOpenStep={onOpenStep} />
+        <PortfolioResults {...portfolio} onOpenStep={onOpenStep} tornado={tornado} />
       )}
     </div>
   );
@@ -494,6 +500,7 @@ function OfferResults({
   onOpenStep,
   onJudgement,
   savedRunLabel,
+  tornado,
 }: {
   focus: PricedFocus;
   decision: DecisionRecord;
@@ -502,6 +509,8 @@ function OfferResults({
   onOpenStep?: (id: StepId) => void;
   onJudgement?: (next: Partial<OfferJudgement>) => void;
   savedRunLabel?: string | null;
+  /** The sensitivity tornado for this offer, drawn above the decision. */
+  tornado?: ReactNode;
 }) {
   const { terms, conditions, drivers, questions } = focus;
   const { total, building, portfolio } = focus.price;
@@ -871,6 +880,8 @@ function OfferResults({
         </div>
       </Card>
 
+      {tornado}
+
       <DecisionPanel decision={decision} onDecision={onDecision} conditionIds={conditions.map((c) => c.id)} className="mt-4">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <div className="flex flex-wrap gap-2">
@@ -893,7 +904,7 @@ function OfferResults({
 }
 
 /** The portfolio's results: the step as it stands without an offer, and the second view with one. */
-function PortfolioResults({ session, active, deliberation, terrainResult, terms, judgement, savedRunLabel, onOpenStep }: PortfolioProps & { onOpenStep?: (id: StepId) => void }) {
+function PortfolioResults({ session, active, deliberation, terrainResult, terms, judgement, savedRunLabel, onOpenStep, tornado }: PortfolioProps & { onOpenStep?: (id: StepId) => void; tornado?: ReactNode }) {
   const { dataset, reference } = session;
   const r = active.result;
   const isScore = dataset.hazardKind === "score";
@@ -1060,6 +1071,8 @@ function PortfolioResults({ session, active, deliberation, terrainResult, terms,
           </p>
         </Fold>
       </ChartFrame>
+
+      {tornado}
 
       <Card title="Key figures" className="mt-4">
         <dl className="grid grid-cols-[repeat(auto-fit,minmax(min(14rem,100%),1fr))] gap-x-6 gap-y-4">

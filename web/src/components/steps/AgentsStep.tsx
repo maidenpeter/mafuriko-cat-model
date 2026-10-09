@@ -18,6 +18,7 @@ import { AGENT_JUDGEMENT_KEYS, BASEMENT_LADDER, JUDGEMENT_BOUNDS, JUDGEMENT_KEYS
 import type { Session } from "@/lib/session";
 import { STEP_NAMES, stepKicker, type StepId } from "@/lib/steps";
 import { LegendMark, SourceBadge, SourceLine } from "../charts/ChartFrame";
+import { StepShapley } from "../interpret/Movers";
 import { Button, Card, ChecksLine, Fold, Note, OfferNotice, PlaceholderBadge, selectView, StatusIcon, StepHeader, StepLink, Tag } from "../ui";
 
 const ROLE_BLURB: Record<Role, string> = {
@@ -1133,6 +1134,10 @@ export function AgentsStep({ session, deliberation: d, busy, checks, status, has
 
       {focus && <OfferAnswer focus={focus} d={d} busy={busy} warning={standWarns ? stand : null} onOpenStep={onOpenStep} />}
       {!focus && d && <PortfolioAnswer session={session} d={d} />}
+
+      {d?.final && judgement && (
+        <StepShapley focus={focus} dataset={session.dataset} agreedParams={d.final.params} judgement={judgement} mode={mode} onOpenStep={onOpenStep} className="mb-5" />
+      )}
 
       {d && <ChairCard d={d} />}
 

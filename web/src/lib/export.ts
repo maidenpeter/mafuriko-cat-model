@@ -2,6 +2,8 @@ import { buildLedger, judgementLedger, type Deliberation } from "./agents/orches
 import { ROLE_LABELS, ROLES } from "./agents/schema";
 import { costOf, fmtUsd, usageRows, usageTotals, type Prices, type UsageSource } from "./agents/usage";
 import type { Check } from "./checks";
+// Types only: the library's tornado takes its labels from this file, so nothing of lib/interpret or lib/dashboard can run from here.
+import type { Interpretation, InterpretedTarget } from "./dashboard";
 import { DECISION_LABELS, DEDUCTIBLE_LOSS_SHARE, EVIDENCE_LABELS, NEAR_WET_CELL_M, SEVERITY_LABELS, SUBLIMIT_LOSS_SHARE, type DecisionRecord } from "./decision";
 import { fmtInt, fmtKes, fmtNum, fmtPct } from "./format";
 import { DRAINAGE_DEFAULTS } from "./geo/drainage";
@@ -119,6 +121,46 @@ export interface ExportExtras {
    * out, the offer's own block is used, and without an offer the figures the portfolio was run on.
    */
   judgement?: FocusJudgement | null;
+  /**
+   * The sensitivity tornado and the exact Shapley split for the portfolio and the priced offer, worked
+   * out by the caller with interpretation() in lib/dashboard. Left out, neither record carries them.
+   */
+  interpret?: Interpretation | null;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Interpretability: the tornado and the split, as the note and the audit file carry them
+// ---------------------------------------------------------------------------------------------
+
+/** The tornado as a Markdown table, with the method and what was left out under it. */
+function tornadoLines(t: InterpretedTarget["tornado"]): string[] {
+  if (t.rows.length === 0) return [`No assumption that can move this answer is in force under these settings.`, ``];
+  const lines = [`| ${t.head.join(" | ")} |`, `|${t.head.map(() => "---|").join("")}`];
+  for (const c of t.cells) lines.push(`| ${cell(c.assumption)}${c.note ? ` (${cell(c.note)})` : ""} | ${c.inForce} | ${c.low} | ${c.high} | ${c.change100} | ${c.changeAal} |`);
+  lines.push(``, t.methodLine, ``);
+  if (t.leftOut.length > 0) lines.push(`Not swung: ${t.leftOut.map((x) => `${x.label} (${cell(x.why).replace(/\.$/, "")})`).join("; ")}.`, ``);
+  return lines;
+}
+
+/** The split as a Markdown table: each group's share of both figures, then the shares added up beside the whole change, and the method. */
+function shapleyLines(t: Pick<InterpretedTarget, "shapley" | "shapleyWhy">): string[] {
+  const s = t.shapley;
+  if (!s) return [t.shapleyWhy ?? "", ``];
+  const { cells } = s;
+  const lines = [`| ${cells.head.join(" | ")} |`, `|${cells.head.map(() => "---|").join("")}`];
+  for (const row of cells.rows) lines.push(`| ${row.join(" | ")} |`);
+  lines.push(`| **${cells.sum[0]}** | **${cells.sum[1]}** | **${cells.sum[2]}** |`, `| **${cells.total[0]}** | **${cells.total[1]}** | **${cells.total[2]}** |`, ``, s.sumLine, ``, s.methodLine, ``);
+  if (cells.dropped) lines.push(cells.dropped, ``);
+  return lines;
+}
+
+/** One target's tornado and split for the audit file: the rows and the result as the library gives them, with the method lines. */
+function interpretRecord(t: InterpretedTarget) {
+  return {
+    tornado: { methodLine: t.tornado.methodLine, rows: t.tornado.rows, leftOut: t.tornado.leftOut },
+    shapley: t.shapley ? { methodLine: t.shapley.methodLine, sumLine: t.shapley.sumLine, sharesAddUp: t.shapley.cells.matches, ...t.shapley.result } : null,
+    shapleyWhy: t.shapleyWhy,
+  };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -450,7 +492,7 @@ function offerRecord(offer: OfferFocus, decision: DecisionRecord | null | undefi
 
 /** The complete record of a run: inputs, assumptions, prompts, replies, results and checks, and the offer when one has been read. */
 export function buildAudit(session: Session, active: Active, deliberation: Deliberation | null, checks: Check[], log: LogEntry[], terms: TermsResult, extras: ExportExtras = {}) {
-  const { offer, decision, oasis, dataSource, prices } = extras;
+  const { offer, decision, oasis, dataSource, prices, interpret } = extras;
   const mode = active.result.mode ?? "depth_only";
   const judgement = extras.judgement ?? offer?.judgement ?? null;
   return {
@@ -504,6 +546,10 @@ export function buildAudit(session: Session, active: Active, deliberation: Delib
       averageAnnualLossKes: terms.aal,
     },
     checks,
+    // The sensitivity tornado and the exact Shapley split of what the agents changed, for the portfolio and the priced offer. null when the caller did not work them out.
+    interpretability: interpret
+      ? { lossesFrom: interpret.mode, titles: interpret.titles, portfolio: interpretRecord(interpret.portfolio), offer: interpret.offer ? interpretRecord(interpret.offer) : null }
+      : null,
     agents: deliberation ? slim(deliberation) : null,
     // Tokens and seconds for each agent and for the offer reader. costUsd is null unless prices are set.
     usage: usageRecord(deliberation, offer, prices),
@@ -527,8 +573,8 @@ export function buildAudit(session: Session, active: Active, deliberation: Delib
 // The written note
 // ---------------------------------------------------------------------------------------------
 
-/** The offer at the head of the note: its line, the figures, the trace, the flags and the decision. */
-function offerSection(offer: OfferFocus, decision: DecisionRecord | null | undefined): string[] {
+/** The offer at the head of the note: its line, the figures, the trace, the tornado and the split when given, the flags and the decision. */
+function offerSection(offer: OfferFocus, decision: DecisionRecord | null | undefined, interpret: Interpretation | null | undefined): string[] {
   const lines: string[] = [`## The offer`, ``, `**${offer.line.text || offer.documentName}**`, ``, `Document: ${offer.documentName}. ${offer.document.why}`, ``];
   const { price } = offer;
 
@@ -645,6 +691,11 @@ function offerSection(offer: OfferFocus, decision: DecisionRecord | null | undef
     );
   }
 
+  if (interpret?.offer) {
+    lines.push(`### ${interpret.titles.tornado}`, ``, `Each assumption behind the offer's ground-up loss, swung on its own to the bottom and the top of its allowed range with every other left as it stands, largest swing first.`, ``, ...tornadoLines(interpret.offer.tornado));
+    lines.push(`### ${interpret.titles.shapley}`, ``, `The agents' change to the offer's ground-up figures, reference set to agreed set, split exactly across the groups of assumptions they moved.`, ``, ...shapleyLines(interpret.offer));
+  }
+
   lines.push(...questionLines());
 
   lines.push(`### Points to weigh`, ``);
@@ -685,7 +736,7 @@ function offerSection(offer: OfferFocus, decision: DecisionRecord | null | undef
  * extras at all.
  */
 export function buildNote(session: Session, active: Active, deliberation: Deliberation | null, checks: Check[], terms: TermsResult, extras: ExportExtras = {}): string {
-  const { offer, decision, oasis, dataSource, prices } = extras;
+  const { offer, decision, oasis, dataSource, prices, interpret } = extras;
   const { dataset, report, reference } = session;
   const r = active.result;
   const p: ModelParams = active.params;
@@ -710,7 +761,7 @@ export function buildNote(session: Session, active: Active, deliberation: Delibe
   lines.push(`> The portfolio is synthetic. ${isScore ? "The hazard layer is a constructed proxy, not measured flood depth." : "The hazard layer is a published set of flood depth maps."} Nothing here describes a real client's holdings.`, ``);
   lines.push(`Three words for loss, used the same way throughout: **ground-up** is the damage before any insurance terms, **gross** is after the policy deductible and limit, and **net** is after reinsurance, which is a portfolio figure only. No loss figure in this note came from a language model: models read the offer and chose assumptions, and code checked, located, priced and reconciled.`, ``);
 
-  if (offer) lines.push(...offerSection(offer, decision));
+  if (offer) lines.push(...offerSection(offer, decision, interpret));
 
   // --- Data sources ---------------------------------------------------------------------------
   lines.push(heading("Data sources"), ``, `Files read for this run:`, ``, `| File | Role | Real or synthetic |`, `|---|---|---|`);
@@ -820,6 +871,9 @@ export function buildNote(session: Session, active: Active, deliberation: Delibe
   } else {
     lines.push(`With ${LOSS_MODE_LABELS.depth_only} each building's loss comes from the depth at its point and drainage ponding, so there is no split by driver.`, ``);
   }
+  if (interpret) {
+    lines.push(`### ${interpret.titles.tornado}`, ``, `Each assumption behind the portfolio's ground-up loss, swung on its own to the bottom and the top of its allowed range with every other left as it stands, largest swing first.`, ``, ...tornadoLines(interpret.portfolio.tornado));
+  }
 
   // --- Insurance terms ------------------------------------------------------------------------
   lines.push(heading("Insurance terms"), ``, `**${TERMS_NOTICE}.** They apply to the portfolio, and to an offer wherever its document states no term of its own.`, ``);
@@ -887,6 +941,9 @@ export function buildNote(session: Session, active: Active, deliberation: Delibe
     if (failed.length) lines.push(`Agents that did not return a valid reply: ${failed.map((f) => ROLE_LABELS[f]).join(", ")}.`, ``);
   } else {
     lines.push(`The agent panel was not run for this result, so it changed nothing: every figure uses reference values, and the rarest scenario loss is ${fmtKes(rarest.lossKes, 2)}.`, ``);
+  }
+  if (interpret) {
+    lines.push(`### ${interpret.titles.shapley}`, ``, `The agents' change to the portfolio's ground-up figures, reference set to agreed set, split exactly across the groups of assumptions they moved.`, ``, ...shapleyLines(interpret.portfolio));
   }
   if (offer?.price && offer.price.assumptions.length > 1) {
     lines.push(

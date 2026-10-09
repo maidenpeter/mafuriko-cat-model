@@ -81,10 +81,11 @@ function LayerNote({ name, aside, children }: { name: string; aside?: React.Reac
 }
 
 /**
- * The layers shown when the map opens. Around an offer building the map starts quiet: the flood depth,
- * the portfolio's buildings drawn faint, the rivers and drains, and the buffer ring. The portfolio view starts with everything on.
+ * The layers shown when the map opens: everything on, for an offer building as for the portfolio, so
+ * the building is seen against the flood depth, the wards, the portfolio and the named flood areas.
+ * The buffer ring is drawn only around an offer building.
  */
-const defaultLayers = (forOffer: boolean): LayerState => ({ hazard: true, drainage: !forOffer, buildings: true, wards: !forOffer, waterways: true, settlements: !forOffer, facilities: !forOffer, hotspots: !forOffer, buffer: true });
+const defaultLayers = (): LayerState => ({ hazard: true, drainage: true, buildings: true, wards: true, waterways: true, settlements: true, facilities: true, hotspots: true, buffer: true });
 
 /**
  * Outline lookups by location, so each offer location is asked about once however often the step is opened.
@@ -215,12 +216,12 @@ export function MapStep({ session, active, offer = null, onOpenStep }: { session
   const [k, setK] = useState(initialK === -1 ? last : initialK);
   const [playing, setPlaying] = useState(false);
   const forOffer = offer !== null;
-  const [layers, setLayers] = useState<LayerState>(() => defaultLayers(forOffer));
+  const [layers, setLayers] = useState<LayerState>(() => defaultLayers());
   // Going from the offer to the portfolio, or back, starts from that view's own layers.
   const [layersFor, setLayersFor] = useState(forOffer);
   if (layersFor !== forOffer) {
     setLayersFor(forOffer);
-    setLayers(defaultLayers(forOffer));
+    setLayers(defaultLayers());
   }
   const [threeD, setThreeD] = useState(false);
   const [wardMetric, setWardMetric] = useState<WardMetric>("loss");
@@ -439,7 +440,7 @@ export function MapStep({ session, active, offer = null, onOpenStep }: { session
                     viewRef={mapView}
                     fullscreenHost={frame}
                     offer={offerMark}
-                    muted={forOffer}
+                    muted={false}
                   />
                 ) : (
                   <div className="absolute inset-0 flex items-center justify-center bg-surface-2 text-sm text-ink-2">Loading map layers</div>

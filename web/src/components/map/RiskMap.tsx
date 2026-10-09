@@ -286,12 +286,14 @@ export function RiskMap(props: Props) {
       latest.current.onStatus(online ? "online" : "offline");
 
       // A map rebuilt for a theme change opens where the last one was looking. The first map opens on the
-      // offer building when there is one, tilted so its block is seen standing, and is marked as having
-      // gone there so no effect moves it again; otherwise it opens on the county.
+      // county, with the tier footprints and the whole portfolio in view. With an offer building it then
+      // flies to the building once it has loaded, tilted so the block is seen standing, and is marked as
+      // having gone there so no effect moves it again.
       const saved = viewRef.current.camera;
       const mark = latest.current.offer ?? null;
       if (!saved && mark) viewRef.current.offerKey = mark.key;
-      const opening = saved ?? (mark ? offerCamera(mark, Math.min(box.current.clientWidth, box.current.clientHeight), !latest.current.threeD) : null);
+      const flyToOffer = !saved && mark ? offerCamera(mark, Math.min(box.current.clientWidth, box.current.clientHeight), !latest.current.threeD) : null;
+      const opening = saved ?? null;
       const start = geo.county?.features[0] ? geometryBBox(geo.county.features[0].geometry) : rasterBox(session);
       map = new MapLibre({
         container: box.current,
@@ -328,6 +330,15 @@ export function RiskMap(props: Props) {
         keepCamera();
         watchZoom();
         setReady(true);
+        // The county is held for a moment so the reader sees where the building sits, then the camera goes to it.
+        if (flyToOffer) {
+          const reduced = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+          setTimeout(() => {
+            if (!map || disposed) return;
+            if (reduced) map.jumpTo(flyToOffer);
+            else map.flyTo({ ...flyToOffer, duration: 2800, essential: true });
+          }, reduced ? 0 : 1100);
+        }
       });
       map.on("error", (e) => {
         // Tile or glyph failures after a lost connection should not break the page.
@@ -743,6 +754,20 @@ function firstSymbolId(map: MapLibre): string | undefined {
 }
 
 /** How the portfolio's building dots are drawn: at full strength, or smaller and fainter around an offer building. */
+/**
+ * How strongly a ward is filled: by its share of the metric shown, at full strength across the county
+ * and thinning from zoom 12.5 to 15, so that close to a building the streets and the block read through it.
+ */
+const WARD_FILL_OPACITY: ExpressionSpecification = [
+  "interpolate",
+  ["linear"],
+  ["zoom"],
+  12.5,
+  ["interpolate", ["linear"], ["get", "n"], 0, 0.02, 1, 0.55],
+  15,
+  ["interpolate", ["linear"], ["get", "n"], 0, 0.01, 1, 0.14],
+];
+
 function buildingPaint(muted: boolean): { radius: ExpressionSpecification; opacity: ExpressionSpecification; strokeWidth: ExpressionSpecification } {
   const size = muted ? 0.6 : 1;
   return {
@@ -772,7 +797,7 @@ function addStaticLayers(map: MapLibre, p: Props, online: boolean) {
 
   if (p.geo.wards) {
     map.addSource("wards", { type: "geojson", data: empty });
-    map.addLayer({ id: "wards-fill", type: "fill", source: "wards", paint: { "fill-color": WARD_COLOR, "fill-opacity": ["interpolate", ["linear"], ["get", "n"], 0, 0.02, 1, 0.55] } }, before);
+    map.addLayer({ id: "wards-fill", type: "fill", source: "wards", paint: { "fill-color": WARD_COLOR, "fill-opacity": WARD_FILL_OPACITY } }, before);
     map.addLayer({ id: "wards-line", type: "line", source: "wards", paint: { "line-color": navyLine, "line-opacity": 0.35, "line-width": 0.7 } }, before);
     map.addLayer({ id: "wards-hover", type: "line", source: "wards", filter: ["==", ["get", "i"], -1], paint: { "line-color": WARD_COLOR, "line-width": 2.2 } });
     map.addLayer({ id: "wards-selected", type: "line", source: "wards", filter: ["==", ["get", "i"], -1], paint: { "line-color": ink, "line-width": 3 } });

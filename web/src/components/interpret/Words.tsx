@@ -31,9 +31,9 @@ const valueText = (v: number | undefined) => (v === undefined || !Number.isFinit
 
 const MEASURE_WORDS: Record<Measure, string> = { aal: "ground-up average annual loss", loss100: "ground-up 1-in-100 loss" };
 /** A figure named as a share is written as a percentage: 0.15 reads 15%. */
-const shown = (key: string, v: number | undefined) => (v !== undefined && Number.isFinite(v) && /(share/.test(nameOf(key)) ? `${fmtNum(v * 100, Number.isInteger(Math.round(v * 1000) / 10) ? 0 : 1)}%` : valueText(v));
+const shown = (key: string, v: number | undefined) => (v !== undefined && Number.isFinite(v) && nameOf(key).includes("(share") ? `${fmtNum(v * 100, Number.isInteger(Math.round(v * 1000) / 10) ? 0 : 1)}%` : valueText(v));
 /** The name without its unit in brackets, which the percentage already says. */
-const shortName = (key: string) => nameOf(key).replace(/s*(share[^)]*)s*$/, "");
+const shortName = (key: string) => (nameOf(key).includes("(share") && nameOf(key).trimEnd().endsWith(")") ? nameOf(key).slice(0, nameOf(key).lastIndexOf("(share")).trimEnd() : nameOf(key));
 const LIST = "mt-2 space-y-1.5 text-sm leading-relaxed text-ink-2";
 const BOX = "mb-4 max-w-4xl rounded-xl border border-line bg-surface-2 px-4 py-3";
 
